@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-20-365';
+  var APP_VERSION = '2026-09-20-366';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -7511,21 +7511,37 @@
         modalNotice('삭제 완료', entry.nickname + '님을 삭제했어요.');
       }).catch(function (err) { modalNotice('오류', '삭제 실패: ' + (err.message || err)); });
     }
-    modalConfirm('삭제 승인', escapeHtml(entry.nickname) + '님을 정말 삭제할까요? 되돌릴 수 없어요.' + (connected.length ? ' (연결된 회원 ' + connected.length + '명)' : ''), '삭제', 'danger').then(function (ok) {
-      if (!ok) return;
-      if (!connected.length) { doDelete(); return; }
-      /* 삭제하면 연결 정보가 사라지므로, 삭제 전에 안내 발송 여부를 먼저 물음 */
-      modalConfirm('연결 회원 안내', '삭제 전에 연결된 ' + connected.length + '명에게 안내를 먼저 보낼까요? (삭제하면 연결 정보가 사라져 이후엔 보낼 수 없어요)', '안내 보내고 삭제', 'primary').then(function (sendFirst) {
-        if (!sendFirst) { doDelete(); return; }
-        modalMessage('📢 연결 회원 안내 (' + connected.length + '명)', '삭제 전에 보낼 안내를 입력하세요. (이름은 밝히지 않는 완곡한 표현 권장)', '보내고 삭제', 'primary', '예: 회원님과 연결됐던 상대분이 개인 사정으로 소개팅을 마치게 되었어요. 새로운 인연을 응원할게요 🙏', true).then(function (text) {
-          if (text == null) { doDelete(); return; } /* 안내 취소해도 삭제는 이미 승인됨 → 삭제 진행 */
-          Promise.all(connected.map(function (cid) { return sendMessageTo(cid, 'admin', text); })).then(function () {
-            appendLog('admin', '관리자', '연결 회원 안내 ' + connected.length + '명(삭제 전) · ' + entry.nickname);
-            doDelete();
-          }).catch(function () { doDelete(); });
-        });
+    /* 연결된 회원이 없으면 단순 확인 후 삭제 */
+    if (!connected.length) {
+      modalConfirm('삭제 승인', escapeHtml(entry.nickname) + '님을 정말 삭제할까요? 되돌릴 수 없어요.', '삭제', 'danger').then(function (ok) { if (ok) doDelete(); });
+      return;
+    }
+    /* 연결된 회원이 있으면: 누구와 연결됐는지 보여주고, 안내는 '선택'으로 명확히 (한 창에서 3지선다) */
+    var connNames = connected.map(function (cid) { var ce = (currentState.entries || []).find(function (x) { return x.id === cid; }); return ce ? (ce.nickname || '상대') : '상대'; });
+    function sendNoticeThenDelete() {
+      modalMessage('📢 연결 회원 안내 (' + connected.length + '명)', '삭제 전에 보낼 안내를 입력하세요. (이름은 밝히지 않는 완곡한 표현 권장)', '보내고 삭제', 'primary', '예: 회원님과 연결됐던 상대분이 개인 사정으로 소개팅을 마치게 되었어요. 새로운 인연을 응원할게요 🙏', true).then(function (text) {
+        if (text == null) return; /* 안내 입력 취소 → 삭제도 하지 않음(안전) */
+        Promise.all(connected.map(function (cid) { return sendMessageTo(cid, 'admin', text); })).then(function () {
+          appendLog('admin', '관리자', '연결 회원 안내 ' + connected.length + '명(삭제 전) · ' + entry.nickname);
+          doDelete();
+        }).catch(function () { doDelete(); });
       });
-    });
+    }
+    var delOv = openModal(
+      '<h3>🗑 ' + escapeHtml(entry.nickname) + '님 삭제</h3>' +
+      '<p class="modal-msg"><b>되돌릴 수 없어요.</b> 이 회원과 연결된 <b>' + connected.length + '명</b>이 있어요:</p>' +
+      '<p class="modal-msg" style="background:var(--gold-soft);color:var(--ink);padding:8px 10px;border-radius:8px;margin:0 0 8px;">🔗 ' + escapeHtml(connNames.join(', ')) + '</p>' +
+      '<p class="modal-msg" style="font-size:0.85rem;color:var(--muted);margin:0 0 4px;">삭제하면 연결 정보가 사라져 이후엔 안내를 못 보내요. <b>안내는 선택이에요.</b></p>' +
+      '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
+        '<button type="button" class="card-btn primary" id="del-notify">📢 안내 보내고 삭제</button>' +
+        '<button type="button" class="card-btn danger" id="del-skip">🗑 안내 없이 바로 삭제</button>' +
+        '<button type="button" class="card-btn" id="del-cancel">취소 (삭제 안 함)</button>' +
+      '</div>'
+    );
+    delOv.querySelector('#del-notify').addEventListener('click', function () { closeModal(delOv); sendNoticeThenDelete(); });
+    delOv.querySelector('#del-skip').addEventListener('click', function () { closeModal(delOv); doDelete(); });
+    delOv.querySelector('#del-cancel').addEventListener('click', function () { closeModal(delOv); });
+    delOv.addEventListener('click', function (e) { if (e.target === delOv) closeModal(delOv); });
   }
   /* 관리자 또는 본인: 삭제 요청 취소 (플래그 해제) */
   function handleCancelDeleteReq(id) {
