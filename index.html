@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-20-366';
+  var APP_VERSION = '2026-09-21-367';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1596,7 +1596,7 @@
     if (kind === 'held') return '[베니브릿지] ' + nick + '님, 프로필 보완이 필요해 안내드려요. 앱에서 확인 부탁드려요 🙏 ' + SMS_SITE;
     if (kind === 'req') return '[베니브릿지] ' + nick + '님, 회원님께 새 요청이 도착했어요. 앱에서 확인해 주세요 😊 ' + SMS_SITE;
     if (kind === 'mm') return '[베니브릿지] 주선자님, 관리 중인 ' + nick + '님 관련 안내드려요. 앱에서 확인 부탁드려요 🙏 ' + SMS_SITE;
-    return '[베니브릿지] ' + nick + '님, 안내드립니다. ' + SMS_SITE;
+    return '[베니브릿지] ' + nick + ' 님\n대기 중인 요청 건이 있어, 안내 드립니다.\n' + SMS_SITE;
   }
   function recordSms(entryId, kind, ok) {
     return db.runTransaction(function (tx) {
