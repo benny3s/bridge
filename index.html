@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-21-368';
+  var APP_VERSION = '2026-09-21-369';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -996,6 +996,8 @@
   var adminLogFilterTime = '';                        /* 활동 기록 시간 필터 */
   var adminLogFilterNick = '';                        /* 접속칸 클릭 시 정확히 그 닉네임만 (완전일치) */
   var adminLogFilterDetail = '';                      /* 활동 기록 변경 내용(detail) 필터 (검색창, 부분일치) */
+  var adminArchivedLogs = null;                       /* app/logs(아카이브) 로드 캐시 — '이전 기록 더 보기' 누를 때만 */
+  var adminShowArchive = false;                       /* 활동 기록에 아카이브 포함 표시 여부 */
   var adminReqSort = 'req_desc';                       /* 요청(요청함+완료 통합) 정렬: req_desc|req_asc|dec_desc|dec_asc|gap_desc|gap_asc */
   var adminReqStatus = 'all';                          /* 요청 상태 필터: all|pending|held|approved|rejected */
   var adminReqAge = 'all';                             /* 요청 나이 필터(색상 기준): all|today|yesterday|few|old */
@@ -3201,26 +3203,73 @@
   }
 
   /* ---- activity log ---- */
-  var LOG_LIMIT = 1500;
+  var LOG_LIMIT = 1500;                 /* (구) 참고용 */
+  var LOG_RECENT_MAX = 400;             /* app/state 에 유지하는 최근 로그 수 (실시간·검색용) */
+  var LOG_ARCHIVE_TRIGGER = 600;        /* 최근 로그가 이 수를 넘으면 오래된 것을 app/logs 로 배치 이동 */
+  var LOG_ARCHIVE_MAX = 8000;           /* app/logs(아카이브) 보관 상한 (1MiB 안전) */
+  var logsRef = db.doc('app/logs');     /* 활동 기록 아카이브(별도 문서) */
   function appendLog(type, actor, detail) {
     var entry = { id: genId(), at: new Date().toISOString(), type: type, actor: actor || '', detail: detail || '' };
     stateRef.get().then(function (doc) {
       var s = doc.exists ? doc.data() : {};
       var logs = (s.logs || []).concat([entry]);
-      if (logs.length > LOG_LIMIT) logs = logs.slice(logs.length - LOG_LIMIT);
       return stateRef.update({ logs: logs });
-    }).catch(function () {});
+    }).then(function () { maybeArchiveLogs(); }).catch(function () {});
+  }
+  var _archivingLogs = false;
+  /* 최근 로그가 임계치를 넘으면 오래된 것을 app/logs 로 배치 이동 (매 기록마다 X · ~수일에 한 번).
+     게이트는 메모리(currentState)로 확인해 평소엔 추가 읽기 없음. 이동은 트랜잭션(state·logs 원자적). */
+  function maybeArchiveLogs() {
+    try { if (_archivingLogs || !currentState || !Array.isArray(currentState.logs) || currentState.logs.length <= LOG_ARCHIVE_TRIGGER) return; } catch (e) { return; }
+    _archivingLogs = true;
+    db.runTransaction(function (tx) {
+      return tx.get(stateRef).then(function (sd) {
+        var s = sd.data() || {}; var logs = s.logs || [];
+        if (logs.length <= LOG_ARCHIVE_TRIGGER) return null; /* 다른 클라가 이미 처리 */
+        var overflow = logs.slice(0, logs.length - LOG_RECENT_MAX); /* 오래된 것 → 아카이브 */
+        var recent = logs.slice(logs.length - LOG_RECENT_MAX);
+        return tx.get(logsRef).then(function (ld) {
+          var arch = (ld.exists && Array.isArray((ld.data() || {}).logs)) ? ld.data().logs : [];
+          arch = arch.concat(overflow);
+          if (arch.length > LOG_ARCHIVE_MAX) arch = arch.slice(arch.length - LOG_ARCHIVE_MAX);
+          tx.set(logsRef, { logs: arch, updatedAt: new Date().toISOString() }, { merge: true });
+          tx.update(stateRef, { logs: recent });
+        });
+      });
+    }).then(function () { _archivingLogs = false; }).catch(function () { _archivingLogs = false; });
   }
   /* 관리자: 활동 기록 한 줄 삭제 */
   function handleDeleteLog(logId) {
     if (!isAdminUnlocked || !logId) return;
-    db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var logs = (s.logs || []).filter(function (l) { return l.id !== logId; });
-        tx.update(stateRef, { logs: logs });
-      });
-    }).then(function () { return refreshNow(); }).catch(function (err) { modalNotice('오류', '삭제 실패: ' + (err.message || err)); });
+    var inRecent = (currentState.logs || []).some(function (l) { return l.id === logId; });
+    if (inRecent) {
+      db.runTransaction(function (tx) {
+        return tx.get(stateRef).then(function (doc) {
+          var s = doc.data();
+          var logs = (s.logs || []).filter(function (l) { return l.id !== logId; });
+          tx.update(stateRef, { logs: logs });
+        });
+      }).then(function () { return refreshNow(); }).catch(function (err) { modalNotice('오류', '삭제 실패: ' + (err.message || err)); });
+    } else {
+      /* 아카이브(app/logs)에서 삭제 */
+      logsRef.get().then(function (d) {
+        var arch = (d.exists && Array.isArray((d.data() || {}).logs)) ? d.data().logs : [];
+        return logsRef.set({ logs: arch.filter(function (l) { return l.id !== logId; }) }, { merge: true });
+      }).then(function () {
+        try { if (Array.isArray(adminArchivedLogs)) adminArchivedLogs = adminArchivedLogs.filter(function (l) { return l.id !== logId; }); } catch (e) {}
+        paint(currentState);
+      }).catch(function (err) { modalNotice('오류', '삭제 실패: ' + (err.message || err)); });
+    }
+  }
+  /* 관리자: 아카이브(app/logs) 로드 → 활동 기록에 옛 기록까지 함께 표시 */
+  function loadArchiveLogs() {
+    if (!isAdminUnlocked) return;
+    logsRef.get().then(function (d) {
+      adminArchivedLogs = (d.exists && Array.isArray((d.data() || {}).logs)) ? d.data().logs : [];
+      adminShowArchive = true;
+      paint(currentState);
+      if (!adminArchivedLogs.length) modalNotice('안내', '아직 아카이브에 옮겨진 기록이 없어요. (최근 기록만 있어요)');
+    }).catch(function (err) { modalNotice('오류', '아카이브 로드 실패: ' + (err.message || err)); });
   }
   /* ---- 관리자 <-> 회원 메시지 ---- */
   function sendMessageTo(entryId, from, text, guestName, extra) {
@@ -3632,12 +3681,11 @@
         var loggedToday = logs.some(function (l) { return l.type === 'access' && l.actor === nick && l.at && kstDay(l.at) === today; });
         if (!loggedToday) {
           logs = logs.concat([{ id: genId(), at: now, type: 'access', actor: nick, detail: '접속' }]);
-          if (logs.length > LOG_LIMIT) logs = logs.slice(logs.length - LOG_LIMIT);
-          update.logs = logs;
+          update.logs = logs; /* 상한 드롭 없음 → maybeArchiveLogs가 오래된 것을 app/logs로 이동 */
         }
         tx.update(stateRef, update);
       });
-    }).catch(function () {});
+    }).then(function () { maybeArchiveLogs(); }).catch(function () {});
   }
 
   /* ---- request status helpers ---- */
@@ -5973,7 +6021,13 @@
       }
       return false;
     }
-    var logData = (state.logs || []).filter(function (l) { return !isTestLog(l); }).map(function (l) {
+    /* 최근(app/state) + (선택 시) 아카이브(app/logs) 병합, id 중복 제거 */
+    var _logSrc = state.logs || [];
+    if (adminShowArchive && Array.isArray(adminArchivedLogs)) {
+      var _seenLog = {}; _logSrc = [];
+      adminArchivedLogs.concat(state.logs || []).forEach(function (l) { if (l && l.id && !_seenLog[l.id]) { _seenLog[l.id] = 1; _logSrc.push(l); } });
+    }
+    var logData = _logSrc.filter(function (l) { return !isTestLog(l); }).map(function (l) {
       var le = (state.entries || []).find(function (x) { return x.nickname === l.actor; });
       return {
         l: l, le: le,
@@ -6015,7 +6069,7 @@
       '<details class="admin-fold" id="activity-log-section" data-sec="log"' + secOpenAttr('log', logFilterActive) + '>' +
       '<summary>📜 활동 기록<span class="pending-count">' + logData.length + '</span></summary>' +
       '<div class="admin-fold-body">' +
-      '<p class="sub">헤더로 정렬, 아래 칸으로 검색해요. 최근 ' + LOG_LIMIT + '건까지 보관. (관리자만)</p>' +
+      '<p class="sub">헤더로 정렬, 아래 칸으로 검색해요. 최근 기록은 여기, 오래된 기록은 별도 보관(app/logs). ' + (adminShowArchive ? '<b>아카이브 포함 표시 중</b>' : '아래 <b>이전 기록 더 보기</b>로 불러와요') + '. (관리자만)</p>' +
       (logFilterActive
         ? '<p class="sub" style="margin:0 0 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
             '<span class="chip" style="background:var(--gold-soft);color:var(--gold);">🔎 ' + escapeHtml(adminLogFilterNick || adminLogFilterActor || adminLogFilterDetail || adminLogFilterTime) + '</span>' +
@@ -6034,6 +6088,9 @@
           '</thead><tbody>' + logRows + '</tbody></table></div>' +
           '<p class="sub" id="log-empty-note" hidden>검색 결과가 없어요.</p>'
         : '<p class="sub">아직 기록이 없어요.</p>') +
+      (adminShowArchive
+        ? '<div style="margin-top:8px;"><button type="button" class="card-btn" data-action="hide-archive-logs" style="flex:none;">최근만 보기</button> <span class="sub">아카이브 ' + (Array.isArray(adminArchivedLogs) ? adminArchivedLogs.length : 0) + '건 포함</span></div>'
+        : '<div style="margin-top:8px;"><button type="button" class="card-btn" data-action="load-archive-logs" style="flex:none;">📂 이전 기록 더 보기 (아카이브)</button></div>') +
       '</div></details>';
 
     /* 관리자 메시지 (회원별 1:1 대화) */
@@ -6185,7 +6242,7 @@
         '<tbody>' +
           '<tr><td>🖼️ 썸네일/inline 사진 ' + thumbCount + '개</td><td class="seen-date">' + fmtBytes(thumbBytes) + '</td></tr>' +
           '<tr><td>📬 요청 ' + (state.dateRequests || []).length + '건</td><td class="seen-date">' + fmtBytes(reqBytes) + '</td></tr>' +
-          '<tr><td>📜 활동 기록 ' + (state.logs || []).length + '건</td><td class="seen-date">' + fmtBytes(logBytes) + '</td></tr>' +
+          '<tr><td>📜 활동 기록(최근) ' + (state.logs || []).length + '건 <span style="color:var(--muted);font-size:0.8rem;">· 오래된 건 별도 문서(app/logs)</span></td><td class="seen-date">' + fmtBytes(logBytes) + '</td></tr>' +
           '<tr><td>그 외 (프로필 텍스트 등)</td><td class="seen-date">' + fmtBytes(otherBytes) + '</td></tr>' +
           '<tr><td><b>1인당 평균</b></td><td class="seen-date"><b>' + fmtBytes(avgPerPerson) + '</b></td></tr>' +
           '<tr><td><b>메인 문서에 더 담을 수 있는 인원 (추정)</b></td><td class="seen-date"><b>약 ' + morePeople + '명</b></td></tr>' +
@@ -9286,6 +9343,8 @@
       }
       else if (action === 'log-clear') { adminLogFilterActor = ''; adminLogFilterTime = ''; adminLogFilterNick = ''; adminLogFilterDetail = ''; paint(currentState); }
       else if (action === 'log-del') { if (isAdminUnlocked) handleDeleteLog(id); }
+      else if (action === 'load-archive-logs') { loadArchiveLogs(); return; }
+      else if (action === 'hide-archive-logs') { adminShowArchive = false; paint(currentState); return; }
       else if (action === 'connlog-del') { if (isAdminUnlocked) handleDeleteConnLog(id); return; }
       else if (action === 'sms-send') { if (isAdminUnlocked) sendSmsFlow(id, actionBtn.getAttribute('data-kind') || 'custom'); return; }
       else if (action === 'log-sort') { toggleSort(adminLogSort, actionBtn.getAttribute('data-col'), 'desc'); paint(currentState); }

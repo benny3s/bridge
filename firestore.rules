@@ -2,8 +2,13 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 앱 상태(신청서·요청·로그 등) — 로그인(익명 인증)한 사용자만
+    // 앱 상태(신청서·요청·최근 로그 등) — 로그인(익명 인증)한 사용자만
     match /app/state {
+      allow read, write: if request.auth != null;
+    }
+
+    // 활동 기록 아카이브(오래된 로그 별도 보관) — 로그인한 사용자만
+    match /app/logs {
       allow read, write: if request.auth != null;
     }
 
