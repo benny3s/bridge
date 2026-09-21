@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-21-369';
+  var APP_VERSION = '2026-09-21-370';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4128,7 +4128,7 @@
           (isAdminUnlocked
             ? adminBtn +
               (entry.deactivated ? '<button type="button" class="card-btn approve" data-action="reactivate" data-id="' + escapeHtml(entry.id) + '">♻️ 다시 활성화</button>' +
-                '<button type="button" class="card-btn" data-action="notify-connected" data-id="' + escapeHtml(entry.id) + '">📢 연결 회원 안내</button>' : '') +
+                '<button type="button" class="card-btn" data-action="notify-connected" data-id="' + escapeHtml(entry.id) + '">🔗 연결 회원 보기·연락</button>' : '') +
               '<button type="button" class="card-btn" data-action="edit" data-id="' + escapeHtml(entry.id) + '">수정</button>' +
               '<button type="button" class="card-btn danger" data-action="admin-manage" data-id="' + escapeHtml(entry.id) + '">보류·삭제</button>'
             : mineOrManaged
@@ -5658,7 +5658,7 @@
               '<div class="pending-actions">' +
                 '<button type="button" class="card-btn" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">👤 프로필</button>' +
                 '<button type="button" class="card-btn approve" data-action="reactivate" data-id="' + escapeHtml(e.id) + '">♻️ 다시 활성화</button>' +
-                '<button type="button" class="card-btn' + (sent ? '' : ' primary') + '" data-action="notify-connected" data-id="' + escapeHtml(e.id) + '">📢 ' + (sent ? '다시 안내' : '연결 회원 안내') + '</button>' +
+                '<button type="button" class="card-btn' + (sent ? '' : ' primary') + '" data-action="notify-connected" data-id="' + escapeHtml(e.id) + '">🔗 연결 회원 보기·연락' + (sent ? ' (안내함)' : '') + '</button>' +
                 '<button type="button" class="card-btn danger" data-action="approve-delete" data-id="' + escapeHtml(e.id) + '">🗑 완전 삭제</button>' +
               '</div>'
             );
@@ -7481,6 +7481,62 @@
     });
   }
   /* 관리자: 연결된 회원에게 안내 일괄 발송 */
+  /* 관리자: 이 계정과 연결된 회원을 '목록으로 보고' 개별(💬 대화·📱 문자) 또는 선택 일괄 안내 */
+  function showConnectedMembers(id) {
+    if (!isAdminUnlocked) return;
+    var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
+    var ids = connectedMemberIds(currentState, id);
+    if (!ids.length) { modalNotice('안내', '이 계정과 연결된(사진 승인·대화 연결) 회원이 없어요.'); return; }
+    var members = ids.map(function (cid) { return (currentState.entries || []).find(function (e) { return e.id === cid; }); }).filter(Boolean);
+    var nickOf = (entry && entry.nickname) || '상대';
+    var defaultMsg = '회원님과 연결되었던 "' + nickOf + '" 님은 개인 사정으로 잠시 휴면 처리되었음을 안내드립니다. 새로운 인연을 응원할게요 🙏';
+    var rows = members.map(function (m) {
+      return '<div style="display:flex;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px dashed var(--line);">' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;cursor:pointer;">' +
+          '<input type="checkbox" class="conn-chk" data-cid="' + escapeHtml(m.id) + '" checked style="width:16px;height:16px;flex:none;accent-color:var(--accent);">' +
+          '<span style="min-width:0;"><b>' + escapeHtml(m.nickname || '회원') + '</b> <span style="font-size:0.8rem;color:var(--muted);">' + genderLabel(m.gender) + (m.region ? ' · ' + escapeHtml(m.region) : '') + '</span></span>' +
+        '</label>' +
+        '<button type="button" class="card-btn" data-conn-chat="' + escapeHtml(m.id) + '" style="flex:none;padding:3px 10px;">💬</button>' +
+        '<button type="button" class="card-btn" data-conn-sms="' + escapeHtml(m.id) + '" style="flex:none;padding:3px 10px;">📱</button>' +
+      '</div>';
+    }).join('');
+    var ov = openModal(
+      '<h3>🔗 ' + escapeHtml(nickOf) + '님과 연결된 회원 (' + members.length + '명)</h3>' +
+      '<p class="modal-msg" style="margin:0 0 6px;">각 회원에게 <b>💬 대화</b>·<b>📱 문자</b>로 개별 연락하거나, 체크한 회원에게 아래 안내를 <b>일괄 발송</b>할 수 있어요.</p>' +
+      '<div style="max-height:38vh;overflow-y:auto;margin:4px 0 8px;">' + rows + '</div>' +
+      '<textarea class="modal-input" id="conn-msg" rows="3" maxlength="500">' + escapeHtml(defaultMsg) + '</textarea>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="card-btn" id="conn-close">닫기</button>' +
+        '<button type="button" class="card-btn primary" id="conn-send">✅ 체크한 회원에게 안내 보내기</button>' +
+      '</div>'
+    );
+    Array.prototype.forEach.call(ov.querySelectorAll('[data-conn-chat]'), function (b) { b.addEventListener('click', function () { openAdminChat(b.getAttribute('data-conn-chat')); }); });
+    Array.prototype.forEach.call(ov.querySelectorAll('[data-conn-sms]'), function (b) { b.addEventListener('click', function () { openSmsNative(b.getAttribute('data-conn-sms')); }); });
+    ov.querySelector('#conn-close').addEventListener('click', function () { closeModal(ov); });
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(ov); });
+    ov.querySelector('#conn-send').addEventListener('click', function () {
+      var checked = Array.prototype.map.call(ov.querySelectorAll('.conn-chk:checked'), function (c) { return c.getAttribute('data-cid'); });
+      if (!checked.length) { modalNotice('안내', '보낼 회원을 한 명 이상 체크해주세요.'); return; }
+      var text = (ov.querySelector('#conn-msg').value || '').trim();
+      if (!text) { modalNotice('안내', '보낼 내용을 입력해주세요.'); return; }
+      closeModal(ov);
+      Promise.all(checked.map(function (cid) { return sendMessageTo(cid, 'admin', text); })).then(function () {
+        appendLog('admin', '관리자', '연결 회원 안내 ' + checked.length + '명 · ' + nickOf);
+        return db.runTransaction(function (tx) {
+          return tx.get(stateRef).then(function (doc) {
+            var s = doc.data();
+            var entries = (s.entries || []).map(function (x) {
+              if (x.id !== id) return x;
+              var c = JSON.parse(JSON.stringify(x)); c.connectNotifiedAt = new Date().toISOString(); c.connectNotifiedCount = (c.connectNotifiedCount || 0) + 1; return c;
+            });
+            tx.update(stateRef, { entries: entries });
+          });
+        });
+      }).then(function () { return refreshNow(); })
+        .then(function () { modalNotice('전송 완료', checked.length + '명에게 안내를 보냈어요.'); })
+        .catch(function (err) { modalNotice('오류', '전송 실패: ' + (err.message || err)); });
+    });
+  }
   function handleNotifyConnected(id) {
     if (!isAdminUnlocked) return;
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
@@ -9289,7 +9345,7 @@
       else if (action === 'set-status') handleSetAccountStatus(id, actionBtn.getAttribute('data-status'));
       else if (action === 'reactivate') handleReactivate(id);
       else if (action === 'edit-reviewed') handleEditReviewed(id);
-      else if (action === 'notify-connected') handleNotifyConnected(id);
+      else if (action === 'notify-connected') showConnectedMembers(id);
       else if (action === 'del-tombstone') handleDeleteTombstone(id);
       else if (action === 'approve-request') handleApproveRequest(id);
       else if (action === 'hold-request') handleHoldRequest(id);
