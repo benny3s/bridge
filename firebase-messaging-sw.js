@@ -12,13 +12,13 @@ firebase.initializeApp({
 });
 
 var messaging = firebase.messaging();
-var APP_URL = 'https://benny3s.github.io/benny-meeting/';
+var APP_URL = 'https://benny3s.github.io/bridge/';
 
 /* 새 SW가 즉시 교체·제어되도록 (안 하면 기존 탭이 닫힐 때까지 예전 SW가 남아 알림클릭 이동이 안 됨) */
 self.addEventListener('install', function () { self.skipWaiting(); });
 self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim()); });
-var NOTIF_ICON = 'https://benny3s.github.io/benny-meeting/notif-icon.png';   /* 큰 아이콘(브랜드 로고) */
-var NOTIF_BADGE = 'https://benny3s.github.io/benny-meeting/notif-badge.png'; /* 상태바 모노크롬 배지 */
+var NOTIF_ICON = 'https://benny3s.github.io/bridge/notif-icon.png';   /* 큰 아이콘(브랜드 로고) */
+var NOTIF_BADGE = 'https://benny3s.github.io/bridge/notif-badge.png'; /* 상태바 모노크롬 배지 */
 
 /* 앱이 꺼져 있거나 백그라운드일 때 (data 메시지) */
 messaging.onBackgroundMessage(function (payload) {
@@ -46,7 +46,7 @@ self.addEventListener('notificationclick', function (event) {
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
       for (var i = 0; i < list.length; i++) {
         var c = list[i];
-        if (c.url && c.url.indexOf('benny-meeting') >= 0 && 'focus' in c) {
+        if (c.url && (c.url.indexOf('bridge') >= 0 || c.url.indexOf('benny-meeting') >= 0) && 'focus' in c) {
           try { c.postMessage({ type: 'notif-click', route: route, focusId: focusId }); } catch (e) {}
           return c.focus();
         }

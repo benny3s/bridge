@@ -194,7 +194,7 @@ exports.getHiddenIds = functions
 
 /* (adminBackfill: 기존 회원 번호 일괄 백필 — 2026-09-08 완료 후 제거. 필요 시 재도입) */
 
-const SITE_URL = 'https://benny3s.github.io/benny-meeting/';
+const SITE_URL = 'https://benny3s.github.io/bridge/';
 
 function reqStatus(r) {
   if (r.approved) return 'approved';

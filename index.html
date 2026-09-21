@@ -11,8 +11,8 @@
 <meta property="og:site_name" content="베니브릿지">
 <meta property="og:title" content="베니브릿지 — 지인 소개로 만나는 좋은 인연 💐">
 <meta property="og:description" content="관리자 주변 사람들 중심으로, 믿을 수 있는 소개를 이어주는 작은 공간이에요. 프로필을 등록하고 마음에 드는 분께 다가가 보세요.">
-<meta property="og:image" content="https://benny3s.github.io/benny-meeting/notif-icon.png">
-<meta property="og:url" content="https://benny3s.github.io/benny-meeting/">
+<meta property="og:image" content="https://benny3s.github.io/bridge/notif-icon.png">
+<meta property="og:url" content="https://benny3s.github.io/bridge/">
 <meta name="twitter:card" content="summary">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Gowun+Dodum&display=swap">
 <style id="page-style">
@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-21-370';
+  var APP_VERSION = '2026-09-21-371';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1583,7 +1583,7 @@
 
   /* ── 관리자 수동 SMS (Solapi, adminSendSms CF) — 푸시 안 닿는 사람 fallback ──
      번호는 서버가 sendContacts에서 복호화·발송 → 관리자는 번호를 보지 않음. 관리자 전용 토큰으로 인증(한 번 입력→기기 저장). */
-  var SMS_SITE = 'https://benny3s.github.io/benny-meeting/';
+  var SMS_SITE = 'https://benny3s.github.io/bridge/';
   function getSmsToken(force) {
     var t = '';
     try { t = localStorage.getItem('benny-sms-token') || ''; } catch (e) {}
@@ -10029,8 +10029,8 @@
       return;
     }
     if (!('Notification' in window)) { modalNotice('안내', '이 브라우저는 알림을 지원하지 않아요.'); return; }
-    var icon = 'https://benny3s.github.io/benny-meeting/notif-icon.png';
-    var badge = 'https://benny3s.github.io/benny-meeting/notif-badge.png';
+    var icon = 'https://benny3s.github.io/bridge/notif-icon.png';
+    var badge = 'https://benny3s.github.io/bridge/notif-badge.png';
     function fire() {
       /* 매번 새로 뜨도록 태그를 매번 다르게 (같은 태그면 조용히 교체돼서 두 번째부터 안 떠요) */
       var opts = { body: '이 알림이 보이면 정상이에요! 실제 요청이 오면 이렇게 알려드려요.', icon: icon, badge: badge, tag: 'benchinso-test-' + Date.now(), renotify: true };
