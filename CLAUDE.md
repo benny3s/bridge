@@ -7,8 +7,8 @@
 
 ## 아키텍처 (한눈에)
 - **클라이언트**: 단일 파일 **`index.html`** (~630KB, 바닐라 JS). 실제 로직은 `<script id="app-logic">` 인라인 블록 하나에 다 들어있음. (별도 `<script id="state-json" type="application/json">`은 시드용 JSON — JS 아님)
-- **상태 저장**: Firestore 단일 문서 **`app/state`**. 주요 필드: `entries`(승인 회원), `pendingEntries`(승인 대기·보류), `dateRequests`(사진/대화 요청), `dm`(회원↔회원 채팅), `messages`(회원↔관리자 Q&A), `logs`(활동기록, LIMIT 1500), `joinRequests`(주선자 요청), `connLog`/`connEver`(누적 연결), `coupleReports`(커플 성사), `smsLog`, `deletedLog`, `adminAuth`, `adminSecOrder`, `announce`/`checkin`/`popup`.
-- **인증**: Firebase **익명 로그인**(`signInAnonymously`). Firestore 규칙: `app/state`·`photos/{id}`·`pushTokens/{id}`는 `auth != null`일 때만 read/write, 그 외 전부 차단. → **익명 인증이 안 잡히면 쓰기 실패("Missing or insufficient permissions")**. 제출 전 인증 가드 있음.
+- **상태 저장**: Firestore 단일 문서 **`app/state`**. 주요 필드: `entries`(승인 회원), `pendingEntries`(승인 대기·보류), `dateRequests`(사진/대화 요청), `dm`(회원↔회원 채팅), `messages`(회원↔관리자 Q&A), `logs`(활동기록 **최근분만**, 최대 ~400 유지; 600 초과 시 오래된 건 별도 문서 **`app/logs`**로 배치 아카이브 — `maybeArchiveLogs`, 관리자 "이전 기록 더 보기"로 로드), `joinRequests`(주선자 요청), `connLog`/`connEver`(누적 연결), `coupleReports`(커플 성사), `smsLog`, `deletedLog`, `adminAuth`, `adminSecOrder`, `announce`/`checkin`/`popup`.
+- **인증**: Firebase **익명 로그인**(`signInAnonymously`). Firestore 규칙: `app/state`·`app/logs`(로그 아카이브)·`photos/{id}`·`pushTokens/{id}`는 `auth != null`일 때만 read/write, 그 외 전부 차단. → **익명 인증이 안 잡히면 쓰기 실패("Missing or insufficient permissions")**. 제출 전 인증 가드 있음.
 - **관리자**: `adminAuth`에 RSA 키쌍(공개키 + PIN으로 감싼 개인키). 관리자 PIN 입력 시 개인키 unlock(`adminPrivateKey`). 민감정보(`realNameEnc`·`contactEnc`·`referrerEnc`)는 **관리자 공개키로 암호화(RSA-OAEP)**, 관리자만 client에서 복호화(`decryptWithAdmin`).
 - **사진**: `photos/{entryId}` 컬렉션. **푸시 토큰**: `pushTokens/{entryId}`(+ `'admin'`).
 - **Cloud Functions** (`functions/index.js`, region `asia-northeast3`, Node 22):
