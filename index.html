@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-22-372';
+  var APP_VERSION = '2026-09-22-373';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -3285,6 +3285,25 @@
         tx.update(stateRef, { messages: msgs });
       });
     });
+  }
+  /* 여러 회원에게 같은 메시지 일괄 발송 — 반드시 '한 트랜잭션'으로 append (개별 sendMessageTo를 Promise.all로 돌리면 app/state 동시 쓰기 충돌 "stored version does not match") */
+  function sendMessagesBulk(entryIds, from, text, extra) {
+    text = (text || '').trim();
+    var ids = (entryIds || []).filter(Boolean);
+    if (!text || !ids.length) return Promise.resolve(0);
+    return db.runTransaction(function (tx) {
+      return tx.get(stateRef).then(function (doc) {
+        var s = doc.data() || {};
+        var msgs = (s.messages || []).slice();
+        ids.forEach(function (eid) {
+          var m = { id: genId(), entryId: eid, from: from, text: text, at: new Date().toISOString() };
+          if (extra) Object.keys(extra).forEach(function (k) { if (extra[k] != null) m[k] = extra[k]; });
+          msgs.push(m);
+        });
+        if (msgs.length > 5000) msgs = msgs.slice(msgs.length - 5000);
+        tx.update(stateRef, { messages: msgs });
+      });
+    }).then(function () { return ids.length; });
   }
   function threadFor(state, entryId, viewer) {
     var hideKey = viewer === 'admin' ? 'hiddenByAdmin' : 'hiddenByUser';
@@ -7550,7 +7569,7 @@
       var text = (ov.querySelector('#conn-msg').value || '').trim();
       if (!text) { modalNotice('안내', '보낼 내용을 입력해주세요.'); return; }
       closeModal(ov);
-      Promise.all(checked.map(function (cid) { return sendMessageTo(cid, 'admin', text); })).then(function () {
+      sendMessagesBulk(checked, 'admin', text).then(function () {
         appendLog('admin', '관리자', '연결 회원 안내 ' + checked.length + '명 · ' + nickOf);
         return db.runTransaction(function (tx) {
           return tx.get(stateRef).then(function (doc) {
@@ -7610,7 +7629,7 @@
       var text = (ov.querySelector('#stale-msg').value || '').trim();
       if (!text) { modalNotice('안내', '내용을 입력해주세요.'); return; }
       closeModal(ov);
-      Promise.all(checked.map(function (cid) { return sendMessageTo(cid, 'admin', text); })).then(function () {
+      sendMessagesBulk(checked, 'admin', text).then(function () {
         appendLog('admin', '관리자', '무응답 재촉 메시지 ' + checked.length + '명');
         return refreshNow();
       }).then(function () { modalNotice('전송 완료', checked.length + '명에게 재촉 메시지를 보냈어요.'); })
