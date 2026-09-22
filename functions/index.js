@@ -370,6 +370,7 @@ exports.onStateChange = functions
    remind1Sent / remind2Sent 플래그로 중복 방지. 이후는 관리자가 직접 챙김. */
 const REMIND_1_MS = 24 * 60 * 60 * 1000; /* 1일 */
 const REMIND_2_MS = 72 * 60 * 60 * 1000; /* 3일 */
+const REMIND_3_MS = 7 * 24 * 60 * 60 * 1000; /* 7일 — 앱 관리자 메시지 1회(메시지함에 남음) */
 
 exports.remindPending = functions
   .region('asia-northeast3')
@@ -387,6 +388,7 @@ exports.remindPending = functions
       const reqs = state.dateRequests || [];
       const now = Date.now();
       const sends = [];
+      const newMsgs = [];
       let changed = false;
       const updated = reqs.map((r) => {
         if (reqStatus(r) !== 'pending') return r;
@@ -395,6 +397,12 @@ exports.remindPending = functions
         const age = now - t;
         const type = (r.type || 'contact') === 'photo' ? '사진' : '데이트';
         const fromNick = nameOf(entries, r.fromId);
+        /* 7일+ 무응답: 앱 관리자 메시지 1회(메시지함에 남아 반드시 봄 · onStateChange가 푸시도 보냄). remind3Sent로 중복 방지 */
+        if (age >= REMIND_3_MS && !r.remind3Sent) {
+          newMsgs.push({ id: nodeCrypto.randomUUID(), entryId: r.toId, from: 'admin', text: '[베니브릿지] 확인 대기 중인 요청이 있어요. 앱에서 승인·보류·거절을 정해주세요 🙏', at: new Date().toISOString() });
+          changed = true;
+          return Object.assign({}, r, { remind1Sent: true, remind2Sent: true, remind3Sent: true });
+        }
         if (age >= REMIND_2_MS && !r.remind2Sent) {
           sends.push({ toId: r.toId, title: '⏰ ' + type + ' 요청 알림', body: fromNick + '님의 ' + type + ' 요청이 3일째 기다리고 있어요. 승인/거절을 정해주세요' });
           changed = true;
@@ -407,7 +415,11 @@ exports.remindPending = functions
         }
         return r;
       });
-      if (changed) tx.update(ref, { dateRequests: updated });
+      if (changed) {
+        const upd = { dateRequests: updated };
+        if (newMsgs.length) upd.messages = (state.messages || []).concat(newMsgs);
+        tx.update(ref, upd);
+      }
       return { entries, sends };
     });
     if (result && result.sends.length) {

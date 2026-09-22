@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-21-371';
+  var APP_VERSION = '2026-09-22-372';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -933,8 +933,8 @@
   var openMsgFolds = {}; /* 관리자 메시지: 펼쳐둔 회원 대화 (리페인트 후 유지용) */
   var _mmFoldOpen = {};  /* 주선자 탭: 카드별 접힘 상태 (리페인트 후 유지용, 기본 열림) */
   var adminEditMode = false; /* 관리자 섹션 편집(순서·기본 열림) 모드 */
-  var DEFAULT_SEC_ORDER = ['usage', 'connlog', 'couple', 'pending', 'held', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
-  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', held: '📌 보류 중', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
+  var DEFAULT_SEC_ORDER = ['usage', 'connlog', 'couple', 'pending', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
+  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', held: '📌 보류 중', stale: '⏰ 무응답 요청', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
   /* 섹션 열림 상태는 "세션 메모리에만" 저장 → 리페인트(버튼 클릭 등) 동안엔 유지되지만,
      새로고침하면 초기화되어 모두 접힌 상태로 시작 (이전에 열었던 걸 기억하지 않음) */
   var _adminSecOpen = {}, _adminSecOrder = null;
@@ -6154,8 +6154,38 @@
       reqTypeRow + reqStatusRow + reqAgeRow + reqSortSelect + reqSearchBox + reqPendingHint +
       (listReqs.length ? allReqItems : reqEmpty) +
       '<p class="sub" id="req-search-empty" hidden>검색 결과가 없어요.</p>', false, 'active');
+    /* ⏰ 무응답 요청: 2일 이상 승인·보류·거절 안 한 대기 요청 (받는 사람=무응답자). 받는 분에게 재촉 */
+    var STALE_MS = 2 * 24 * 3600 * 1000, nowStale = Date.now();
+    var staleReqs = (state.dateRequests || []).filter(function (r) {
+      if (reqStatus(r) !== 'pending' || !r.submittedAt) return false;
+      if ((nowStale - new Date(r.submittedAt).getTime()) < STALE_MS) return false;
+      var to = (state.entries || []).find(function (e) { return e.id === r.toId; });
+      return !!(to && !to.deactivated && !to.testAccount);
+    }).map(function (r) {
+      var to = (state.entries || []).find(function (e) { return e.id === r.toId; }) || {};
+      var from = (state.entries || []).concat(state.pendingEntries || []).find(function (e) { return e.id === r.fromId; }) || {};
+      return { r: r, to: to, from: from, days: Math.floor((nowStale - new Date(r.submittedAt).getTime()) / 86400000), isPhoto: (r.type || 'contact') === 'photo' };
+    }).sort(function (a, b) { return b.days - a.days; });
+    var staleRecipN = Object.keys(staleReqs.reduce(function (o, x) { o[x.to.id] = 1; return o; }, {})).length;
+    var staleRows = staleReqs.map(function (x) {
+      var col = x.days >= 7 ? '#c5221f' : (x.days >= 3 ? '#b06000' : 'var(--muted)');
+      return '<div style="display:flex;align-items:center;gap:8px;padding:8px 2px;border-bottom:1px dashed var(--line);flex-wrap:wrap;">' +
+        '<span style="flex:1;min-width:0;font-size:0.88rem;">' +
+          '<b style="color:' + col + ';">⏰ ' + x.days + '일</b> · <b>' + escapeHtml(x.to.nickname || '회원') + '</b> ' +
+          '<span style="color:var(--muted);font-size:0.8rem;">(' + escapeHtml(formatUid(x.to) || '—') + ')</span> ' +
+          '<span style="color:var(--muted);">← ' + escapeHtml(x.from.nickname || '상대') + ' · ' + (x.isPhoto ? '사진' : '대화') + '</span>' +
+        '</span>' +
+        '<button type="button" class="card-btn" data-action="admin-msg" data-id="' + escapeHtml(x.to.id) + '" style="flex:none;padding:3px 10px;">💬</button>' +
+        '<button type="button" class="card-btn" data-action="sms-native" data-id="' + escapeHtml(x.to.id) + '" style="flex:none;padding:3px 10px;">📱</button>' +
+      '</div>';
+    }).join('');
+    var staleSection = adminFold('⏰ 무응답 요청', staleReqs.length,
+      '<p class="sub">2일 이상 <b>승인·보류·거절을 안 한</b> 대기 요청이에요. 받는 분(무응답자)에게 💬 대화·📱 문자로 재촉하거나, 아래 버튼으로 <b>선택 재촉</b>하세요. (7일차엔 앱 메시지가 자동 1회 발송돼요)</p>' +
+      (staleReqs.length
+        ? ('<div style="margin:0 0 10px;"><button type="button" class="card-btn primary" data-action="stale-nudge" style="flex:none;">📢 무응답 회원 ' + staleRecipN + '명에게 재촉…</button></div>' + staleRows)
+        : '<p class="sub">2일 이상 무응답인 요청이 없어요 🙆</p>'), false, 'stale');
     var secHtml = {
-      usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), pending: pendingSection, held: heldSection, editrev: editRevSection,
+      usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), pending: pendingSection, held: heldSection, stale: staleSection, editrev: editRevSection,
       deaclist: deacListSection, dellog: delLogSection,
       active: activeReqSection, adminmsg: adminMsgSection,
       cap: capSection, seen: seenSection, log: logSection
@@ -7534,6 +7564,56 @@
         });
       }).then(function () { return refreshNow(); })
         .then(function () { modalNotice('전송 완료', checked.length + '명에게 안내를 보냈어요.'); })
+        .catch(function (err) { modalNotice('오류', '전송 실패: ' + (err.message || err)); });
+    });
+  }
+  /* 관리자: 2일+ 무응답 회원(대기 요청 받은 사람)에게 선택 재촉 메시지 */
+  function showStaleNudge() {
+    if (!isAdminUnlocked) return;
+    var STALE_MS = 2 * 24 * 3600 * 1000, now = Date.now(), recips = {};
+    (currentState.dateRequests || []).forEach(function (r) {
+      if (reqStatus(r) !== 'pending' || !r.submittedAt) return;
+      if ((now - new Date(r.submittedAt).getTime()) < STALE_MS) return;
+      var to = (currentState.entries || []).find(function (e) { return e.id === r.toId; });
+      if (!to || to.deactivated || to.testAccount) return;
+      var d = Math.floor((now - new Date(r.submittedAt).getTime()) / 86400000);
+      if (!recips[to.id] || d > recips[to.id].days) recips[to.id] = { id: to.id, nick: to.nickname || '회원', days: d, gender: to.gender };
+    });
+    var list = Object.keys(recips).map(function (k) { return recips[k]; }).sort(function (a, b) { return b.days - a.days; });
+    if (!list.length) { modalNotice('안내', '2일 이상 무응답인 회원이 없어요.'); return; }
+    var rows = list.map(function (m) {
+      return '<div style="display:flex;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px dashed var(--line);">' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;cursor:pointer;">' +
+          '<input type="checkbox" class="stale-chk" data-cid="' + escapeHtml(m.id) + '" checked style="width:16px;height:16px;flex:none;accent-color:var(--accent);">' +
+          '<span style="min-width:0;"><b>' + escapeHtml(m.nick) + '</b> <span style="font-size:0.8rem;color:var(--muted);">' + genderLabel(m.gender) + ' · ⏰' + m.days + '일</span></span>' +
+        '</label>' +
+        '<button type="button" class="card-btn" data-conn-sms="' + escapeHtml(m.id) + '" style="flex:none;padding:3px 10px;">📱</button>' +
+      '</div>';
+    }).join('');
+    var defaultMsg = '[베니브릿지] 확인 대기 중인 요청이 있어요. 앱에서 승인·보류·거절을 정해주세요 🙏';
+    var ov = openModal(
+      '<h3>⏰ 무응답 회원 재촉 (' + list.length + '명)</h3>' +
+      '<p class="modal-msg" style="margin:0 0 6px;">2일 이상 응답 안 한 회원이에요. 체크한 회원에게 아래 안내를 <b>앱 메시지</b>로 보내요. (개별은 📱 문자)</p>' +
+      '<div style="max-height:38vh;overflow-y:auto;margin:4px 0 8px;">' + rows + '</div>' +
+      '<textarea class="modal-input" id="stale-msg" rows="3" maxlength="500">' + escapeHtml(defaultMsg) + '</textarea>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="card-btn" id="stale-close">닫기</button>' +
+        '<button type="button" class="card-btn primary" id="stale-send">✅ 체크한 회원에게 보내기</button>' +
+      '</div>'
+    );
+    Array.prototype.forEach.call(ov.querySelectorAll('[data-conn-sms]'), function (b) { b.addEventListener('click', function () { openSmsNative(b.getAttribute('data-conn-sms')); }); });
+    ov.querySelector('#stale-close').addEventListener('click', function () { closeModal(ov); });
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(ov); });
+    ov.querySelector('#stale-send').addEventListener('click', function () {
+      var checked = Array.prototype.map.call(ov.querySelectorAll('.stale-chk:checked'), function (c) { return c.getAttribute('data-cid'); });
+      if (!checked.length) { modalNotice('안내', '보낼 회원을 체크해주세요.'); return; }
+      var text = (ov.querySelector('#stale-msg').value || '').trim();
+      if (!text) { modalNotice('안내', '내용을 입력해주세요.'); return; }
+      closeModal(ov);
+      Promise.all(checked.map(function (cid) { return sendMessageTo(cid, 'admin', text); })).then(function () {
+        appendLog('admin', '관리자', '무응답 재촉 메시지 ' + checked.length + '명');
+        return refreshNow();
+      }).then(function () { modalNotice('전송 완료', checked.length + '명에게 재촉 메시지를 보냈어요.'); })
         .catch(function (err) { modalNotice('오류', '전송 실패: ' + (err.message || err)); });
     });
   }
@@ -9346,6 +9426,8 @@
       else if (action === 'reactivate') handleReactivate(id);
       else if (action === 'edit-reviewed') handleEditReviewed(id);
       else if (action === 'notify-connected') showConnectedMembers(id);
+      else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
+      else if (action === 'stale-nudge') { showStaleNudge(); return; }
       else if (action === 'del-tombstone') handleDeleteTombstone(id);
       else if (action === 'approve-request') handleApproveRequest(id);
       else if (action === 'hold-request') handleHoldRequest(id);
