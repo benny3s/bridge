@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-22-373';
+  var APP_VERSION = '2026-09-23-374';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -5666,11 +5666,15 @@
           deacList.map(function (e) {
             var sent = e.connectNotifiedAt;
             var sentChip = sent ? ' <span class="chip" style="background:#e6f4ea;color:#137333;">✅ 안내 보냄</span>' : '';
+            var viaChip = e.deactivatedVia === 'delete-request' ? ' <span class="chip" style="background:#fce8e6;color:#c5221f;">🗑 삭제요청→보관</span>'
+              : e.deactivatedVia === 'deactivate-request' ? ' <span class="chip" style="background:#e8f0fe;color:#1a73e8;">🗄 보관요청</span>'
+              : e.deactivatedVia === 'admin' ? ' <span class="chip" style="background:#eceff1;color:#455a64;">🛠 관리자 보관</span>'
+              : ' <span class="chip" style="background:#f1f3f4;color:#9aa0a6;">❔ 출처 미기록</span>';
             var sentNote = sent
               ? '<div class="p-meta" style="color:#137333;">✅ 연결 회원 안내 보냄 · ' + fmtDate(e.connectNotifiedAt) + (e.connectNotifiedCount > 1 ? ' (' + e.connectNotifiedCount + '회)' : '') + '</div>'
               : '<div class="p-meta" style="color:var(--muted);">아직 연결 회원 안내를 보내지 않았어요.</div>';
             return foldItem(
-              '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> <span class="chip" style="background:var(--gold-soft);color:var(--gold);">🗄 보관</span>' + sentChip,
+              '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> <span class="chip" style="background:var(--gold-soft);color:var(--gold);">🗄 보관</span>' + viaChip + sentChip,
               '<div class="p-meta">' + genderLabel(e.gender) + ' · ' + escapeHtml(e.region || '') + (e.deactivatedAt ? ' · 보관: ' + fmtDate(e.deactivatedAt) : '') + '</div>' +
               (e.deactivatedReason ? '<div class="p-meta" style="color:var(--ink);">사유: "' + escapeHtml(e.deactivatedReason) + '"</div>' : '') +
               sentNote +
@@ -7792,6 +7796,7 @@
             c.deactivated = true;
             c.deactivatedAt = new Date().toISOString();
             c.deactivatedReason = c.deleteReason || '(삭제 요청 → 보관 전환)';
+            c.deactivatedVia = 'delete-request'; /* 원래 삭제 요청 → 보관으로 전환 */
             delete c.testAccount;
             delete c.deleteRequested; delete c.deleteReqAt; delete c.deleteReason;
             return c;
@@ -7960,7 +7965,7 @@
           var s = doc.data();
           var entries = (s.entries || []).map(function (e) {
             if (e.id !== id) return e;
-            var c = JSON.parse(JSON.stringify(e)); c.deactivated = true; delete c.testAccount; c.deactivatedReason = c.deactivateReason || ''; c.deactivatedAt = new Date().toISOString(); delete c.deactivateRequested; delete c.deactivateReqAt; delete c.deactivateReason; return c;
+            var c = JSON.parse(JSON.stringify(e)); c.deactivated = true; delete c.testAccount; c.deactivatedReason = c.deactivateReason || ''; c.deactivatedAt = new Date().toISOString(); c.deactivatedVia = 'deactivate-request'; delete c.deactivateRequested; delete c.deactivateReqAt; delete c.deactivateReason; return c;
           });
           tx.update(stateRef, { entries: entries });
         });
@@ -8566,7 +8571,7 @@
             delete c.testAccount; delete c.deactivated; delete c.deactivatedReason; delete c.deactivatedAt;
             delete c.deactivateRequested; delete c.deactivateReqAt; delete c.deactivateReason;
             if (status === 'test') c.testAccount = true;
-            else if (status === 'archived') { c.deactivated = true; c.deactivatedReason = entry.deactivatedReason || entry.deactivateReason || ''; c.deactivatedAt = new Date().toISOString(); }
+            else if (status === 'archived') { c.deactivated = true; c.deactivatedReason = entry.deactivatedReason || entry.deactivateReason || ''; c.deactivatedAt = new Date().toISOString(); c.deactivatedVia = 'admin'; }
             return c;
           });
           tx.update(stateRef, { entries: entries });
