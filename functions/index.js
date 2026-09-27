@@ -263,6 +263,9 @@ function entryById(entries, id) {
 /* 수신자에게 알림. 대리 등록(주선자 관리) 프로필이면 주선자에게 대신 보냄. */
 async function notifyRecipient(entries, id, title, body) {
   const e = entryById(entries, id);
+  /* 보관(휴면) 계정에는 회원 간 알림(요청·재요청·결정·채팅·리마인더)을 보내지 않음 — 로그인도 불가.
+     (옛 버전 앱에서 요청이 들어와도 푸시는 안 감. 다시 활성화되면 정상 발송) */
+  if (e && e.deactivated) return;
   if (e && e.managedBy) {
     /* 대리(주선자 관리) 친구: 주선자에게 항상 전달(소개 대상 본인은 앱에 없을 수 있음).
        + 친구가 유효한 임시 PIN으로 직접 쓰는 상태면 친구 본인에게도 (토큰 없으면 자동 무시) */
@@ -294,7 +297,7 @@ exports.onStateChange = functions
     const jobs = [];
     (after.dateRequests || []).forEach((r) => {
       const prev = beforeMap[r.id];
-      const type = (r.type || 'contact') === 'photo' ? '사진' : '데이트';
+      const type = (r.type || 'contact') === 'photo' ? '사진' : '대화'; /* 앱 용어(대화 신청)와 통일 */
       if (!prev) {
         /* 새 요청 → 받는 사람에게 (대리 프로필이면 주선자에게) */
         jobs.push(notifyRecipient(entries, r.toId, '새 ' + type + ' 요청', nameOf(entries, r.fromId) + '님이 ' + type + ' 요청을 보냈어요'));
@@ -392,10 +395,13 @@ exports.remindPending = functions
       let changed = false;
       const updated = reqs.map((r) => {
         if (reqStatus(r) !== 'pending') return r;
+        /* 받는 사람이 보관(휴면) 중이면 리마인더·자동 메시지 모두 건너뜀(요청은 일시정지 상태로 보존) */
+        const toE = entryById(entries, r.toId);
+        if (toE && toE.deactivated) return r;
         const t = r.submittedAt ? new Date(r.submittedAt).getTime() : 0;
         if (!t) return r;
         const age = now - t;
-        const type = (r.type || 'contact') === 'photo' ? '사진' : '데이트';
+        const type = (r.type || 'contact') === 'photo' ? '사진' : '대화';
         const fromNick = nameOf(entries, r.fromId);
         /* 7일+ 무응답: 앱 관리자 메시지 1회(메시지함에 남아 반드시 봄 · onStateChange가 푸시도 보냄). remind3Sent로 중복 방지 */
         if (age >= REMIND_3_MS && !r.remind3Sent) {

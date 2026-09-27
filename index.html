@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-23-374';
+  var APP_VERSION = '2026-09-27-375';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -3334,6 +3334,9 @@
   function sendDm(meId, otherId, text, viaMm) {
     text = (text || '').trim();
     if (!text || !meId || !otherId) return Promise.resolve();
+    /* 보관(휴면) 계정에게는 채팅 전송 불가 — 로그인도 못 하고 푸시도 가면 안 됨 */
+    var otherE = ((currentState && currentState.entries) || []).find(function (x) { return x.id === otherId; });
+    if (otherE && otherE.deactivated) return Promise.reject(new Error('상대가 지금 휴면(보관) 중이라 메시지를 보낼 수 없어요.'));
     var m = { id: genId(), pair: dmPairKey(meId, otherId), fromId: meId, toId: otherId, text: text, at: new Date().toISOString() };
     if (viaMm) m.viaMm = true; /* 주선자가 친구 대신 보낸 메시지 */
     return db.runTransaction(function (tx) {
@@ -3369,14 +3372,16 @@
     var viaMm = !!(me.managedBy && me.managedBy === currentUser.id && !me.ownerSelf && isMatchmakerEntry(myAuthEntry(currentState)));
     if (!canViewContactOf(currentState, me.id, otherId)) { modalNotice('안내', '대화 신청이 수락되면 채팅할 수 있어요.'); return; }
     var otherNick = nickForEntry(currentState, otherId);
+    var otherDeac = !!((currentState.entries || []).find(function (x) { return x.id === otherId && x.deactivated; }));
     var overlay = openModal(
       '<h3>💬 ' + escapeHtml(otherNick) + '님과의 채팅</h3>' +
       (viaMm ? '<p class="modal-msg" style="background:var(--gold-soft);border:1px solid var(--gold);border-radius:8px;padding:6px 10px;margin:0 0 8px;font-size:0.82rem;">🤝 주선자로 대신 대화 중이에요. 보내는 메시지엔 <b>주선자</b> 표시가 붙어요.</p>' : '') +
       '<div id="dm-body" style="max-height:44vh;overflow-y:auto;margin:6px 0 10px;padding:0 2px;"></div>' +
-      '<textarea class="modal-input" id="dm-text" rows="2" maxlength="500" placeholder="메시지 입력 (최대 500자)"></textarea>' +
+      (otherDeac ? '<p class="modal-msg" style="background:#f1f3f4;border-radius:8px;padding:6px 10px;margin:0 0 8px;font-size:0.84rem;">💤 ' + escapeHtml(otherNick) + '님은 지금 <b>휴면(보관) 중</b>이라 메시지를 보낼 수 없어요. 이전 대화는 볼 수 있어요.</p>' : '') +
+      '<textarea class="modal-input" id="dm-text" rows="2" maxlength="500" placeholder="' + (otherDeac ? '휴면 중인 회원에게는 보낼 수 없어요' : '메시지 입력 (최대 500자)') + '"' + (otherDeac ? ' disabled' : '') + '></textarea>' +
       '<div class="modal-actions">' +
         '<button type="button" class="card-btn" id="modal-cancel">닫기</button>' +
-        '<button type="button" class="card-btn primary" id="dm-send">보내기</button>' +
+        '<button type="button" class="card-btn primary" id="dm-send"' + (otherDeac ? ' disabled style="opacity:.45;"' : '') + '>보내기</button>' +
       '</div>'
     );
     overlay.classList.add('wide-modal');
@@ -4115,9 +4120,11 @@
     }
     /* 같은 주선자 소속(형제)끼리는 사진·대화 요청 불가 — 임시 PIN으로 직접 로그인한 경우도 포함 */
     var sibling = !!(viewer && viewer.managedBy && entry.managedBy && viewer.managedBy === entry.managedBy && viewer.id !== entry.id);
-    var reqBtns = mineOrManaged ? '' : (sibling
-      ? '<span style="color:var(--muted);font-size:0.82rem;align-self:center;">같은 주선자 소속이에요</span>'
-      : photoBtn + dateBtn);
+    var reqBtns = mineOrManaged ? '' : (entry.deactivated
+      ? '<span class="card-btn" style="background:#f1f3f4;color:#5f6368;cursor:default;border-color:#e0e0e0;">💤 휴면 중인 회원이에요</span>'
+      : (sibling
+        ? '<span style="color:var(--muted);font-size:0.82rem;align-self:center;">같은 주선자 소속이에요</span>'
+        : photoBtn + dateBtn));
     return (
       '<article class="pf-card" data-id="' + escapeHtml(entry.id) + '" data-search="' + escapeHtml(searchBlob(entry)) + '">' +
         /* 고유번호는 관리자에게만 (본인 프로필은 로그인·문의에 필요해 본인에게도 표시) */
@@ -4802,6 +4809,8 @@
     var typeBadge = isPhoto
       ? '<span class="chip" style="background:#fdf0e3;color:#b06000;">📷 사진</span>'
       : '<span class="chip" style="background:#fce8e6;color:#d93025;">💌 대화</span>';
+    /* 상대가 보관(휴면) 중이면 표시 — 요청은 지우지 않고 '일시정지'(다시 활성화되면 이어짐) */
+    if (other && other.deactivated) typeBadge += ' <span class="chip" style="background:#f1f3f4;color:#5f6368;">💤 상대 휴면 중</span>';
     var actions = '';
     if (incoming && (st === 'pending' || st === 'held')) {
       /* 받은 요청: 승인/보류/거절 (보류 상태에서도 다시 결정 가능) */
@@ -8037,6 +8046,8 @@
     if (!state.adminAuth) { modalNotice('안내', '관리자 설정이 아직 완료되지 않았어요.'); return; }
     var target = state.entries.find(function (e) { return e.id === toId; });
     if (!target) return;
+    /* 보관(휴면) 계정에는 요청 불가 — 명단엔 숨겨지지만 요청함·채팅 등 다른 경로의 카드에서 들어올 수 있음 */
+    if (target.deactivated) return modalNotice('안내', (target.nickname || '이 회원') + '님은 지금 휴면(보관) 중이라 요청할 수 없어요.');
     var isPhoto = type === 'photo';
     var typeLabel = isPhoto ? '사진 보기' : '대화 신청';
     var actionText = isPhoto ? '사진 보기 요청' : '대화 신청';
@@ -8788,6 +8799,7 @@
     var isPhoto = (req.type || 'contact') === 'photo';
     var to = (state.entries || []).find(function (e) { return e.id === req.toId; });
     var toName = to ? to.nickname : '상대방';
+    if (to && to.deactivated) return modalNotice('안내', toName + '님은 지금 휴면(보관) 중이라 다시 요청할 수 없어요.');
     var feedback = st === 'held' ? (req.holdMessage || '') : (req.rejectMessage || '');
     var feedbackHtml = feedback
       ? '<div class="mine-note" style="background:var(--gold-soft);color:var(--ink);">' + escapeHtml(toName) + '님의 메시지<br>"' + escapeHtml(feedback) + '"</div>'
