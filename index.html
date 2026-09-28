@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-28-376';
+  var APP_VERSION = '2026-09-28-377';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -9903,6 +9903,57 @@
     try { localStorage.setItem('popup-seen', pop.ver); } catch (e) {}
     showOneOffPopup(pop.title, pop.text);
   }
+  /* 받은 요청 응답 재촉 팝업 — 2일+ 대기(pending) 요청이 있으면 앱 열 때 표시, 기기당 3일에 1번.
+     주선자는 관리 중인 친구(본인 프로필 포함) 앞으로 온 요청까지 합산. 보낸 사람이 휴면·테스트면 제외. */
+  var REQ_NUDGE_MIN_AGE = 2 * 86400000, REQ_NUDGE_EVERY = 3 * 86400000;
+  function maybeShowReqNudge(tries) {
+    if (!currentUser) return;
+    if (!currentState || !currentState.entries) { if ((tries || 0) < 5) setTimeout(function () { maybeShowReqNudge((tries || 0) + 1); }, 3000); return; }
+    if (isAdminUnlocked) return;
+    if (document.querySelector('.modal-overlay')) { setTimeout(maybeShowReqNudge, 4000); return; }
+    var state = currentState;
+    var auth = myAuthEntry(state); if (!auth || auth.deactivated) return;
+    var key = 'req-nudge-' + currentUser.id;
+    var last = 0; try { last = parseInt(localStorage.getItem(key) || '0', 10) || 0; } catch (e) {}
+    if (Date.now() - last < REQ_NUDGE_EVERY) return;
+    var ids = {}; ids[auth.id] = 1;
+    entriesManagedByMe(state).forEach(function (e) { ids[e.id] = 1; });
+    var byId = {}; (state.entries || []).forEach(function (e) { byId[e.id] = e; });
+    var cutoff = Date.now() - REQ_NUDGE_MIN_AGE;
+    var list = (state.dateRequests || []).filter(function (r) {
+      if (!ids[r.toId] || reqStatus(r) !== 'pending') return false;
+      if ((r.hiddenBy || []).indexOf(r.toId) >= 0) return false;
+      var from = byId[r.fromId]; if (!from || from.deactivated || from.testAccount) return false;
+      var t = new Date(r.reappliedAt || r.submittedAt || 0).getTime();
+      return t && t <= cutoff;
+    });
+    if (!list.length) return;
+    try { localStorage.setItem(key, String(Date.now())); } catch (e) {}
+    var photo = list.filter(function (r) { return (r.type || 'contact') === 'photo'; }).length;
+    var talk = list.length - photo;
+    var kinds = [];
+    if (photo) kinds.push('📷 사진 요청 ' + photo + '건');
+    if (talk) kinds.push('💌 대화 요청 ' + talk + '건');
+    var friendCnt = list.filter(function (r) { return r.toId !== auth.id && !(byId[r.toId] || {}).ownerSelf; }).length;
+    var overlay = openModal(
+      '<h3>💌 답을 기다리는 요청이 있어요</h3>' +
+      '<p class="modal-msg" style="text-align:center;line-height:1.7;"><b>' + kinds.join(' · ') + '</b>' +
+        (friendCnt ? '<br><span style="font-size:0.85rem;">(소개한 친구 앞으로 온 요청 ' + friendCnt + '건 포함)</span>' : '') + '</p>' +
+      '<p class="modal-msg" style="text-align:center;font-size:0.88rem;line-height:1.7;">보낸 분이 답을 기다리고 있어요.<br>마음이 안 가면 <b>거절해도 전혀 괜찮아요</b> 🙂</p>' +
+      '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
+        '<button type="button" class="card-btn primary" id="nudge-go" style="width:100%;">📬 메시지함에서 확인하기</button>' +
+        '<button type="button" class="card-btn" id="modal-cancel" style="width:100%;">나중에</button>' +
+      '</div>'
+    );
+    overlay.querySelector('#nudge-go').addEventListener('click', function () {
+      closeModal(overlay);
+      var active = findMyEntry(currentState);
+      var mine = active && list.filter(function (r) { return r.toId === active.id; })[0];
+      handleNotifNavigate('mine', mine ? mine.id : '');
+    });
+    overlay.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(overlay); });
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(overlay); });
+  }
 
   var ANNOUNCE_KEY = 'announce-v23'; /* 공지 내용 바뀌면 숫자를 올려 모두에게 한 번 다시 표시 */
   function announceVer() { return String((currentState && currentState.announce && currentState.announce.ver) || ANNOUNCE_KEY); }
@@ -10525,6 +10576,7 @@
     setTimeout(showAnnouncement, 800);
     setTimeout(maybeShowOneOffPopup, 2600); /* 1회성 공지 팝업 (있으면) */
     setTimeout(maybeShowCheckin, 3400); /* 주간 예약 팝업 (겹치면 알아서 뒤로 미룸) */
+    setTimeout(maybeShowReqNudge, 4600); /* 받은 요청 응답 재촉 (2일+ 대기, 3일에 1번) */
     try { consumeNotifHash(); } catch (e) {} /* 알림 클릭으로 새로 열린 경우 해당 화면으로 이동 */
     setTimeout(function () { try { showNewsPopup(); } catch (e) {} }, 1400); /* 인앱 새 소식 팝업 (푸시 없이도 새 소식 확인·이동) */
   }
