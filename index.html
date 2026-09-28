@@ -912,7 +912,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-28-378';
+  var APP_VERSION = '2026-09-28-379';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1136,6 +1136,7 @@
     if (tab === 'admin' && !isAdminUnlocked) tab = currentUser ? 'mine' : 'list';
     if (tab === 'mine' && !currentUser) tab = 'list';
     activeTab = tab;
+    if (tab === 'mine') { try { markMineSeen(); } catch (e) {} } /* 탭 클릭과 동일하게 읽음 처리 → 다음에 새 소식 팝업 반복 안 뜸 */
     try { paint(currentState); } catch (e) {}
     setTimeout(function () {
       try {
@@ -1272,6 +1273,7 @@
       var res = collectNews(currentState || {});
       var items = res.items;
       if (!items.length && !force) return;
+      if (!force && !autoPopupOk('news')) return;
       /* 회원(푸시 지원 기기)만 팝업 안에서 푸시 알림 설정로 이동 */
       var pushBtn = (NOTIF_ENABLED && res.kind !== 'admin' && currentUser)
         ? '<button type="button" class="card-btn" id="news-notif-help" style="flex:none;">&#128276; 알림 설정</button>' : '';
@@ -1302,6 +1304,7 @@
       }
       var overlay = openModal(body);
       overlay.classList.add('news-popup');
+      if (!force) noteAutoPopup('news');
       function close() { closeModal(overlay); }
       overlay.querySelector('#news-close').addEventListener('click', close);
       overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
@@ -3741,14 +3744,21 @@
     return '<span class="chip" style="background:#f1f3f4;color:#5f6368;">대기중</span>';
   }
   /* 답장 메시지 입력 모달 (승인/보류/거절 공통). OK=문자열('' 가능), 취소=null */
-  function modalMessage(title, msg, okLabel, okClass, placeholder, requireText, prefill, minLen) {
+  /* chips(선택): 한 번 눌러 고르는 문구 목록 → 누르면 입력칸에 채워짐(수정 가능) */
+  function modalMessage(title, msg, okLabel, okClass, placeholder, requireText, prefill, minLen, chips) {
     minLen = minLen || 0;
     var mustFill = requireText || minLen > 0;
     var warnText = minLen > 0 ? ('최소 ' + minLen + '자 이상 입력해주세요.') : '사유를 입력해주세요.';
+    var chipHtml = (chips && chips.length)
+      ? '<div style="display:flex;flex-direction:column;gap:6px;margin:4px 0 8px;">' + chips.map(function (c, i) {
+          return '<button type="button" class="card-btn" data-chip="' + i + '" style="width:100%;text-align:left;font-size:0.86rem;padding:8px 12px;">' + escapeHtml(c) + '</button>';
+        }).join('') + '</div>'
+      : '';
     return new Promise(function (resolve) {
       var overlay = openModal(
         '<h3>' + escapeHtml(title) + '</h3>' +
         '<p class="modal-msg">' + escapeHtml(msg) + '</p>' +
+        chipHtml +
         '<textarea class="modal-input" id="modal-msg-text" rows="3" maxlength="200" placeholder="' + escapeHtml(placeholder || (mustFill ? (minLen > 0 ? '답장을 적어주세요 (최소 ' + minLen + '자)' : '사유를 적어주세요 (필수)') : '답장 메시지 (선택)')) + '"></textarea>' +
         (mustFill ? '<p id="modal-msg-warn" class="modal-msg" style="color:var(--accent);margin:4px 0 0;font-size:0.82rem;" hidden>' + escapeHtml(warnText) + '</p>' : '') +
         '<div class="modal-actions">' +
@@ -3759,6 +3769,14 @@
       function finish(v) { closeModal(overlay); resolve(v); }
       var textEl = overlay.querySelector('#modal-msg-text');
       if (prefill) { textEl.value = prefill; try { textEl.focus(); textEl.setSelectionRange(prefill.length, prefill.length); } catch (e) {} }
+      Array.prototype.forEach.call(overlay.querySelectorAll('[data-chip]'), function (b) {
+        b.addEventListener('click', function () {
+          Array.prototype.forEach.call(overlay.querySelectorAll('[data-chip]'), function (x) { x.classList.remove('primary'); });
+          b.classList.add('primary');
+          textEl.value = chips[parseInt(b.getAttribute('data-chip'), 10)] || '';
+          var w = overlay.querySelector('#modal-msg-warn'); if (w) w.hidden = true;
+        });
+      });
       overlay.querySelector('#modal-cancel').addEventListener('click', function () { finish(null); });
       overlay.querySelector('#modal-ok').addEventListener('click', function () {
         var v = textEl.value.trim();
@@ -8607,7 +8625,7 @@
     if (st !== 'approved' && st !== 'user_approved') return;
     var isPhoto = (req.type || 'contact') === 'photo';
     var fromName = nickForEntry(currentState, req.fromId);
-    modalConfirm('승인 취소', fromName + '님의 ' + (isPhoto ? '사진' : '번호') + ' 요청 승인을 취소할까요? 상대는 더 이상 ' + (isPhoto ? '사진을' : '번호를') + ' 볼 수 없고, 요청은 다시 "대기중"으로 돌아가요.', '승인 취소', 'danger').then(function (ok) {
+    modalConfirm('승인 취소', fromName + '님의 ' + (isPhoto ? '사진' : '대화') + ' 요청 승인을 취소할까요? 상대는 더 이상 ' + (isPhoto ? '사진을 볼' : '채팅을 할') + ' 수 없고, 요청은 다시 "대기중"으로 돌아가요.', '승인 취소', 'danger').then(function (ok) {
       if (!ok) return;
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
@@ -8622,7 +8640,7 @@
           tx.update(stateRef, { dateRequests: reqs });
         });
       }).then(function () {
-        appendLog('request', me.nickname, (isPhoto ? '사진' : '번호') + ' 요청 승인 취소 → ' + fromName);
+        appendLog('request', me.nickname, (isPhoto ? '사진' : '대화') + ' 요청 승인 취소 → ' + fromName);
         return refreshNow();
       }).then(function () {
         modalNotice('승인 취소됨', fromName + '님의 요청이 다시 대기 상태가 됐어요. 상대는 더 이상 ' + (isPhoto ? '사진을' : '번호를') + ' 볼 수 없어요.');
@@ -8679,6 +8697,18 @@
     });
   }
 
+  var REJECT_CHIPS = [
+    '이번엔 인연이 아닌 것 같아요. 좋은 인연 만나시길 바랄게요 🙂',
+    '원하는 조건과 조금 달라서요. 좋은 분 만나시길 응원할게요!',
+    '지금은 만남을 잠시 쉬고 있어요. 양해 부탁드려요 🙏',
+    '이미 알아가는 분이 있어서요. 좋은 인연 만나세요!'
+  ];
+  var HOLD_CHIPS = [
+    '직장·직업이 궁금해요. 알려주시면 결정할게요!',
+    '사진을 조금 더 보고 결정하고 싶어요.',
+    '자기소개를 조금 더 알려주실 수 있을까요?',
+    '조금 더 생각해 볼 시간이 필요해요. 곧 답드릴게요!'
+  ];
   function handleUserRejectRequest(id) {
     var state = currentState;
     var me = findMyEntry(state);
@@ -8691,8 +8721,10 @@
     var respViaMm = !!(me.managedBy && me.managedBy === currentUser.id && !me.ownerSelf && isMatchmakerEntry(myAuthEntry(state)));
     var from = (state.entries || []).find(function (e) { return e.id === req.fromId; });
     var fromName = from ? from.nickname : '상대방';
-    modalMessage('요청 거절', (respViaMm ? '🤝 주선자로 ' + me.nickname + '님을 대신해 응답하는 중이에요 (상대에게 안내돼요). ' : '') + escapeHtml(fromName) + '님의 ' + (isPhoto ? '사진' : '번호') + ' 요청을 거절할까요? 사유를 꼭 남겨주세요 (최소 10자). 상대가 정보를 담아 다시 요청할 수 있어요.', '거절하기', 'danger', '예: 직장·직업이 궁금해요. 알려주시면 다시 볼게요! / 종교가 달라서요', false, null, 10).then(function (rejectMsg) {
+    /* 거절 사유는 선택 — 고르기(칩)/직접 쓰기/비워두기(기본 인사로 전달). 사유 강제가 응답 미루기의 원인이라 완화 */
+    modalMessage('요청 거절', (respViaMm ? '🤝 주선자로 ' + me.nickname + '님을 대신해 응답하는 중이에요 (상대에게 안내돼요). ' : '') + fromName + '님의 ' + (isPhoto ? '사진' : '대화') + ' 요청을 거절할까요? 전할 말을 아래에서 고르거나 직접 적어도 되고, 비워두면 정중한 기본 인사로 전달돼요.', '거절하기', 'danger', '(선택) 직접 적어도 돼요', false, null, 0, REJECT_CHIPS).then(function (rejectMsg) {
       if (rejectMsg === null || rejectMsg === undefined) return;
+      if (!rejectMsg) rejectMsg = REJECT_CHIPS[0];
       return db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
@@ -8710,7 +8742,7 @@
           tx.update(stateRef, { dateRequests: reqs });
         });
       }).then(function () {
-        appendLog('request', me.nickname, (isPhoto ? '사진' : '번호') + ' 요청 거절 → ' + fromName);
+        appendLog('request', me.nickname, (isPhoto ? '사진' : '대화') + ' 요청 거절 → ' + fromName);
         return refreshNow();
       }).then(function () {
         modalNotice('거절 완료', '요청을 거절했어요.');
@@ -8732,7 +8764,7 @@
     var respViaMm = !!(me.managedBy && me.managedBy === currentUser.id && !me.ownerSelf && isMatchmakerEntry(myAuthEntry(state)));
     var from = (state.entries || []).find(function (e) { return e.id === req.fromId; });
     var fromName = from ? from.nickname : '상대방';
-    modalMessage('요청 보류', (respViaMm ? '🤝 주선자로 ' + me.nickname + '님을 대신해 응답하는 중이에요 (상대에게 안내돼요). ' : '') + escapeHtml(fromName) + '님의 요청을 보류할까요? 더 알고 싶은 점(사유)을 꼭 남겨주세요 (최소 10자). 상대가 정보를 담아 다시 요청할 수 있어요.', '보류하기', 'primary', '예: 직장·직업이 궁금해요. 알려주시면 결정할게요! / 키가 어떻게 되세요?', true, null, 10).then(function (holdMsg) {
+    modalMessage('요청 보류', (respViaMm ? '🤝 주선자로 ' + me.nickname + '님을 대신해 응답하는 중이에요 (상대에게 안내돼요). ' : '') + fromName + '님의 요청을 보류할까요? 더 알고 싶은 점을 아래에서 고르거나 직접 남겨주세요 (최소 10자). 상대가 정보를 담아 다시 요청할 수 있어요.', '보류하기', 'primary', '예: 직장·직업이 궁금해요. 알려주시면 결정할게요! / 키가 어떻게 되세요?', true, null, 10, HOLD_CHIPS).then(function (holdMsg) {
       if (holdMsg === null || holdMsg === undefined) return;
       return db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
@@ -8750,7 +8782,7 @@
           tx.update(stateRef, { dateRequests: reqs });
         });
       }).then(function () {
-        appendLog('request', me.nickname, (isPhoto ? '사진' : '번호') + ' 요청 보류 → ' + fromName);
+        appendLog('request', me.nickname, (isPhoto ? '사진' : '대화') + ' 요청 보류 → ' + fromName);
         return refreshNow();
       }).then(function () {
         modalNotice('보류', '요청을 보류했어요. 나중에 다시 결정할 수 있어요.');
@@ -8806,7 +8838,7 @@
       : '<div class="mine-note">' + escapeHtml(toName) + '님이 남긴 메시지는 없어요.</div>';
     var overlay = openModal(
       '<h3>다시 요청하기</h3>' +
-      '<p class="modal-msg">' + escapeHtml(toName) + '님에게 ' + (isPhoto ? '사진' : '번호') + ' 요청을 다시 보내요. 상대가 궁금해한 정보를 담아주세요.</p>' +
+      '<p class="modal-msg">' + escapeHtml(toName) + '님에게 ' + (isPhoto ? '사진' : '대화') + ' 요청을 다시 보내요. 상대가 궁금해한 정보를 담아주세요.</p>' +
       feedbackHtml +
       '<textarea class="modal-input" id="reapply-note" rows="3" maxlength="200" placeholder="예: 직장은 강남 ○○회사 다니고 있어요! 다시 요청드려요" style="margin-top:8px;">' + escapeHtml(reqNote(req) || '') + '</textarea>' +
       '<div class="modal-actions">' +
@@ -8840,7 +8872,7 @@
           tx.update(stateRef, { dateRequests: reqs });
         });
       }).then(function () {
-        appendLog('request', me.nickname, (isPhoto ? '사진' : '번호') + ' 요청 재신청 → ' + toName);
+        appendLog('request', me.nickname, (isPhoto ? '사진' : '대화') + ' 요청 재신청 → ' + toName);
         notifyAdmin('요청 재신청', me.nickname + '님이 ' + toName + '님에게 다시 요청했어요.');
         return refreshNow();
       }).then(function () {
@@ -9865,11 +9897,13 @@
     var cfg = checkinCfg();
     if (!cfg.enabled) return;                                  /* 예약 팝업 꺼짐 */
     if (document.querySelector('.modal-overlay')) { setTimeout(maybeShowCheckin, 4000); return; }
+    if (!autoPopupOk('checkin')) return;                       /* 다른 팝업이 이미 떴으면 이번엔 생략(본 걸로 기록 안 함 → 다음에 표시) */
     /* 1) 관리자가 "지금 발송"한 경우 — 예약과 무관하게 1회 표시 */
     if (cfg.forceVer) {
       var fseen = ''; try { fseen = localStorage.getItem('fb-checkin-force') || ''; } catch (e) {}
       if (fseen !== cfg.forceVer) {
         try { localStorage.setItem('fb-checkin-force', cfg.forceVer); } catch (e) {}
+        noteAutoPopup('checkin');
         showCheckinModal();
         return;
       }
@@ -9881,6 +9915,7 @@
     if (seen === p.id) return;                                 /* 이번 주기 이미 봄 */
     try { localStorage.setItem('fb-checkin', p.id); } catch (e) {}
     if (me.submittedAt && new Date(me.submittedAt).getTime() >= p.anchorMs) return; /* 이번 주기 이후 가입 신규 생략 */
+    noteAutoPopup('checkin');
     showCheckinModal();
   }
   /* 1회성 공지 팝업 (state.popup = {title, text, ver}) — 전체공지 허브에서 "팝업으로 보내기" */
@@ -9900,8 +9935,19 @@
     if (document.querySelector('.modal-overlay')) { setTimeout(maybeShowOneOffPopup, 4000); return; }
     var seen = ''; try { seen = localStorage.getItem('popup-seen') || ''; } catch (e) {}
     if (seen === pop.ver) return;
+    if (!autoPopupOk('popup')) return;
     try { localStorage.setItem('popup-seen', pop.ver); } catch (e) {}
+    noteAutoPopup('popup');
     showOneOffPopup(pop.title, pop.text);
+  }
+  /* 앱 열 때 자동 팝업 몰림 방지 — 한 번 열 때 최대 2개. 우선순위: 공지(버전) > 1회성 공지 > 새 소식 > 응답 재촉 > 주간 인사.
+     재촉은 새 소식이 이미 떴으면 생략(같은 메시지함 안내), 주간 인사는 다른 팝업이 하나도 없을 때만. 생략된 팝업은 '본 것'으로 기록 안 해 다음에 뜸. */
+  var autoPopups = {}, autoPopupCount = 0, AUTO_POPUP_MAX = 2;
+  function noteAutoPopup(kind) { if (!autoPopups[kind]) { autoPopups[kind] = 1; autoPopupCount++; } }
+  function autoPopupOk(kind) {
+    if (kind === 'checkin') return autoPopupCount === 0;
+    if (kind === 'nudge' && autoPopups.news) return false;
+    return autoPopupCount < AUTO_POPUP_MAX;
   }
   /* 받은 요청 응답 재촉 팝업 — 2일+ 대기(pending) 요청이 있으면 앱 열 때 표시, 기기당 3일에 1번.
      주선자는 관리 중인 친구(본인 프로필 포함) 앞으로 온 요청까지 합산. 보낸 사람이 휴면·테스트면 제외. */
@@ -9929,17 +9975,31 @@
       return t && t <= cutoff;
     });
     if (!list.length) return;
+    if (!autoPopupOk('nudge')) return; /* 다른 팝업이 이미 많이 떴으면 이번엔 생략(기록 안 함 → 다음에 표시) */
     try { localStorage.setItem(key, String(Date.now())); } catch (e) {}
-    var photo = list.filter(function (r) { return (r.type || 'contact') === 'photo'; }).length;
-    var talk = list.length - photo;
-    var kinds = [];
-    if (photo) kinds.push('📷 사진 요청 ' + photo + '건');
-    if (talk) kinds.push('💌 대화 요청 ' + talk + '건');
-    var friendCnt = list.filter(function (r) { return r.toId !== auth.id && !(byId[r.toId] || {}).ownerSelf; }).length;
+    noteAutoPopup('nudge');
+    /* 받는 프로필별로 묶어 표시: 본인(또는 주선자 본인 프로필)은 "내 프로필", 친구는 "OO님 앞" */
+    var groups = [], gIdx = {};
+    list.slice().sort(function (a, b) { return (a.reappliedAt || a.submittedAt || '').localeCompare(b.reappliedAt || b.submittedAt || ''); })
+      .forEach(function (r) {
+        if (!(r.toId in gIdx)) { gIdx[r.toId] = groups.length; groups.push({ id: r.toId, reqs: [] }); }
+        groups[gIdx[r.toId]].reqs.push(r);
+      });
+    function kindsText(reqs) {
+      var p = reqs.filter(function (r) { return (r.type || 'contact') === 'photo'; }).length, t = reqs.length - p, k = [];
+      if (p) k.push('📷 사진 요청 ' + p + '건');
+      if (t) k.push('💌 대화 요청 ' + t + '건');
+      return k.join(' · ');
+    }
+    var isOwn = function (id) { return id === auth.id || !!(byId[id] || {}).ownerSelf; };
+    var summary = (groups.length === 1 && isOwn(groups[0].id))
+      ? '<b>' + kindsText(groups[0].reqs) + '</b>'
+      : groups.map(function (g) {
+          return (isOwn(g.id) ? '내 프로필' : '<b>' + escapeHtml((byId[g.id] || {}).nickname || '친구') + '</b>님 앞') + ' · ' + kindsText(g.reqs);
+        }).join('<br>');
     var overlay = openModal(
       '<h3>💌 답을 기다리는 요청이 있어요</h3>' +
-      '<p class="modal-msg" style="text-align:center;line-height:1.7;"><b>' + kinds.join(' · ') + '</b>' +
-        (friendCnt ? '<br><span style="font-size:0.85rem;">(소개한 친구 앞으로 온 요청 ' + friendCnt + '건 포함)</span>' : '') + '</p>' +
+      '<p class="modal-msg" style="text-align:center;line-height:1.8;">' + summary + '</p>' +
       '<p class="modal-msg" style="text-align:center;font-size:0.88rem;line-height:1.7;">보낸 분이 답을 기다리고 있어요.<br>마음이 안 가면 <b>거절해도 전혀 괜찮아요</b> 🙂</p>' +
       '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
         '<button type="button" class="card-btn primary" id="nudge-go" style="width:100%;">📬 메시지함에서 확인하기</button>' +
@@ -9948,9 +10008,16 @@
     );
     overlay.querySelector('#nudge-go').addEventListener('click', function () {
       closeModal(overlay);
+      /* 받는 프로필이 하나면 그 프로필로 바로 전환(주선자 → 친구) 후 가장 오래된 요청으로 이동 */
+      if (groups.length === 1) {
+        var gid = groups[0].id, active0 = findMyEntry(currentState);
+        if (!active0 || active0.id !== gid) { try { handleSwitchProfile(gid === auth.id ? null : gid); } catch (e) {} }
+        handleNotifNavigate('mine', groups[0].reqs[0].id);
+        return;
+      }
       var active = findMyEntry(currentState);
       var mine = active && list.filter(function (r) { return r.toId === active.id; })[0];
-      handleNotifNavigate('mine', mine ? mine.id : '');
+      handleNotifNavigate('mine', mine ? mine.id : ''); /* 여러 프로필이면 주선자 홈(친구별 '응답 필요' 표시)으로 */
     });
     overlay.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(overlay); });
     overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(overlay); });
@@ -10041,6 +10108,7 @@
       '</div>'
     );
     overlay.classList.add('wide-modal');
+    if (!force) noteAutoPopup('announce');
     overlay.addEventListener('click', function (e) {
       var tb = e.target.closest('[data-anntab]');
       if (tb) {
@@ -10576,8 +10644,8 @@
     armBackGuard(); /* 뒤로가기 완충 상태 1개 확보 (모달 열림 중 앱이 닫히지 않도록) */
     setTimeout(showAnnouncement, 800);
     setTimeout(maybeShowOneOffPopup, 2600); /* 1회성 공지 팝업 (있으면) */
-    setTimeout(maybeShowCheckin, 3400); /* 주간 예약 팝업 (겹치면 알아서 뒤로 미룸) */
-    setTimeout(maybeShowReqNudge, 4600); /* 받은 요청 응답 재촉 (2일+ 대기, 3일에 1번) */
+    setTimeout(maybeShowReqNudge, 3400); /* 받은 요청 응답 재촉 (2일+ 대기, 3일에 1번) */
+    setTimeout(maybeShowCheckin, 4600); /* 주간 예약 팝업 — 다른 자동 팝업이 없을 때만 (autoPopupOk) */
     try { consumeNotifHash(); } catch (e) {} /* 알림 클릭으로 새로 열린 경우 해당 화면으로 이동 */
     setTimeout(function () { try { showNewsPopup(); } catch (e) {} }, 1400); /* 인앱 새 소식 팝업 (푸시 없이도 새 소식 확인·이동) */
   }
