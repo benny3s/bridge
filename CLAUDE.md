@@ -60,7 +60,8 @@
 - **주선자(대리) 모델**: `managedBy`(주선자 id) + `ownerSelf`(주선자 본인 프로필) + `isMatchmaker`(매니저 계정). `viaMm`/`decidedViaMm` 플래그.
 - **여러 명에게 메시지**: `sendMessageTo`를 `Promise.all`로 병렬 호출 금지(app/state 동시 트랜잭션 충돌 "stored version does not match") → **`sendMessagesBulk`**(한 트랜잭션 append) 사용.
 - **보관(휴면, `deactivated`) 계정**: 명단 숨김 + 로그인 불가 + 요청·재요청·채팅 차단(앱) + 푸시·리마인더 생략(functions `notifyRecipient`/`remindPending`). 대기 요청은 지우지 않고 "💤 상대 휴면 중"으로 일시정지. 보관 출처는 `deactivatedVia`(deactivate-request/delete-request/admin). 삭제 대신 "보관으로 대신"이 기본 권장.
-- **무응답 대응**: 요청 1·3일 푸시 리마인더 + 7일 앱 관리자 메시지 1회(`remindPending`, remind1/2/3Sent) + 관리자 "⏰ 무응답 요청" 섹션(2일+, 선택 재촉).
+- **무응답 대응**: 요청 1·3일 푸시 리마인더 + 7일 앱 관리자 메시지 1회(`remindPending`, remind1/2/3Sent) + 관리자 "⏰ 무응답 요청" 섹션(2일+, 선택 재촉) + **앱 내 재촉 팝업**(`maybeShowReqNudge`: 2일+ pending 받은 요청 있으면 앱 열 때, 기기당 3일 1회, 주선자는 친구 앞 요청 합산·한 프로필이면 바로 전환). 거절 사유는 선택(`REJECT_CHIPS` 고르기/직접/비우면 기본 인사), 보류는 `HOLD_CHIPS`+10자 유지.
+- **앱 열 때 자동 팝업은 최대 2개**(`autoPopupOk`/`noteAutoPopup`): 공지 > 1회성 공지 > 새 소식 > 응답 재촉(새 소식 떴으면 생략) > 주간 인사(다른 팝업 없을 때만). 새 자동 팝업 추가 시 이 예산에 편입할 것. 생략된 팝업은 seen 기록 전에 return해야 다음에 뜸.
 - **렌더 성능**: `onSnapshot` → `schedulePaint`(~400ms 코얼레싱). 관리자 본인 조작은 즉시 `paint`. 관리자 PII는 `decryptedContacts`/`decryptedNames` 캐시(검색 인덱스에도 관리자일 때만 포함).
 
 ## 배경 지식 (제약)
