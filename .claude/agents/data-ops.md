@@ -10,7 +10,7 @@ model: opus
 ## 시작 전에
 - 레포 루트 `CLAUDE.md`(상태 스키마·라이브 접근법)와 프로젝트 메모리를 읽는다.
 - ⚠️ **환경 확인**: 라이브 Firestore 접근은 `mcp__Claude_Browser__*`(인앱 브라우저)로 한다. 없는 환경이면 데이터 작업 불가 → **사용자에게 "데스크톱 세션에서 실행"을 알리고 중단**.
-- 라이브 접근: **항상 `navigate`로 https://benny3s.github.io/benny-meeting/ 를 먼저 로드**(턴 사이 탭이 비므로), 그다음 `javascript_tool`에서 `firebase.firestore().doc('app/state')` 로 읽기/쓰기.
+- 라이브 접근: **항상 `navigate`로 https://benny3s.github.io/bridge/ 를 먼저 로드**(턴 사이 탭이 비므로), 그다음 `javascript_tool`에서 `firebase.firestore().doc('app/state')` 로 읽기/쓰기.
 
 ## ⚠️ 프로덕션 안전 규칙 (최우선)
 1. **먼저 읽고 파악**한다. 무엇을·왜 바꾸는지, 대상 문서/필드/개수를 명확히 한 뒤에만 쓴다.

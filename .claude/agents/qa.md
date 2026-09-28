@@ -10,7 +10,7 @@ model: opus
 ## 시작 전에
 - 레포 루트 `CLAUDE.md`를 읽어 구조·상태(`app/state`)·인증(익명 로그인)·라이브 데이터 접근법을 파악한다.
 - ⚠️ **환경 확인**: 이 작업은 `mcp__Claude_Browser__*`(인앱 브라우저)가 있어야 한다. 없는 환경(클라우드/샌드박스)이면 QA 불가 → **사용자에게 "데스크톱 세션에서 실행해달라"고 알리고 중단**한다.
-- 라이브: https://benny3s.github.io/benny-meeting/ . **항상 `navigate`로 먼저 로드**한 뒤 `javascript_tool`(`firebase.firestore().doc('app/state')`)이나 화면 조작(computer/form_input/read_page)을 쓴다.
+- 라이브: https://benny3s.github.io/bridge/ . **항상 `navigate`로 먼저 로드**한 뒤 `javascript_tool`(`firebase.firestore().doc('app/state')`)이나 화면 조작(computer/form_input/read_page)을 쓴다.
 
 ## ⚠️ 프로덕션 안전 규칙 (최우선)
 - 여기는 **실서비스·실회원 데이터**다. **실제 회원의 데이터를 절대 수정/삭제하지 마라.**

@@ -45,7 +45,9 @@
 ## 라이브 데이터 확인/수정 (Firestore)
 - 인앱 브라우저(데스크톱 세션)로: **먼저 `navigate` 로 라이브 사이트 로드**(턴 사이에 탭이 비므로), 그다음 `javascript_tool`에서 `firebase.firestore().doc('app/state')` 로 읽기/쓰기.
 - **읽기는 자유롭게. 쓰기는 프로덕션 데이터**라 신중히(가능하면 임시 필드→삭제, 실회원 건드리지 않기).
-- firebase 시크릿/배포 명령은 Claude Code 자동모드에서 "Credential Materialization"으로 막힐 수 있음 → 사용자에게 안내.
+- ⚠️ **새 세션에선 자동모드 권한 검사가 운영 데이터 읽기(`javascript_tool`)를 막을 수 있음** — 이전 대화의 허락은 이어지지 않기 때문. 사용자(소유자)는 라이브 데이터 조회를 원칙적으로 허용함: 막히면 "운영 데이터 조회 허용"을 한 줄 요청해 받고 진행. **반드시 새 주소 `/bridge/`에서** 읽을 것(구 `/benny-meeting/`은 Firebase 없는 안내 페이지라 읽기 실패).
+- firebase 시크릿/배포 명령은 Claude Code 자동모드에서 "Credential Materialization"으로 막힐 수 있음 → 사용자에게 안내. (functions 배포 `firebase.cmd deploy --only functions:<이름>`은 대개 통과, "Failed to list functions"는 일시 오류라 재시도)
+- GitHub repo 이름 변경·새 repo 생성은 자동모드가 막음 → 사용자 계정 브라우저(Claude in Chrome, benny3s 로그인)로 처리. git push는 `gh auth setup-git`로 benny3s 인증 고정됨(다른 계정 minim0 캐시 주의).
 
 ## 주요 관례 · 함정
 - **관리자 섹션**: `DEFAULT_SEC_ORDER` 배열 + `SEC_NAMES` 맵 + `secHtml` 객체 + `adminFold()` + `<details data-sec="...">` + `secOpenAttr`. 새 키를 배열·맵·객체에 추가하면 순서에 자동 편입됨(`adminSecOrder` 병합).
@@ -56,6 +58,10 @@
 - **테스트 계정**: `entry.testAccount = true` → 일반 명단/집계에서 숨김. 관리자 패널 스위치로만 노출. **닉네임이 `QA_`로 시작하면 가입 시 자동으로 testAccount 처리**(v347, handleFormSubmit·handleMatchmakerSubmit). QA는 `QA_` 접두어로 계정 생성 → 자동 숨김.
 - **삭제 정책**: 일반 회원·주선자(프로필 포함) 모두 **"삭제 요청 → 관리자 승인"**. 주선자 껍데기(프로필·친구 없음)만 즉시 삭제. `handleApproveDelete`가 승인 시 오펀 주선자 껍데기까지 정리.
 - **주선자(대리) 모델**: `managedBy`(주선자 id) + `ownerSelf`(주선자 본인 프로필) + `isMatchmaker`(매니저 계정). `viaMm`/`decidedViaMm` 플래그.
+- **여러 명에게 메시지**: `sendMessageTo`를 `Promise.all`로 병렬 호출 금지(app/state 동시 트랜잭션 충돌 "stored version does not match") → **`sendMessagesBulk`**(한 트랜잭션 append) 사용.
+- **보관(휴면, `deactivated`) 계정**: 명단 숨김 + 로그인 불가 + 요청·재요청·채팅 차단(앱) + 푸시·리마인더 생략(functions `notifyRecipient`/`remindPending`). 대기 요청은 지우지 않고 "💤 상대 휴면 중"으로 일시정지. 보관 출처는 `deactivatedVia`(deactivate-request/delete-request/admin). 삭제 대신 "보관으로 대신"이 기본 권장.
+- **무응답 대응**: 요청 1·3일 푸시 리마인더 + 7일 앱 관리자 메시지 1회(`remindPending`, remind1/2/3Sent) + 관리자 "⏰ 무응답 요청" 섹션(2일+, 선택 재촉).
+- **렌더 성능**: `onSnapshot` → `schedulePaint`(~400ms 코얼레싱). 관리자 본인 조작은 즉시 `paint`. 관리자 PII는 `decryptedContacts`/`decryptedNames` 캐시(검색 인덱스에도 관리자일 때만 포함).
 
 ## 배경 지식 (제약)
 - 카카오 **비즈니스 채널/알림톡**은 **"만남주선" 업종으로 반려**됨. 개인별 자동 알림은 카카오 불가 → **FCM 푸시(자동·무료) + SMS(수동)** 로.
