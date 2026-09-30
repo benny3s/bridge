@@ -225,13 +225,14 @@ async function tokensFor(id) {
     return [];
   } catch (e) { return []; }
 }
-async function sendToTokens(tokens, title, body, cleanupIds) {
+async function sendToTokens(tokens, title, body, cleanupIds, nav) {
   if (!tokens.length) return;
   try {
     /* data-only: 서비스워커가 직접 알림을 만들어 중복 표시를 막음 */
     const res = await admin.messaging().sendEachForMulticast({
       tokens: tokens,
-      data: { title: title, body: body, url: SITE_URL },
+      /* nav: 알림을 누르면 앱이 갈 곳 — route(mine/dm…)·focusId(요청 id)·actAs(주선자가 전환할 친구 id) */
+      data: Object.assign({ title: title, body: body, url: SITE_URL }, navData(nav)),
       webpush: { headers: { Urgency: 'high', TTL: '86400' } }
     });
     const bad = [];
@@ -253,15 +254,22 @@ async function sendToTokens(tokens, title, body, cleanupIds) {
     }
   } catch (e) { console.error('push send failed', e); }
 }
-async function sendTo(id, title, body) {
+function navData(nav) {
+  const o = {};
+  if (nav && nav.route) o.route = String(nav.route);
+  if (nav && nav.focusId) o.focusId = String(nav.focusId);
+  if (nav && nav.actAs) o.actAs = String(nav.actAs);
+  return o;
+}
+async function sendTo(id, title, body, nav) {
   const tokens = await tokensFor(id);
-  await sendToTokens(tokens, title, body, [id]);
+  await sendToTokens(tokens, title, body, [id], nav);
 }
 function entryById(entries, id) {
   return (entries || []).find((x) => x.id === id) || null;
 }
 /* 수신자에게 알림. 대리 등록(주선자 관리) 프로필이면 주선자에게 대신 보냄. */
-async function notifyRecipient(entries, id, title, body) {
+async function notifyRecipient(entries, id, title, body, nav) {
   const e = entryById(entries, id);
   /* 보관(휴면) 계정에는 회원 간 알림(요청·재요청·결정·채팅·리마인더)을 보내지 않음 — 로그인도 불가.
      (옛 버전 앱에서 요청이 들어와도 푸시는 안 감. 다시 활성화되면 정상 발송) */
@@ -269,12 +277,13 @@ async function notifyRecipient(entries, id, title, body) {
   if (e && e.managedBy) {
     /* 대리(주선자 관리) 친구: 주선자에게 항상 전달(소개 대상 본인은 앱에 없을 수 있음).
        + 친구가 유효한 임시 PIN으로 직접 쓰는 상태면 친구 본인에게도 (토큰 없으면 자동 무시) */
-    const jobs = [sendTo(e.managedBy, title, '[소개: ' + (e.nickname || '') + '] ' + body)];
-    if (subPinActive(e)) jobs.push(sendTo(id, title, body));
+    /* 주선자가 누르면 그 친구로 전환돼 열리게 actAs */
+    const jobs = [sendTo(e.managedBy, title, '[소개: ' + (e.nickname || '') + '] ' + body, Object.assign({}, nav, { actAs: id }))];
+    if (subPinActive(e)) jobs.push(sendTo(id, title, body, nav));
     await Promise.all(jobs);
   } else {
     /* 독립(자기 등록) 계정 → 본인에게 */
-    await sendTo(id, title, body);
+    await sendTo(id, title, body, nav);
   }
 }
 /* 관리자에게: pushTokens/admin 에 등록된 기기들 (관리자 페이지의 알림 토글로 기기별 관리) */
@@ -298,23 +307,24 @@ exports.onStateChange = functions
     (after.dateRequests || []).forEach((r) => {
       const prev = beforeMap[r.id];
       const type = (r.type || 'contact') === 'photo' ? '사진' : '대화'; /* 앱 용어(대화 신청)와 통일 */
+      const nav = { route: 'mine', focusId: r.id };
       if (!prev) {
         /* 새 요청 → 받는 사람에게 (대리 프로필이면 주선자에게) */
-        jobs.push(notifyRecipient(entries, r.toId, '새 ' + type + ' 요청', nameOf(entries, r.fromId) + '님이 ' + type + ' 요청을 보냈어요'));
+        jobs.push(notifyRecipient(entries, r.toId, '새 ' + type + ' 요청', nameOf(entries, r.fromId) + '님이 ' + type + ' 요청을 보냈어요', nav));
       } else {
         /* 요청자가 자기 사진을 공개함 → 받는 사람에게 */
         if (!prev.fromRevealed && r.fromRevealed) {
-          jobs.push(notifyRecipient(entries, r.toId, '📷 사진 공개', nameOf(entries, r.fromId) + '님이 자기 사진을 공개했어요'));
+          jobs.push(notifyRecipient(entries, r.toId, '📷 사진 공개', nameOf(entries, r.fromId) + '님이 자기 사진을 공개했어요', nav));
         }
         const ps = reqStatus(prev), ns = reqStatus(r);
         if (ps === ns) return;
         /* approved 와 user_approved(당사자 승인·관리자 확정 대기) 를 하나의 "승인" 이벤트로 취급해 중복 알림 방지 */
         const wasApproved = (ps === 'approved' || ps === 'user_approved');
         const isApproved = (ns === 'approved' || ns === 'user_approved');
-        if (isApproved && !wasApproved) jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 승인 🎉', nameOf(entries, r.toId) + '님이 요청을 승인했어요'));
-        else if (ns === 'held' && ps !== 'held') jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 보류', nameOf(entries, r.toId) + '님이 요청을 보류했어요'));
-        else if (ns === 'rejected' && ps !== 'rejected') jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 거절', nameOf(entries, r.toId) + '님이 요청을 거절했어요'));
-        else if (ns === 'pending' && (ps === 'held' || ps === 'rejected')) jobs.push(notifyRecipient(entries, r.toId, type + ' 재요청', nameOf(entries, r.fromId) + '님이 정보를 담아 다시 요청했어요'));
+        if (isApproved && !wasApproved) jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 승인 🎉', nameOf(entries, r.toId) + '님이 요청을 승인했어요', nav));
+        else if (ns === 'held' && ps !== 'held') jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 보류', nameOf(entries, r.toId) + '님이 요청을 보류했어요', nav));
+        else if (ns === 'rejected' && ps !== 'rejected') jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 거절', nameOf(entries, r.toId) + '님이 요청을 거절했어요', nav));
+        else if (ns === 'pending' && (ps === 'held' || ps === 'rejected')) jobs.push(notifyRecipient(entries, r.toId, type + ' 재요청', nameOf(entries, r.fromId) + '님이 정보를 담아 다시 요청했어요', nav));
       }
     });
 
@@ -329,7 +339,7 @@ exports.onStateChange = functions
     const beforeJoin = {};
     (before.joinRequests || []).forEach((j) => { beforeJoin[j.id] = true; });
     (after.joinRequests || []).forEach((j) => {
-      if (!beforeJoin[j.id]) jobs.push(sendTo(j.toId, '🤝 새 주선자 요청', (j.fromNick || '누군가') + '님이 주선자로 관리해 달라고 요청했어요'));
+      if (!beforeJoin[j.id]) jobs.push(sendTo(j.toId, '🤝 새 주선자 요청', (j.fromNick || '누군가') + '님이 주선자로 관리해 달라고 요청했어요', { route: 'mine' }));
     });
     const beforeEntryMap = {};
     (before.entries || []).forEach((e) => { beforeEntryMap[e.id] = e; });
@@ -353,7 +363,12 @@ exports.onStateChange = functions
       if (beforeMsg[m.id]) return;
       const preview = (m.text || '').slice(0, 40);
       if (m.from === 'user') jobs.push(sendToAdmin('💬 새 Q&A/메시지', nickAny(m.entryId) + ': ' + preview));
-      else if (m.from === 'admin') jobs.push(sendTo(m.entryId, '💬 관리자 메시지', preview));
+      /* 대리(주선자 관리) 친구에게 온 관리자 메시지도 주선자에게 전달 (예전엔 친구 기기로만 → 대개 유실) */
+      else if (m.from === 'admin') {
+        const me2 = entryById(after.entries || [], m.entryId);
+        if (me2 && me2.managedBy) jobs.push(notifyRecipient(after.entries || [], m.entryId, '💬 관리자 메시지', preview, { route: 'mine' }));
+        else jobs.push(sendTo(m.entryId, '💬 관리자 메시지', preview, { route: 'mine' }));
+      }
     });
 
     /* 회원↔회원 데이트 채팅(dm): 새 메시지 → 받는 사람에게 (대리 프로필이면 주선자에게) */
@@ -362,7 +377,7 @@ exports.onStateChange = functions
     (after.dm || []).forEach((m) => {
       if (beforeDm[m.id]) return;
       const preview = (m.text || '').slice(0, 40);
-      jobs.push(notifyRecipient(entries, m.toId, '💬 ' + nameOf(entries, m.fromId) + '님의 채팅', preview));
+      jobs.push(notifyRecipient(entries, m.toId, '💬 ' + nameOf(entries, m.fromId) + '님의 채팅', preview, { route: 'dm', focusId: m.fromId }));
     });
 
     await Promise.all(jobs);
@@ -410,12 +425,12 @@ exports.remindPending = functions
           return Object.assign({}, r, { remind1Sent: true, remind2Sent: true, remind3Sent: true });
         }
         if (age >= REMIND_2_MS && !r.remind2Sent) {
-          sends.push({ toId: r.toId, title: '⏰ ' + type + ' 요청 알림', body: fromNick + '님의 ' + type + ' 요청이 3일째 기다리고 있어요. 승인/거절을 정해주세요' });
+          sends.push({ toId: r.toId, reqId: r.id, title: '⏰ ' + type + ' 요청 알림', body: fromNick + '님의 ' + type + ' 요청이 3일째 기다리고 있어요. 승인/거절을 정해주세요' });
           changed = true;
           return Object.assign({}, r, { remind1Sent: true, remind2Sent: true });
         }
         if (age >= REMIND_1_MS && !r.remind1Sent) {
-          sends.push({ toId: r.toId, title: '⏰ ' + type + ' 요청 알림', body: fromNick + '님의 ' + type + ' 요청이 아직 대기 중이에요. 확인해주세요' });
+          sends.push({ toId: r.toId, reqId: r.id, title: '⏰ ' + type + ' 요청 알림', body: fromNick + '님의 ' + type + ' 요청이 아직 대기 중이에요. 확인해주세요' });
           changed = true;
           return Object.assign({}, r, { remind1Sent: true });
         }
@@ -429,7 +444,7 @@ exports.remindPending = functions
       return { entries, sends };
     });
     if (result && result.sends.length) {
-      await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body)));
+      await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
     }
     return null;
   });

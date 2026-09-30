@@ -920,7 +920,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-30-380';
+  var APP_VERSION = '2026-09-30-381';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1136,7 +1136,12 @@
   }
   /* ── 알림 클릭 → 관련 화면으로 이동·하이라이트 ──
      서비스워커가 클릭을 postMessage로 알려주면(앱 열린 상태) 이동. 콜드스타트는 URL #notif 해시로. */
-  function handleNotifNavigate(route, focusId) {
+  function handleNotifNavigate(route, focusId, actAs) {
+    /* 주선자: 친구에게 온 소식이면 그 친구로 먼저 전환 (안 그러면 주선자 홈이라 해당 요청이 안 보임) */
+    if (actAs && currentUser && actAs !== actingAs) {
+      var subE = ((currentState && currentState.entries) || []).find(function (e) { return e.id === actAs && e.managedBy === currentUser.id; });
+      if (subE) { actingAs = subE.id; switcherExpanded = false; }
+    }
     var tab;
     if (route === 'admin') tab = 'admin';
     else if (route === 'mine' || route === 'request' || route === 'message' || route === 'dm') tab = 'mine';
@@ -1148,7 +1153,12 @@
     try { paint(currentState); } catch (e) {}
     setTimeout(function () {
       try {
-        var el = focusId ? document.querySelector('[data-id="' + focusId + '"], [data-eid="' + focusId + '"], [data-cid="' + focusId + '"]') : null;
+        var el = focusId ? document.querySelector('[data-rid="' + focusId + '"], [data-id="' + focusId + '"], [data-eid="' + focusId + '"], [data-cid="' + focusId + '"]') : null;
+        if (el && el.tagName === 'DETAILS') {
+          el.open = true;
+          var sec = el.parentNode && el.parentNode.closest ? el.parentNode.closest('details') : null;   // 접힌 '보낸 요청' 묶음도 펼친다
+          if (sec) sec.open = true;
+        }
         if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('notif-flash'); setTimeout(function () { try { el.classList.remove('notif-flash'); } catch (e2) {} }, 2200); }
         else { window.scrollTo({ top: 0, behavior: 'smooth' }); }
       } catch (e) {}
@@ -1158,18 +1168,25 @@
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('message', function (e) {
         var m = (e && e.data) || {};
-        if (m && m.type === 'notif-click') handleNotifNavigate(m.route || '', m.focusId || '');
+        if (m && m.type === 'notif-click') handleNotifNavigate(m.route || '', m.focusId || '', m.actAs || '');
       });
     }
   } catch (e) {}
   /* 콜드 스타트: 새 창이 #notif=route:focusId 로 열리면 그 위치로 이동 */
   function consumeNotifHash() {
     try {
-      var mt = (location.hash || '').match(/notif=([^:&]*)(?::([^&]*))?/);
+      /* #notif=route[:focusId[:actAs]] */
+      var mt = (location.hash || '').match(/notif=([^:&]*)(?::([^:&]*))?(?::([^&]*))?/);
       if (!mt) return;
-      var route = decodeURIComponent(mt[1] || ''), focusId = decodeURIComponent(mt[2] || '');
+      var route = decodeURIComponent(mt[1] || ''), focusId = decodeURIComponent(mt[2] || ''), actAs = decodeURIComponent(mt[3] || '');
       try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
-      setTimeout(function () { handleNotifNavigate(route, focusId); }, 600);
+      /* 데이터·로그인 복원이 끝난 뒤에 이동 (느린 기기에서 600ms 는 모자라 '명단'에 머무를 수 있었다) — 최대 ~8초 */
+      var tries = 0;
+      (function go() {
+        tries++;
+        if ((!currentState || !currentUser) && tries < 27) { setTimeout(go, 300); return; }
+        handleNotifNavigate(route, focusId, actAs);
+      })();
     } catch (e) {}
   }
   /* ── 인앱 새 소식 (푸시 대체·보완) ── */
@@ -1194,41 +1211,59 @@
       });
       return { items: items, kind: kind };
     }
+    /* 한 프로필(me)의 새 소식. friend 면 "[친구] …" 로 적고 '보기' 때 그 친구로 전환(actAs)·그 친구 기준으로 읽음(owner) */
+    function newsOf(me, friend) {
+      var seen = me.mineSeenAt || '';
+      var mSeen = me.newsSeen || [];
+      var pre = friend ? '[' + (me.nickname || '친구') + '] ' : '';
+      var extra = friend ? { actAs: me.id, owner: me.id } : {};
+      var add = function (it) { items.push(Object.assign(it, extra)); };
+      (state.dateRequests || []).forEach(function (r) {
+        if ((r.hiddenBy || []).indexOf(me.id) >= 0) return;
+        var isP = (r.type || 'contact') === 'photo';
+        if (r.toId === me.id && (r.submittedAt || '') > seen && reqStatus(r) === 'pending') {
+          var k1 = 'in:' + r.id;
+          if (mSeen.indexOf(k1) < 0) add({ icon: isP ? '📷' : '💌', text: pre + nick(r.fromId) + '님이 ' + (isP ? '사진' : '대화') + ' 요청을 보냈어요', route: 'mine', focusId: r.id, key: k1 });
+        }
+        if (r.fromId === me.id && (r.decidedAt || '') > seen) {
+          var st = reqStatus(r), lbl = st === 'approved' ? '승인했어요 🎉' : st === 'rejected' ? '거절했어요' : st === 'held' ? '보류했어요' : '응답했어요';
+          var k2 = 'dec:' + r.id + ':' + st;
+          if (mSeen.indexOf(k2) < 0) add({ icon: st === 'approved' ? '✅' : st === 'rejected' ? '⛔' : '📌', text: pre + nick(r.toId) + '님이 ' + (isP ? '사진' : '대화') + ' 요청을 ' + lbl, route: 'mine', focusId: r.id, key: k2 });
+        }
+      });
+      var am = (state.messages || []).filter(function (m) { return m.entryId === me.id && m.from === 'admin' && !m.hiddenByUser && (m.at || '') > seen; });
+      if (am.length) {
+        var latest = am.reduce(function (a, m) { return (m.at || '') > a ? (m.at || '') : a; }, '');
+        var k3 = 'am:' + latest;
+        if (mSeen.indexOf(k3) < 0) add({ icon: '💬', text: pre + '관리자 메시지 ' + am.length + '건', route: 'mine', key: k3 });
+      }
+    }
     if (currentUser) {
       kind = 'member';
       var me = findMyEntry(state);
-      if (me) {
-        var seen = me.mineSeenAt || '';
-        var mSeen = me.newsSeen || [];
-        (state.dateRequests || []).forEach(function (r) {
-          if ((r.hiddenBy || []).indexOf(me.id) >= 0) return;
-          var isP = (r.type || 'contact') === 'photo';
-          if (r.toId === me.id && (r.submittedAt || '') > seen && reqStatus(r) === 'pending') {
-            var k1 = 'in:' + r.id;
-            if (mSeen.indexOf(k1) < 0) items.push({ icon: isP ? '📷' : '💌', text: nick(r.fromId) + '님이 ' + (isP ? '사진' : '대화') + ' 요청을 보냈어요', route: 'mine', focusId: r.id, key: k1 });
-          }
-          if (r.fromId === me.id && (r.decidedAt || '') > seen) {
-            var st = reqStatus(r), lbl = st === 'approved' ? '승인했어요 🎉' : st === 'rejected' ? '거절했어요' : st === 'held' ? '보류했어요' : '응답했어요';
-            var k2 = 'dec:' + r.id + ':' + st;
-            if (mSeen.indexOf(k2) < 0) items.push({ icon: st === 'approved' ? '✅' : st === 'rejected' ? '⛔' : '📌', text: nick(r.toId) + '님이 ' + (isP ? '사진' : '대화') + ' 요청을 ' + lbl, route: 'mine', focusId: r.id, key: k2 });
-          }
+      if (me) newsOf(me, false);
+      /* 주선자: 지금 활동 중인 프로필 말고 **관리하는 친구들**에게 온 소식도 (2026-09-30 '뀨' — 알림 받고 들어갔는데 아무것도 없었다) */
+      if (isMatchmakerEntry(myAuthEntry(state))) {
+        entriesManagedByMe(state).forEach(function (f) {
+          if (me && f.id === me.id) return;
+          if (f.deactivated) return;
+          newsOf(f, true);
         });
-        var am = (state.messages || []).filter(function (m) { return m.entryId === me.id && m.from === 'admin' && !m.hiddenByUser && (m.at || '') > seen; });
-        if (am.length) {
-          var latest = am.reduce(function (a, m) { return (m.at || '') > a ? (m.at || '') : a; }, '');
-          var k3 = 'am:' + latest;
-          if (mSeen.indexOf(k3) < 0) items.push({ icon: '💬', text: '관리자 메시지 ' + am.length + '건', route: 'mine', key: k3 });
-        }
       }
     }
     return { items: items, kind: kind };
   }
   /* 새 소식 항목을 '읽음'으로 기록 (보기 클릭 = 그 항목만 · 모두 읽음 = 전체 키). 회원=entry.newsSeen, 관리자=state.adminNewsSeen */
-  function addNewsSeen(keys) {
+  function addNewsSeen(keys, ownerId) {
     keys = (keys || []).filter(Boolean);
     if (!keys.length) return Promise.resolve();
     var admin = isAdminUnlocked;
     var me = admin ? null : findMyEntry(currentState);
+    /* 주선자가 친구 소식을 읽음 → 그 친구 기록에 (내가 관리하는 친구일 때만) */
+    if (!admin && ownerId && currentUser) {
+      var fr = ((currentState && currentState.entries) || []).find(function (e) { return e.id === ownerId && e.managedBy === currentUser.id; });
+      if (fr) me = fr;
+    }
     if (!admin && !me) return Promise.resolve();
     try {
       if (admin) {
@@ -1322,15 +1357,21 @@
       if (readall) readall.addEventListener('click', function () {
         close();
         if (res.kind === 'admin') { markAllAdminMsgRead(); addNewsSeen((res.items || []).map(function (it) { return it.key; })); }
-        else markMineSeen();
+        else {
+          markMineSeen();
+          /* 주선자: 친구 소식은 친구별로 읽음 (한 트랜잭션씩 차례로 — 동시 트랜잭션 충돌 방지) */
+          var byOwner = {};
+          (res.items || []).forEach(function (it) { if (it.owner) (byOwner[it.owner] = byOwner[it.owner] || []).push(it.key); });
+          Object.keys(byOwner).reduce(function (p, oid) { return p.then(function () { return addNewsSeen(byOwner[oid], oid); }); }, Promise.resolve());
+        }
       });
       Array.prototype.forEach.call(overlay.querySelectorAll('[data-news]'), function (btn) {
         btn.addEventListener('click', function () {
           var it = items[parseInt(btn.getAttribute('data-news'), 10)];
           if (!it) return;
           close();
-          addNewsSeen([it.key]); /* 보기 = 그 소식은 읽음 처리 (알림 카운트에서 빠짐) */
-          handleNotifNavigate(it.route, it.focusId || '');
+          addNewsSeen([it.key], it.owner || ''); /* 보기 = 그 소식은 읽음 처리 (알림 카운트에서 빠짐) */
+          handleNotifNavigate(it.route, it.focusId || '', it.actAs || '');
         });
       });
     } catch (e) {}
@@ -4824,6 +4865,11 @@
     } catch (e) { return '-'; }
   }
 
+  var FRESH_DECISION_MS = 3 * 24 * 60 * 60 * 1000;
+  function isFreshDecision(r) {
+    var t = r && r.decidedAt ? new Date(r.decidedAt).getTime() : 0;
+    return !!t && (Date.now() - t) < FRESH_DECISION_MS;
+  }
   function reqRowHtml(r, state, incoming) {
     var otherId = incoming ? r.fromId : r.toId;
     var myId = incoming ? r.toId : r.fromId; /* 이 요청 목록의 주인(내 활동 프로필) */
@@ -4921,7 +4967,7 @@
       (note ? '<div class="mine-note">"' + escapeHtml(note) + '"</div>' : '') +
       replyMsg + actions + chatBtn + revealMine;
     return (
-      '<details class="req-fold' + (needAction ? ' req-need' : '') + '"' + (needAction ? ' open' : '') + '>' +
+      '<details class="req-fold' + (needAction ? ' req-need' : '') + '" data-rid="' + escapeHtml(r.id) + '"' + (needAction ? ' open' : '') + '>' +
         '<summary>' + typeBadge +
           '<span class="req-sum-who">' + escapeHtml(otherLabel) + '</span>' +
           statusChip(st) +
@@ -5215,7 +5261,10 @@
         var mine = g.incoming ? r.toId === me.id : r.fromId === me.id;
         if (!mine) return false;
         var st0 = reqStatus(r);
-        if (st0 === 'approved' || st0 === 'user_approved') return false; /* 승인된 건 아래 "내 연결"로 이동 */
+        /* 승인된 건 아래 "내 연결"로 이동 — 단 **승인 3일 이내**는 여기에도 남겨 둔다
+           (2026-09-30: 주선자 '뀨' — "승인 알림 받고 들어갔는데 아무것도 없었다". 승인되자마자 목록에서 빠져서
+            알림·새 소식의 '보기'가 가리킬 줄이 없었음) */
+        if (st0 === 'approved' || st0 === 'user_approved') return isFreshDecision(r);
         return true;
       }).sort(function (a, b) { return (b.submittedAt || '').localeCompare(a.submittedAt || ''); });
       /* 응답이 필요한 항목: 받은=대기/보류, 보낸=보류/거절 → 이런 게 있으면 기본 펼침 */

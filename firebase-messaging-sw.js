@@ -30,7 +30,7 @@ messaging.onBackgroundMessage(function (payload) {
     icon: n.icon || NOTIF_ICON,
     badge: NOTIF_BADGE,
     /* route/focusId: 클릭 시 앱이 해당 화면으로 이동하는 데 사용 (서버가 넣어주면 정밀, 없으면 앱이 로그인 기준 기본값) */
-    data: { url: d.url || APP_URL, route: d.route || '', focusId: d.focusId || '' }
+    data: { url: d.url || APP_URL, route: d.route || '', focusId: d.focusId || '', actAs: d.actAs || '' }
   };
   self.registration.showNotification(title, options);
 });
@@ -39,15 +39,18 @@ messaging.onBackgroundMessage(function (payload) {
 self.addEventListener('notificationclick', function (event) {
   event.notification.close();
   var nd = event.notification.data || {};
-  var route = nd.route || '', focusId = nd.focusId || '';
-  var hash = route ? ('#notif=' + encodeURIComponent(route) + (focusId ? (':' + encodeURIComponent(focusId)) : '')) : '';
+  var focusId = nd.focusId || '', actAs = nd.actAs || '';
+  /* route 가 비어도 해시는 항상 붙인다 → 앱이 로그인 주체 기준 기본 화면(회원=메시지함, 관리자=관리자)으로 이동.
+     (예전엔 해시 없이 열려 첫 화면에 머물렀음 — 2026-09-30 '알림 받고 들어갔는데 아무것도 없었다') */
+  var route = nd.route || '';
+  var hash = '#notif=' + encodeURIComponent(route) + ':' + encodeURIComponent(focusId) + (actAs ? (':' + encodeURIComponent(actAs)) : '');
   var url = (nd.url || APP_URL) + hash;
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
       for (var i = 0; i < list.length; i++) {
         var c = list[i];
         if (c.url && (c.url.indexOf('bridge') >= 0 || c.url.indexOf('benny-meeting') >= 0) && 'focus' in c) {
-          try { c.postMessage({ type: 'notif-click', route: route, focusId: focusId }); } catch (e) {}
+          try { c.postMessage({ type: 'notif-click', route: route, focusId: focusId, actAs: actAs }); } catch (e) {}
           return c.focus();
         }
       }
