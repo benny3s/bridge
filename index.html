@@ -920,7 +920,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-30-381';
+  var APP_VERSION = '2026-09-30-382';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -941,8 +941,8 @@
   var openMsgFolds = {}; /* 관리자 메시지: 펼쳐둔 회원 대화 (리페인트 후 유지용) */
   var _mmFoldOpen = {};  /* 주선자 탭: 카드별 접힘 상태 (리페인트 후 유지용, 기본 열림) */
   var adminEditMode = false; /* 관리자 섹션 편집(순서·기본 열림) 모드 */
-  var DEFAULT_SEC_ORDER = ['usage', 'connlog', 'couple', 'pending', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
-  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', held: '📌 보류 중', stale: '⏰ 무응답 요청', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
+  var DEFAULT_SEC_ORDER = ['usage', 'connlog', 'couple', 'pending', 'pinreset', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
+  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', held: '📌 보류 중', stale: '⏰ 무응답 요청', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
   /* 섹션 열림 상태는 "세션 메모리에만" 저장 → 리페인트(버튼 클릭 등) 동안엔 유지되지만,
      새로고침하면 초기화되어 모두 접힌 상태로 시작 (이전에 열었던 걸 기억하지 않음) */
   var _adminSecOpen = {}, _adminSecOrder = null;
@@ -1696,7 +1696,7 @@
   }
 
   /* 내 휴대폰 문자앱으로 바로 보내기 (무료·내 번호) — 번호는 관리자 키로 복호화해 sms: 링크 구성. Solapi(서버·유료) 대신 수동 발송용 */
-  function openSmsNative(entryId) {
+  function openSmsNative(entryId, presetText) {
     if (!isAdminUnlocked || !adminPrivateKey) { modalNotice('안내', '관리자 모드에서만 가능해요.'); return; }
     var all = (currentState.entries || []).concat(currentState.pendingEntries || []);
     var ent = all.find(function (e) { return e.id === entryId; });
@@ -1749,6 +1749,7 @@
         if (ta.value === lastAuto) { ta.value = smsTemplate(mode === 'mm' ? 'mm' : 'custom', mode === 'mm' ? mmNick : nick); lastAuto = ta.value; }
         linkNow();
       }
+      if (presetText) { ta.value = presetText; lastAuto = null; } /* 정해진 문구(PIN 재설정 등)는 수신자를 바꿔도 그대로 */
       if (canBoth) ov.querySelectorAll('[data-smsto]').forEach(function (b) { b.addEventListener('click', function () { mode = b.getAttribute('data-smsto'); render(); }); });
       ta.addEventListener('input', linkNow);
       a.addEventListener('click', function () { try { appendLog('sms', '관리자', '내 폰 문자 → ' + (mode === 'mm' ? (mmNick + '(주선자·' + nick + ')') : nick)); } catch (e) {} setTimeout(function () { closeModal(ov); }, 400); });
@@ -2973,7 +2974,7 @@
           '<button type="button" class="card-btn" id="modal-cancel">취소</button>' +
           '<button type="button" class="card-btn primary" id="modal-ok">로그인</button>' +
         '</div>' +
-        '<p style="text-align:center;margin:10px 0 0;font-size:0.85rem;"><a href="#" id="login-forgot" style="color:var(--muted);text-decoration:underline;">PIN을 잊으셨나요? 비밀번호 리셋 요청</a></p>'
+        '<p style="text-align:center;margin:10px 0 0;font-size:0.85rem;"><a href="#" id="login-forgot" style="color:var(--muted);text-decoration:underline;">PIN을 잊으셨나요? PIN 재설정 요청</a></p>'
       );
       overlay.classList.add('login-modal');
       var searchInput = overlay.querySelector('#modal-login-search');
@@ -3011,7 +3012,7 @@
         }
       }
       overlay.addEventListener('click', function (e) {
-        if (e.target.closest('#login-forgot')) { e.preventDefault(); closeModal(overlay); resolve(null); openGuestMsgModal({ title: '🔑 비밀번호(PIN) 리셋 요청', intro: 'PIN을 잊으셨다면 리셋을 요청해 주세요. 관리자가 확인 후 새 PIN을 안내드려요. 본인 확인을 위해 <b>닉네임</b>과 <b>전화번호</b>를 정확히 남겨주세요.', prefill: '비밀번호(PIN) 리셋을 요청합니다. (닉네임: )' }); return; }
+        if (e.target.closest('#login-forgot')) { e.preventDefault(); var _pf = currentId(); closeModal(overlay); resolve(null); openPinResetModal(_pf); return; }
         if (e.target.closest('#login-pin-eye')) {
           var pinI = overlay.querySelector('#modal-login-pin');
           var eyeB = e.target.closest('#login-pin-eye');
@@ -3083,6 +3084,7 @@
         touchLastSeen(entry.id, !!entry.managedBy); /* 친구가 직접 로그인하면 self-login 시각도 기록 */
         appendLog('login', entry.nickname, '로그인');
         paint(currentState);
+        if (entry.pinMustChange) { _pinForceAsked = true; setTimeout(function () { handleChangeMyPin({ forced: true }); }, 500); } /* 임시 PIN 로그인 → 새 PIN 정하기 */
         refreshMyHidden(function () { paint(currentState); }); /* 로그인 후 지인 필터 숨김 반영 */
       });
     });
@@ -6292,7 +6294,7 @@
         ? ('<div style="margin:0 0 10px;"><button type="button" class="card-btn primary" data-action="stale-nudge" style="flex:none;">📢 무응답 회원 ' + staleRecipN + '명에게 재촉…</button></div>' + staleRows)
         : '<p class="sub">2일 이상 무응답인 요청이 없어요 🙆</p>'), false, 'stale');
     var secHtml = {
-      usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), pending: pendingSection, held: heldSection, stale: staleSection, editrev: editRevSection,
+      usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), pending: pendingSection, pinreset: pinResetSectionHtml(state, adminFold), held: heldSection, stale: staleSection, editrev: editRevSection,
       deaclist: deacListSection, dellog: delLogSection,
       active: activeReqSection, adminmsg: adminMsgSection,
       cap: capSection, seen: seenSection, log: logSection
@@ -6455,7 +6457,7 @@
       var st = reqStatus(r); return st !== 'approved' && st !== 'rejected';
     }).length;
     var deleteReqCount = (state.entries || []).filter(function (e) { return e.deleteRequested; }).length;
-    var deacReqCount = (state.entries || []).filter(function (e) { return e.deactivateRequested; }).length;
+    var deacReqCount = (state.entries || []).filter(function (e) { return e.deactivateRequested; }).length + pinResetPending(state).length; /* + PIN 재설정 요청 */
     /* 이번 주 현황 배너 (로그인 전에도 노출) — 진짜 집계만: 새 멤버(최근 7일)·누적 연결(승인된 대화 연결)·함께하는 멤버 */
     var liveMembers = (state.entries || []).filter(function (e) { return !e.isMatchmaker && !e.testAccount && !e.deactivated; });
     var weekAgo = Date.now() - 7 * 86400000;
@@ -6700,8 +6702,14 @@
     var emptyNote = document.getElementById('req-search-empty');
     if (emptyNote) emptyNote.hidden = !(q && rows.length && shown === 0);
   }
+  var _pinForceAsked = false;
   function paint(state) {
     currentState = state;
+    /* 저장된 로그인으로 들어왔는데 임시 PIN 상태면 한 번 새 PIN 정하기를 권한다 */
+    if (!_pinForceAsked && currentUser && !isAdminUnlocked) {
+      var _ae = (state.entries || []).find(function (e) { return e.id === currentUser.id; });
+      if (_ae && _ae.pinMustChange) { _pinForceAsked = true; setTimeout(function () { handleChangeMyPin({ forced: true }); }, 900); }
+    }
     document.getElementById('app').innerHTML = renderApp(state);
     try { applyListSearch(); } catch (e) {} /* 검색어가 있으면 재적용 */
     try { applySeenSearch(); } catch (e) {} /* 회원 명단 검색 재적용 */
@@ -6931,11 +6939,14 @@
   /* 로그인한 본인이 개인(로그인) PIN 변경.
      - 항상 로그인 계정(myAuthEntry) 기준으로 바꿈 (주선자가 친구로 전환해 있어도 로그인 PIN을 바꿈)
      - 내 연락처 + 내가 관리하는 프로필(친구/본인)의 연락처도 새 PIN으로 재암호화해 계속 열람 가능하게 함 */
-  function handleChangeMyPin() {
+  function handleChangeMyPin(opts) {
+    opts = opts || {};
     var me = myAuthEntry(currentState);
     if (!me) return modalNotice('로그인 필요', '먼저 로그인해주세요.');
-    modalNumericPinSetup('PIN 변경', '새로 사용할 개인 PIN을 입력해주세요.').then(function (r) {
-      if (!r) return;
+    modalNumericPinSetup(opts.forced ? '🔑 새 PIN을 정해주세요' : 'PIN 변경', opts.forced
+      ? '관리자가 보낸 임시 PIN으로 로그인했어요. 앞으로 쓸 PIN을 새로 정해주세요 (숫자 4~10자리).'
+      : '새로 사용할 개인 PIN을 입력해주세요.', opts.forced ? '저장' : null).then(function (r) {
+      if (!r) { if (opts.forced) modalNotice('안내', '임시 PIN은 그대로 쓸 수 있지만, 다음에 앱을 열 때 다시 물어볼게요.'); return; }
       if (!/^[0-9]{4,10}$/.test(r.p1)) return modalNotice('입력 오류', 'PIN은 숫자 4~10자리예요.');
       if (r.p1 !== r.p2) return modalNotice('오류', 'PIN이 일치하지 않아요.');
       var oldPin = currentUser.pin, newPin = r.p1;
@@ -6955,7 +6966,7 @@
               var entries = (s.entries || []).map(function (e) {
                 if (e.id === me.id) {
                   var c = JSON.parse(JSON.stringify(e));
-                  c.pinAuth = newAuth; delete c.pinHash; delete c.pinEnc;
+                  c.pinAuth = newAuth; delete c.pinHash; delete c.pinEnc; delete c.pinMustChange; /* 임시 PIN 표시도 해제 */
                   if (newSelf) c.contactSelfEnc = newSelf;
                   return c;
                 }
@@ -9330,6 +9341,185 @@
     });
   }
 
+  /* ═══ PIN 재설정 (반자동) — 2026-09-30 Benny: "비밀번호 찾기 가능해? 문자를 못 보내서 안 되나?" → B안
+     ① 회원: 로그인 창 'PIN을 잊으셨나요?' → 닉네임 + 전화번호 → state.pinResetReqs 에 요청 (번호는 관리자 키로 암호화)
+     ② 관리자: '🔑 PIN 재설정 요청' 섹션에서 입력 번호 ↔ 가입 번호를 자동 대조(✅/⚠️) → '임시 PIN 보내기' 한 번
+        → 6자리 임시 PIN 을 걸고(pinMustChange) 내 폰 문자앱이 **가입 때 등록한 번호**·문구까지 채워진 채 열림
+     ③ 회원: 임시 PIN 으로 로그인 → '새 PIN을 정해주세요' → 바꾸면 임시 표시 해제
+     서버 함수 없이 동작 (입력 번호는 관리자만 복호화). 자동 문자(Solapi)는 쓰지 않는다. */
+  function pinResetPending(state) {
+    return ((state && state.pinResetReqs) || []).filter(function (q) { return q.status === 'pending'; });
+  }
+  function maskPhone(num) {
+    var d = String(num || '').replace(/\D/g, '');
+    return d.length >= 8 ? d.slice(0, 3) + '-****-' + d.slice(-4) : (d ? '(형식 이상)' : '');
+  }
+  function openPinResetModal(prefillId) {
+    var all = (currentState.entries || []).concat(currentState.pendingEntries || []);
+    var pre = prefillId ? all.find(function (e) { return e.id === prefillId; }) : null;
+    var ov = openModal(
+      '<h3>🔑 PIN 재설정 요청</h3>' +
+      '<div class="modal-msg" style="background:var(--gold-soft);border-radius:10px;padding:10px 12px;margin:0 0 10px;font-size:0.86rem;line-height:1.55;">' +
+        '💡 예전에 로그인해 둔 폰이 있다면, 그 폰의 <b>메시지함 → PIN 변경</b>에서 바로 바꿀 수 있어요.<br>' +
+        '🤝 주선자가 관리하는 친구라면 <b>주선자에게 임시 PIN</b>을 받으세요.' +
+      '</div>' +
+      '<p class="modal-msg" style="margin:0 0 8px;">가입할 때 쓴 <b>닉네임</b>과 <b>전화번호</b>를 넣어주세요. 관리자가 확인하면 <b>등록된 번호로 임시 PIN을 문자</b>로 보내드려요.</p>' +
+      '<input type="text" class="modal-input" id="pr-nick" maxlength="30" placeholder="닉네임" autocomplete="off" value="' + escapeHtml(pre ? pre.nickname : '') + '">' +
+      '<input type="tel" class="modal-input" id="pr-phone" inputmode="numeric" maxlength="13" placeholder="전화번호 (예: 01012345678)" autocomplete="off" style="margin-top:8px;">' +
+      '<p id="pr-warn" class="modal-msg" style="color:var(--accent);margin:6px 0 0;font-size:0.84rem;" hidden></p>' +
+      '<p class="modal-msg" style="color:var(--muted);margin:6px 0 0;font-size:0.78rem;">' + ICON_LOCK + ' 전화번호는 암호화되어 관리자만 확인할 수 있어요.</p>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="card-btn" id="pr-cancel">닫기</button>' +
+        '<button type="button" class="card-btn primary" id="pr-send">요청 보내기</button>' +
+      '</div>'
+    );
+    var warn = ov.querySelector('#pr-warn');
+    function say(t) { warn.textContent = t; warn.hidden = !t; }
+    ov.querySelector('#pr-cancel').addEventListener('click', function () { closeModal(ov); });
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(ov); });
+    ov.querySelector('#pr-nick').addEventListener('input', function () { say(''); });
+    ov.querySelector('#pr-phone').addEventListener('input', function () { say(''); });
+    ov.querySelector('#pr-send').addEventListener('click', function () {
+      var nick = (ov.querySelector('#pr-nick').value || '').trim();
+      var phone = (ov.querySelector('#pr-phone').value || '').replace(/[^0-9]/g, '');
+      if (!nick) return say('닉네임을 넣어주세요.');
+      if (!/^01[0-9]{8,9}$/.test(phone)) return say('전화번호를 01012345678 형식으로 넣어주세요.');
+      var st = currentState;
+      var pool = (st.entries || []).concat(st.pendingEntries || []);
+      var hits = pool.filter(function (e) { return (e.nickname || '').trim() === nick; });
+      if (!hits.length) return say('그 닉네임을 찾지 못했어요. 로그인 목록에 보이는 닉네임 그대로 넣어주세요.');
+      var ent = hits[0];
+      if (ent.deactivated) return say('보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
+      var pubJwk = st.adminAuth && st.adminAuth.publicKeyJwk;
+      if (!pubJwk) return say('지금은 요청할 수 없어요. 관리자에게 문의해주세요.');
+      var btn = ov.querySelector('#pr-send'); btn.disabled = true;
+      encryptForAdmin(pubJwk, phone).then(function (phoneEnc) {
+        var req = { id: genId(), entryId: ent.id, nickname: ent.nickname || nick, phoneEnc: phoneEnc, at: new Date().toISOString(), status: 'pending' };
+        return db.runTransaction(function (tx) {
+          return tx.get(stateRef).then(function (doc) {
+            var s = doc.data() || {};
+            /* 같은 계정의 대기 요청은 새 것으로 바꾼다 · 최근 50건만 보관 */
+            var list = (s.pinResetReqs || []).filter(function (q) { return !(q.entryId === ent.id && q.status === 'pending'); });
+            list.push(req);
+            if (list.length > 50) list = list.slice(list.length - 50);
+            tx.update(stateRef, { pinResetReqs: list });
+          });
+        });
+      }).then(function () {
+        appendLog('message', nick + ' (비로그인)', 'PIN 재설정 요청');
+        try { notifyAdmin('🔑 PIN 재설정 요청', nick + '님이 PIN 재설정을 요청했어요'); } catch (e) {}
+        closeModal(ov);
+        modalNotice('요청했어요 ✅', '관리자가 확인하면 가입할 때 등록한 번호로 임시 PIN을 문자로 보내드려요. 임시 PIN으로 로그인하면 새 PIN을 정하게 돼요.');
+      }).catch(function (err) { btn.disabled = false; say('보내지 못했어요: ' + (err.message || err)); });
+    });
+  }
+  /* 관리자: 입력 번호 ↔ 가입 번호 대조 결과 (reqId → {st, typed, reg}) — 복호화는 관리자 기기에서만 */
+  var pinResetMatch = {};
+  function checkPinResetMatch(q) {
+    if (!isAdminUnlocked || !adminPrivateKey || pinResetMatch[q.id]) return;
+    pinResetMatch[q.id] = { st: 'wait' };
+    var ent = ((currentState.entries || []).concat(currentState.pendingEntries || [])).find(function (e) { return e.id === q.entryId; });
+    var dec = function (o) { return o ? decryptWithAdmin(adminPrivateKey, o).then(function (v) { return String(v || '').replace(/\D/g, ''); }).catch(function () { return ''; }) : Promise.resolve(''); };
+    Promise.all([dec(q.phoneEnc), dec(ent && ent.contactEnc)]).then(function (r) {
+      var typed = r[0], reg = r[1];
+      pinResetMatch[q.id] = { st: !ent ? 'gone' : !reg ? 'none' : (typed && typed === reg ? 'ok' : 'diff'), typed: typed, reg: reg };
+      var el = document.querySelector('[data-prm="' + q.id + '"]');
+      if (el) el.innerHTML = pinResetMatchHtml(pinResetMatch[q.id]);
+    });
+  }
+  function pinResetMatchHtml(m) {
+    if (!m || m.st === 'wait') return '<span style="color:var(--muted);">번호 확인 중…</span>';
+    if (m.st === 'ok') return '<b style="color:#137333;">✅ 가입 번호와 일치</b>';
+    if (m.st === 'diff') return '<b style="color:#c5221f;">⚠️ 번호가 달라요</b> <span style="color:var(--muted);">입력 ' + escapeHtml(maskPhone(m.typed)) + ' · 등록 ' + escapeHtml(maskPhone(m.reg)) + '</span>';
+    if (m.st === 'none') return '<b style="color:#b06000;">❔ 등록된 번호가 없어요</b> <span style="color:var(--muted);">입력 ' + escapeHtml(maskPhone(m.typed)) + '</span>';
+    return '<span style="color:var(--muted);">계정을 찾을 수 없어요</span>';
+  }
+  function pinResetSectionHtml(state, adminFold) {
+    var list = pinResetPending(state).slice().sort(function (a, b) { return (b.at || '').localeCompare(a.at || ''); });
+    var rows = list.map(function (q) {
+      setTimeout(function () { checkPinResetMatch(q); }, 0);
+      var ent = ((state.entries || []).concat(state.pendingEntries || [])).find(function (e) { return e.id === q.entryId; });
+      return '<div style="border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;background:var(--paper);">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">' +
+          '<b>' + escapeHtml(q.nickname || '회원') + '</b>' +
+          '<span style="color:var(--muted);font-size:0.8rem;">' + escapeHtml((ent && formatUid(ent)) || '') + ' · ' + escapeHtml(fmtDate(q.at)) + '</span>' +
+        '</div>' +
+        '<div data-prm="' + escapeHtml(q.id) + '" style="font-size:0.86rem;margin:6px 0 8px;">' + pinResetMatchHtml(pinResetMatch[q.id]) + '</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+          '<button type="button" class="card-btn primary" data-action="pinreset-temp" data-id="' + escapeHtml(q.id) + '" style="flex:none;">🔑 임시 PIN 보내기</button>' +
+          '<button type="button" class="card-btn" data-action="pinreset-dismiss" data-id="' + escapeHtml(q.id) + '" style="flex:none;">무시</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    return adminFold('🔑 PIN 재설정 요청', list.length,
+      '<p class="sub">번호가 <b>✅ 일치</b>하면 <b>임시 PIN 보내기</b>만 누르세요. 6자리 임시 PIN이 걸리고, 내 폰 문자앱이 <b>가입 때 등록한 번호</b>·문구까지 채워진 채 열려요. 회원이 로그인하면 새 PIN을 정하게 돼요.</p>' +
+      (rows || '<p class="sub">대기 중인 요청이 없어요 🙆</p>'), list.length > 0, 'pinreset');
+  }
+  /* 관리자 쪽 PIN 걸기 (재설정·임시 PIN 공용) — 연락처도 새 PIN 으로 다시 잠근다 */
+  function adminApplyPin(entry, pin, mustChange) {
+    var contactP = entry.contactEnc ? decryptWithAdmin(adminPrivateKey, entry.contactEnc).catch(function () { return null; }) : Promise.resolve(null);
+    return contactP.then(function (contact) {
+      return Promise.all([makePinAuth(pin), contact ? encryptForSelf(pin, contact) : Promise.resolve(null)]);
+    }).then(function (res) {
+      return db.runTransaction(function (tx) {
+        return tx.get(stateRef).then(function (doc) {
+          var s = doc.data();
+          var fix = function (e) {
+            if (e.id !== entry.id) return e;
+            var c = JSON.parse(JSON.stringify(e));
+            c.pinAuth = res[0]; delete c.pinHash; delete c.pinEnc;
+            if (res[1]) c.contactSelfEnc = res[1];
+            if (mustChange) c.pinMustChange = true; else delete c.pinMustChange;
+            return c;
+          };
+          tx.update(stateRef, { entries: (s.entries || []).map(fix), pendingEntries: (s.pendingEntries || []).map(fix) });
+        });
+      });
+    });
+  }
+  function setPinResetStatus(reqId, status) {
+    return db.runTransaction(function (tx) {
+      return tx.get(stateRef).then(function (doc) {
+        var s = doc.data() || {};
+        var list = (s.pinResetReqs || []).map(function (q) {
+          if (q.id !== reqId) return q;
+          var c = JSON.parse(JSON.stringify(q)); c.status = status; c.doneAt = new Date().toISOString(); delete c.phoneEnc; /* 처리 끝난 요청의 입력 번호는 지운다 */
+          return c;
+        });
+        tx.update(stateRef, { pinResetReqs: list });
+      });
+    });
+  }
+  function handleAdminPinTemp(reqId) {
+    if (!isAdminUnlocked || !adminPrivateKey) return modalNotice('안내', '관리자 모드에서만 가능해요.');
+    var q = ((currentState.pinResetReqs) || []).find(function (x) { return x.id === reqId; });
+    if (!q) return;
+    var entry = ((currentState.entries || []).concat(currentState.pendingEntries || [])).find(function (e) { return e.id === q.entryId; });
+    if (!entry) return modalNotice('안내', '계정을 찾을 수 없어요.');
+    var m = pinResetMatch[reqId] || {};
+    var warnTxt = m.st === 'diff' ? '⚠️ 입력한 번호가 가입 번호와 달라요. 그래도 ' : (m.st === 'none' ? '❔ 등록된 번호가 없어 문자를 보낼 수 없을 수 있어요. 그래도 ' : '');
+    modalConfirm('임시 PIN 보내기', warnTxt + entry.nickname + '님에게 6자리 임시 PIN을 걸고 문자를 보낼까요? 지금 쓰던 PIN은 더 이상 안 돼요.', '보내기', 'approve').then(function (ok) {
+      if (!ok) return;
+      var a = new Uint32Array(1); crypto.getRandomValues(a);
+      var temp = String(100000 + (a[0] % 900000));
+      adminApplyPin(entry, temp, true).then(function () {
+        return setPinResetStatus(reqId, 'sent');
+      }).then(function () {
+        appendLog('admin', '관리자', '임시 PIN 발급 · ' + entry.nickname);
+        return refreshNow();
+      }).then(function () {
+        openSmsNative(entry.id, '[베니브릿지] ' + entry.nickname + '님, 임시 PIN은 ' + temp + ' 입니다.\n로그인하면 새 PIN을 정하게 돼요.\nhttps://benny3s.github.io/bridge/');
+      }).catch(function (err) { modalNotice('오류', '임시 PIN을 걸지 못했어요: ' + (err.message || err)); });
+    });
+  }
+  function handleAdminPinDismiss(reqId) {
+    if (!isAdminUnlocked) return;
+    modalConfirm('요청 무시', '이 PIN 재설정 요청을 목록에서 뺄까요? (회원에게는 알리지 않아요)', '빼기').then(function (ok) {
+      if (!ok) return;
+      setPinResetStatus(reqId, 'dismissed').then(function () { return refreshNow(); }).catch(function (err) { modalNotice('오류', String(err.message || err)); });
+    });
+  }
+
   /* ---- global event delegation ---- */
   /* 전환창이 펼쳐진 상태에서 바깥을 터치하면 자동으로 접기 (클릭 처리 후 다음 틱에 리페인트) */
   document.addEventListener('click', function (e) {
@@ -9581,6 +9771,8 @@
       else if (action === 'edit-reviewed') handleEditReviewed(id);
       else if (action === 'notify-connected') showConnectedMembers(id);
       else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
+      else if (action === 'pinreset-temp') handleAdminPinTemp(id);
+      else if (action === 'pinreset-dismiss') handleAdminPinDismiss(id);
       else if (action === 'stale-nudge') { showStaleNudge(); return; }
       else if (action === 'del-tombstone') handleDeleteTombstone(id);
       else if (action === 'approve-request') handleApproveRequest(id);
