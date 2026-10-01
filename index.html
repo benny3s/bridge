@@ -739,6 +739,7 @@
   .seen-table th, .seen-table td {
     text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line);
   }
+  .contact-table th, .contact-table td { padding: 6px 5px; }
   .seen-table th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
   .seen-table td.seen-date { font-variant-numeric: tabular-nums; white-space: nowrap; }
   /* 관리자 표: 더 길게 세로 스크롤 + 헤더 고정 */
@@ -920,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-09-30-382';
+  var APP_VERSION = '2026-10-01-383';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -942,7 +943,7 @@
   var _mmFoldOpen = {};  /* 주선자 탭: 카드별 접힘 상태 (리페인트 후 유지용, 기본 열림) */
   var adminEditMode = false; /* 관리자 섹션 편집(순서·기본 열림) 모드 */
   var DEFAULT_SEC_ORDER = ['usage', 'connlog', 'couple', 'pending', 'pinreset', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
-  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', held: '📌 보류 중', stale: '⏰ 무응답 요청', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
+  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
   /* 섹션 열림 상태는 "세션 메모리에만" 저장 → 리페인트(버튼 클릭 등) 동안엔 유지되지만,
      새로고침하면 초기화되어 모두 접힌 상태로 시작 (이전에 열었던 걸 기억하지 않음) */
   var _adminSecOpen = {}, _adminSecOrder = null;
@@ -1652,6 +1653,104 @@
     if (kind === 'mm') return '[베니브릿지] 주선자 ' + nick + ' 님,\n대기 중인 요청 건이 있어, 안내 드립니다. 확인 부탁드려요 🙏\n' + SMS_SITE;
     return '[베니브릿지] ' + nick + ' 님,\n대기 중인 요청 건이 있어, 안내 드립니다. 확인 부탁드려요 🙏\n' + SMS_SITE;
   }
+  /* 관리자 문자 초안(상황별) — state.smsTpl 에 저장(관리자 기기 간 공유), 없으면 기본값. {닉네임}{건수}{일수}{링크} 치환 */
+  var SMS_TPL_TYPES = [
+    ['noreply', '👀 무응답', '요청을 보고도 승인·보류·거절을 안 한 사람'],
+    ['unseen', '📭 미접속', '요청이 온 뒤 앱에 안 들어온 사람'],
+    ['dormant', '💤 장기 미접속', '7일 넘게 앱에 안 들어온 사람'],
+    ['general', '✍️ 일반', '그 외 기본 안내']
+  ];
+  var SMS_TPL_DEFAULT = {
+    noreply: '[베니브릿지] {닉네임}님, 받으신 요청 {건수}건이 답을 기다리고 있어요.\n마음이 없으시면 거절하셔도 괜찮아요 🙂 앱에서 승인·보류·거절 중 하나만 골라주세요 🙏\n{링크}',
+    unseen: '[베니브릿지] {닉네임}님, 회원님께 요청 {건수}건이 도착해 있어요!\n앱에 들어오셔서 확인해 주세요 😊\n{링크}',
+    dormant: '[베니브릿지] {닉네임}님, 잘 지내시죠? 요즘 새로 가입한 분들이 많아졌어요.\n시간 되실 때 한번 들러주세요 😊\n{링크}',
+    general: '[베니브릿지] {닉네임} 님,\n대기 중인 요청 건이 있어, 안내 드립니다. 확인 부탁드려요 🙏\n{링크}'
+  };
+  function smsTplText(kind) {
+    var saved = (currentState && currentState.smsTpl) || {};
+    return (typeof saved[kind] === 'string' && saved[kind].trim()) ? saved[kind] : (SMS_TPL_DEFAULT[kind] || SMS_TPL_DEFAULT.general);
+  }
+  function fillSmsTpl(text, vars) {
+    var map = { '닉네임': vars.nick || '회원', '건수': String(vars.count || 0), '일수': String(vars.days || 0), '링크': SMS_SITE };
+    return String(text || '').replace(/\{(닉네임|건수|일수|링크)\}/g, function (m, k) { return map[k]; });
+  }
+  function smsTplLabel(kind) {
+    var t = SMS_TPL_TYPES.filter(function (x) { return x[0] === kind; })[0];
+    return t ? t[1] : '';
+  }
+  /* 관리자 '📞 연락 필요' 판정 — 회원별로 받은 대기 요청(2일+)을 '본 것(접속 후 무응답)'·'못 본 것(요청 후 미접속)'으로 나누고, 마지막 접속 일수 */
+  var CONTACT_REQ_MIN_MS = 2 * 86400000, CONTACT_DORMANT_DAYS = 7;
+  function contactStats(state) {
+    var now = Date.now(), byId = {}, out = {};
+    (state.entries || []).forEach(function (e) { byId[e.id] = e; });
+    function slot(e) {
+      if (!out[e.id]) {
+        var ls = lastActiveAt(e), lt = ls ? new Date(ls).getTime() : 0;
+        out[e.id] = { e: e, lastT: lt, lastDays: lt ? Math.floor((now - lt) / 86400000) : null, total: 0, oldest: 0, seenN: 0, seenOld: 0, unseenN: 0, unseenOld: 0 };
+      }
+      return out[e.id];
+    }
+    (state.entries || []).forEach(function (e) { if (!e.deactivated && !e.testAccount && !e.isMatchmaker) slot(e); });
+    (state.dateRequests || []).forEach(function (r) {
+      if (reqStatus(r) !== 'pending') return;
+      var s = out[r.toId]; if (!s) return;
+      var from = byId[r.fromId];
+      if (from && (from.deactivated || from.testAccount)) return;
+      if ((r.hiddenBy || []).indexOf(r.toId) >= 0) return;
+      var t = new Date(r.reappliedAt || r.submittedAt || 0).getTime(); if (!t) return;
+      var d = Math.floor((now - t) / 86400000);
+      s.total++; s.oldest = Math.max(s.oldest, d);
+      if (now - t < CONTACT_REQ_MIN_MS) return;
+      if (s.lastT && s.lastT >= t) { s.seenN++; s.seenOld = Math.max(s.seenOld, d); }
+      else { s.unseenN++; s.unseenOld = Math.max(s.unseenOld, d); }
+    });
+    return out;
+  }
+  function contactPrimaryKind(s) {
+    if (!s) return 'general';
+    return s.unseenN ? 'unseen' : (s.seenN ? 'noreply' : ((s.lastDays || 0) >= CONTACT_DORMANT_DAYS ? 'dormant' : 'general'));
+  }
+  /* 문자 초안 관리 (관리자) — 상황별 문구 편집·저장 */
+  function openSmsTplEditor() {
+    if (!isAdminUnlocked) { modalNotice('안내', '관리자 모드에서만 가능해요.'); return; }
+    var ov = openModal(
+      '<h3>✏️ 문자 초안 관리</h3>' +
+      '<p class="modal-msg">상황별 기본 문구예요. 저장하면 <b>모든 관리자 기기</b>에서 같이 써요. 문자 보낼 때 이 문구가 채워지고, 보내기 전에 한 번 더 고칠 수 있어요.</p>' +
+      '<p class="modal-msg" style="background:var(--gold-soft);padding:8px 10px;border-radius:8px;font-size:0.82rem;">자동으로 바뀌는 말: <b>{닉네임}</b> · <b>{건수}</b>(받은 대기 요청 수) · <b>{일수}</b>(가장 오래된 요청이 며칠째인지) · <b>{링크}</b>(앱 주소)</p>' +
+      SMS_TPL_TYPES.map(function (t) {
+        return '<div style="margin:12px 0 0;">' +
+          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">' +
+            '<b style="flex:1;font-size:0.9rem;">' + t[1] + ' <span style="color:var(--muted);font-weight:400;font-size:0.78rem;">' + escapeHtml(t[2]) + '</span></b>' +
+            '<button type="button" class="card-btn" data-tpl-reset="' + t[0] + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">기본값</button>' +
+          '</div>' +
+          '<textarea class="modal-input" data-tpl="' + t[0] + '" rows="4" maxlength="500" style="width:100%;box-sizing:border-box;">' + escapeHtml(smsTplText(t[0])) + '</textarea>' +
+        '</div>';
+      }).join('') +
+      '<div class="modal-actions">' +
+        '<button type="button" class="card-btn" id="modal-cancel">닫기</button>' +
+        '<button type="button" class="card-btn primary" id="tpl-save">저장</button>' +
+      '</div>'
+    );
+    ov.classList.add('wide-modal');
+    Array.prototype.forEach.call(ov.querySelectorAll('[data-tpl-reset]'), function (b) {
+      b.addEventListener('click', function () { var k = b.getAttribute('data-tpl-reset'); ov.querySelector('[data-tpl="' + k + '"]').value = SMS_TPL_DEFAULT[k]; });
+    });
+    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+    ov.querySelector('#tpl-save').addEventListener('click', function () {
+      var tpl = {};
+      Array.prototype.forEach.call(ov.querySelectorAll('[data-tpl]'), function (ta) {
+        var k = ta.getAttribute('data-tpl'), v = (ta.value || '').trim();
+        if (v && v !== SMS_TPL_DEFAULT[k]) tpl[k] = v; /* 기본값과 같으면 저장 안 함 → 나중에 기본값을 고치면 따라감 */
+      });
+      db.runTransaction(function (tx) {
+        return tx.get(stateRef).then(function () { tx.update(stateRef, { smsTpl: tpl }); });
+      }).then(function () {
+        if (currentState) currentState.smsTpl = tpl;
+        appendLog('admin', '관리자', '문자 초안 수정');
+        closeModal(ov); modalNotice('저장 완료', '문자 초안을 저장했어요.');
+      }).catch(function (e) { modalNotice('오류', '저장 실패: ' + ((e && e.message) || e)); });
+    });
+  }
   function recordSms(entryId, kind, ok) {
     return db.runTransaction(function (tx) {
       return tx.get(stateRef).then(function (doc) {
@@ -1696,7 +1795,7 @@
   }
 
   /* 내 휴대폰 문자앱으로 바로 보내기 (무료·내 번호) — 번호는 관리자 키로 복호화해 sms: 링크 구성. Solapi(서버·유료) 대신 수동 발송용 */
-  function openSmsNative(entryId, presetText) {
+  function openSmsNative(entryId, presetText, tplKind) {
     if (!isAdminUnlocked || !adminPrivateKey) { modalNotice('안내', '관리자 모드에서만 가능해요.'); return; }
     var all = (currentState.entries || []).concat(currentState.pendingEntries || []);
     var ent = all.find(function (e) { return e.id === entryId; });
@@ -1720,9 +1819,18 @@
             '<button type="button" class="card-btn" data-smsto="self" style="flex:1;">👤 ' + escapeHtml(nick) + ' 본인</button>' +
           '</div>'
         : '';
+      /* 상황별 초안 선택 (정해진 문구 presetText 가 있으면 숨김) */
+      var cst = presetText ? null : (contactStats(currentState)[entryId] || null);
+      var kind = presetText ? '' : (tplKind || contactPrimaryKind(cst));
+      var tplRow = presetText ? '' :
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;margin:0 0 8px;align-items:center;">' +
+          SMS_TPL_TYPES.map(function (t) { return '<button type="button" class="card-btn" data-smstpl="' + t[0] + '" style="flex:none;padding:3px 9px;font-size:0.8rem;">' + t[1] + '</button>'; }).join('') +
+          '<button type="button" class="card-btn" id="sn-tpl-edit" style="flex:none;padding:3px 8px;font-size:0.78rem;margin-left:auto;" title="초안 수정">✏️</button>' +
+        '</div>';
       var ov = openModal(
         '<h3>📱 문자 보내기</h3>' +
         chooser +
+        tplRow +
         '<p class="modal-msg" id="sn-note" style="background:var(--gold-soft);color:var(--ink);padding:8px 10px;border-radius:8px;margin:0 0 8px;"></p>' +
         '<p class="modal-msg">내 <b>휴대폰 문자앱</b>이 수신자·내용까지 채워진 채 열려요. 확인·수정 후 <b>직접 전송</b>하면 돼요. <b>요금 없음</b>(내 번호로 발송).</p>' +
         '<textarea class="modal-input" id="sn-text" rows="4" maxlength="500"></textarea>' +
@@ -1746,13 +1854,28 @@
             b.classList.toggle('primary', on); b.style.opacity = on ? '1' : '0.6';
           });
         }
-        if (ta.value === lastAuto) { ta.value = smsTemplate(mode === 'mm' ? 'mm' : 'custom', mode === 'mm' ? mmNick : nick); lastAuto = ta.value; }
+        ov.querySelectorAll('[data-smstpl]').forEach(function (b) {
+          var on = b.getAttribute('data-smstpl') === kind;
+          b.classList.toggle('primary', on); b.style.opacity = on ? '1' : '0.7';
+        });
+        if (ta.value === lastAuto) { ta.value = autoText(); lastAuto = ta.value; }
         linkNow();
+      }
+      function autoText() {
+        return fillSmsTpl(smsTplText(kind), { nick: mode === 'mm' ? ('주선자 ' + mmNick) : nick, count: cst ? cst.total : 0, days: cst ? cst.oldest : 0 });
       }
       if (presetText) { ta.value = presetText; lastAuto = null; } /* 정해진 문구(PIN 재설정 등)는 수신자를 바꿔도 그대로 */
       if (canBoth) ov.querySelectorAll('[data-smsto]').forEach(function (b) { b.addEventListener('click', function () { mode = b.getAttribute('data-smsto'); render(); }); });
+      /* 초안 버튼: 직접 고친 내용이 있어도 그 초안으로 교체(명시적 선택) */
+      ov.querySelectorAll('[data-smstpl]').forEach(function (b) { b.addEventListener('click', function () { kind = b.getAttribute('data-smstpl'); lastAuto = ta.value; render(); }); });
+      var tplEditBtn = ov.querySelector('#sn-tpl-edit');
+      if (tplEditBtn) tplEditBtn.addEventListener('click', function () { closeModal(ov); openSmsTplEditor(); });
       ta.addEventListener('input', linkNow);
-      a.addEventListener('click', function () { try { appendLog('sms', '관리자', '내 폰 문자 → ' + (mode === 'mm' ? (mmNick + '(주선자·' + nick + ')') : nick)); } catch (e) {} setTimeout(function () { closeModal(ov); }, 400); });
+      a.addEventListener('click', function () {
+        try { appendLog('sms', '관리자', '내 폰 문자' + (kind ? '(' + smsTplLabel(kind) + ')' : '') + ' → ' + (mode === 'mm' ? (mmNick + '(주선자·' + nick + ')') : nick)); } catch (e) {}
+        recordSms(entryId, kind ? ('native-' + kind) : 'native', true); /* '📞 연락 필요' 표의 마지막 문자 표시용 */
+        setTimeout(function () { closeModal(ov); }, 400);
+      });
       ov.querySelector('#sn-cancel').addEventListener('click', function () { closeModal(ov); });
       ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(ov); });
       render();
@@ -6263,36 +6386,54 @@
       reqTypeRow + reqStatusRow + reqAgeRow + reqSortSelect + reqSearchBox + reqPendingHint +
       (listReqs.length ? allReqItems : reqEmpty) +
       '<p class="sub" id="req-search-empty" hidden>검색 결과가 없어요.</p>', false, 'active');
-    /* ⏰ 무응답 요청: 2일 이상 승인·보류·거절 안 한 대기 요청 (받는 사람=무응답자). 받는 분에게 재촉 */
-    var STALE_MS = 2 * 24 * 3600 * 1000, nowStale = Date.now();
-    var staleReqs = (state.dateRequests || []).filter(function (r) {
-      if (reqStatus(r) !== 'pending' || !r.submittedAt) return false;
-      if ((nowStale - new Date(r.submittedAt).getTime()) < STALE_MS) return false;
-      var to = (state.entries || []).find(function (e) { return e.id === r.toId; });
-      return !!(to && !to.deactivated && !to.testAccount);
-    }).map(function (r) {
-      var to = (state.entries || []).find(function (e) { return e.id === r.toId; }) || {};
-      var from = (state.entries || []).concat(state.pendingEntries || []).find(function (e) { return e.id === r.fromId; }) || {};
-      return { r: r, to: to, from: from, days: Math.floor((nowStale - new Date(r.submittedAt).getTime()) / 86400000), isPhoto: (r.type || 'contact') === 'photo' };
-    }).sort(function (a, b) { return b.days - a.days; });
-    var staleRecipN = Object.keys(staleReqs.reduce(function (o, x) { o[x.to.id] = 1; return o; }, {})).length;
-    var staleRows = staleReqs.map(function (x) {
-      var col = x.days >= 7 ? '#c5221f' : (x.days >= 3 ? '#b06000' : 'var(--muted)');
-      return '<div style="display:flex;align-items:center;gap:8px;padding:8px 2px;border-bottom:1px dashed var(--line);flex-wrap:wrap;">' +
-        '<span style="flex:1;min-width:0;font-size:0.88rem;">' +
-          '<b style="color:' + col + ';">⏰ ' + x.days + '일</b> · <b>' + escapeHtml(x.to.nickname || '회원') + '</b> ' +
-          '<span style="color:var(--muted);font-size:0.8rem;">(' + escapeHtml(formatUid(x.to) || '—') + ')</span> ' +
-          '<span style="color:var(--muted);">← ' + escapeHtml(x.from.nickname || '상대') + ' · ' + (x.isPhoto ? '사진' : '대화') + '</span>' +
-        '</span>' +
-        '<button type="button" class="card-btn" data-action="admin-msg" data-id="' + escapeHtml(x.to.id) + '" style="flex:none;padding:3px 10px;">💬</button>' +
-        '<button type="button" class="card-btn" data-action="sms-native" data-id="' + escapeHtml(x.to.id) + '" style="flex:none;padding:3px 10px;">📱</button>' +
-      '</div>';
+    /* 📞 연락 필요: 회원 1명 = 1줄(중복 없음). 가로 칸 = 상황(👀 보고도 무응답 / 📭 요청 후 미접속 / 💤 장기 미접속).
+       칸을 누르면 그 상황 초안으로 문자 창이 열림. 초안은 ✏️ 문자 초안(state.smsTpl)에서 관리 */
+    var cStats = contactStats(state);
+    var contactRows = Object.keys(cStats).map(function (k) { return cStats[k]; }).filter(function (s) {
+      return s.seenN || s.unseenN || (s.lastDays || 0) >= CONTACT_DORMANT_DAYS;
+    }).sort(function (a, b) {
+      return (Math.max(b.seenOld, b.unseenOld) - Math.max(a.seenOld, a.unseenOld)) || ((b.lastDays || 0) - (a.lastDays || 0));
+    });
+    var cCnt = { noreply: 0, unseen: 0, dormant: 0 };
+    contactRows.forEach(function (s) { if (s.seenN) cCnt.noreply++; if (s.unseenN) cCnt.unseen++; if ((s.lastDays || 0) >= CONTACT_DORMANT_DAYS) cCnt.dormant++; });
+    var staleRecipN = contactRows.filter(function (s) { return s.seenN || s.unseenN; }).length;
+    var _entAll = {}; (state.entries || []).forEach(function (e) { _entAll[e.id] = e; });
+    function cDayCol(d) { return d >= 7 ? '#c5221f' : (d >= 3 ? '#b06000' : 'var(--ink)'); }
+    function cCell(id, kind, on, label, col) {
+      if (!on) return '<td style="color:var(--muted);text-align:center;">·</td>';
+      return '<td style="text-align:center;"><button type="button" class="card-btn" data-action="contact-sms" data-id="' + escapeHtml(id) + '" data-kind="' + kind + '" style="flex:none;padding:2px 6px;font-size:0.76rem;white-space:nowrap;color:' + col + ';">' + label + '</button></td>';
+    }
+    var contactTable = contactRows.map(function (s) {
+      var e = s.e, mm = (e.managedBy && !e.ownerSelf) ? _entAll[e.managedBy] : null;
+      var last = smsLastFor(state, e.id);
+      var lastTxt = last
+        ? ((new Date(last.at).getMonth() + 1) + '/' + new Date(last.at).getDate() + (/^native-/.test(last.kind || '') ? ' ' + smsTplLabel(last.kind.slice(7)).split(' ')[0] : ''))
+        : '';
+      var seenTxt = s.lastDays === null ? '기록 없음' : (s.lastDays === 0 ? '오늘' : s.lastDays + '일 전');
+      return '<tr>' +
+        '<td style="min-width:92px;"><b>' + escapeHtml(e.nickname || '회원') + '</b>' +
+          ' <button type="button" class="card-btn" data-action="admin-msg" data-id="' + escapeHtml(e.id) + '" style="flex:none;padding:0 5px;font-size:0.72rem;" title="앱 메시지">💬</button>' +
+          '<div style="color:var(--muted);font-size:0.72rem;">' + escapeHtml(formatUid(e) || '') + (mm ? ' · 🤝' + escapeHtml(mm.nickname || '주선자') : '') + '</div>' +
+          (lastTxt ? '<div style="font-size:0.72rem;color:var(--ink);">📱 ' + escapeHtml(lastTxt) + ' 보냄</div>' : '') + '</td>' +
+        cCell(e.id, 'noreply', s.seenN, s.seenN + '건·' + s.seenOld + '일', cDayCol(s.seenOld)) +
+        cCell(e.id, 'unseen', s.unseenN, s.unseenN + '건·' + s.unseenOld + '일', cDayCol(s.unseenOld)) +
+        ((s.lastDays || 0) >= CONTACT_DORMANT_DAYS
+          ? cCell(e.id, 'dormant', true, s.lastDays + '일', cDayCol(s.lastDays))
+          : '<td style="color:var(--muted);text-align:center;font-size:0.78rem;white-space:nowrap;">' + seenTxt + '</td>') +
+      '</tr>';
     }).join('');
-    var staleSection = adminFold('⏰ 무응답 요청', staleReqs.length,
-      '<p class="sub">2일 이상 <b>승인·보류·거절을 안 한</b> 대기 요청이에요. 받는 분(무응답자)에게 💬 대화·📱 문자로 재촉하거나, 아래 버튼으로 <b>선택 재촉</b>하세요. (7일차엔 앱 메시지가 자동 1회 발송돼요)</p>' +
-      (staleReqs.length
-        ? ('<div style="margin:0 0 10px;"><button type="button" class="card-btn primary" data-action="stale-nudge" style="flex:none;">📢 무응답 회원 ' + staleRecipN + '명에게 재촉…</button></div>' + staleRows)
-        : '<p class="sub">2일 이상 무응답인 요청이 없어요 🙆</p>'), false, 'stale');
+    var staleSection = adminFold('📞 연락 필요', contactRows.length,
+      '<p class="sub">회원 한 명당 한 줄이에요. <b>칸을 누르면 그 상황에 맞는 초안</b>으로 문자 창이 열려요(보내기 전 수정 가능). 숫자는 <b>요청 건수·가장 오래된 일수</b>.</p>' +
+      '<p class="sub" style="font-size:0.8rem;">👀 <b>무응답</b> 요청을 보고도 2일+ 답 안 함 ' + cCnt.noreply + '명 · 📭 <b>미접속</b> 요청 온 뒤 안 들어옴 ' + cCnt.unseen + '명 · 💤 <b>장기</b> 7일+ 미접속 ' + cCnt.dormant + '명</p>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px;">' +
+        '<button type="button" class="card-btn" data-action="contact-tpl" style="flex:none;">✏️ 문자 초안 관리</button>' +
+        (staleRecipN ? '<button type="button" class="card-btn" data-action="stale-nudge" style="flex:none;">📢 앱 메시지로 재촉…</button>' : '') +
+      '</div>' +
+      (contactRows.length
+        ? '<div class="admin-table-wrap"><table class="seen-table contact-table"><thead><tr>' +
+            '<th>회원</th><th style="text-align:center;">👀 무응답</th><th style="text-align:center;">📭 미접속</th><th style="text-align:center;">💤 접속</th>' +
+          '</tr></thead><tbody>' + contactTable + '</tbody></table></div>'
+        : '<p class="sub">연락이 필요한 회원이 없어요 🙆</p>'), false, 'stale');
     var secHtml = {
       usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), pending: pendingSection, pinreset: pinResetSectionHtml(state, adminFold), held: heldSection, stale: staleSection, editrev: editRevSection,
       deaclist: deacListSection, dellog: delLogSection,
@@ -9771,6 +9912,8 @@
       else if (action === 'edit-reviewed') handleEditReviewed(id);
       else if (action === 'notify-connected') showConnectedMembers(id);
       else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
+      else if (action === 'contact-sms') { if (isAdminUnlocked) openSmsNative(id, null, actionBtn.getAttribute('data-kind')); }
+      else if (action === 'contact-tpl') { openSmsTplEditor(); return; }
       else if (action === 'pinreset-temp') handleAdminPinTemp(id);
       else if (action === 'pinreset-dismiss') handleAdminPinDismiss(id);
       else if (action === 'stale-nudge') { showStaleNudge(); return; }
