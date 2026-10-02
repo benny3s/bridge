@@ -8,13 +8,16 @@
 ## 아키텍처 (한눈에)
 - **클라이언트**: 단일 파일 **`index.html`** (~630KB, 바닐라 JS). 실제 로직은 `<script id="app-logic">` 인라인 블록 하나에 다 들어있음. (별도 `<script id="state-json" type="application/json">`은 시드용 JSON — JS 아님)
 - **상태 저장**: Firestore 단일 문서 **`app/state`**. 주요 필드: `entries`(승인 회원), `pendingEntries`(승인 대기·보류), `dateRequests`(사진/대화 요청), `dm`(회원↔회원 채팅), `messages`(회원↔관리자 Q&A), `logs`(활동기록 **최근분만**, 최대 ~400 유지; 600 초과 시 오래된 건 별도 문서 **`app/logs`**로 배치 아카이브 — `maybeArchiveLogs`, 관리자 "이전 기록 더 보기"로 로드), `joinRequests`(주선자 요청), `connLog`/`connEver`(누적 연결), `coupleReports`(커플 성사), `smsLog`, `deletedLog`, `adminAuth`, `adminSecOrder`, `announce`/`checkin`/`popup`.
-- **인증**: Firebase **익명 로그인**(`signInAnonymously`). Firestore 규칙: `app/state`·`app/logs`(로그 아카이브)·`photos/{id}`·`pushTokens/{id}`는 `auth != null`일 때만 read/write, 그 외 전부 차단. → **익명 인증이 안 잡히면 쓰기 실패("Missing or insufficient permissions")**. 제출 전 인증 가드 있음.
-- **관리자**: `adminAuth`에 RSA 키쌍(공개키 + PIN으로 감싼 개인키). 관리자 PIN 입력 시 개인키 unlock(`adminPrivateKey`). 민감정보(`realNameEnc`·`contactEnc`·`referrerEnc`)는 **관리자 공개키로 암호화(RSA-OAEP)**, 관리자만 client에서 복호화(`decryptWithAdmin`).
+- **인증·신분 (2026-10 보안 개편)**: 손님은 Firebase 익명 로그인. 회원·관리자는 CF `memberLogin`/`adminLogin`이 PIN·관리자 비번을 **서버에서** 확인(계정별 5회 실패마다 잠금, `loginGuard`)하고 custom token 발급 — 승인 회원 `{m:1}`(uid=entryId), 승인 대기 `{p:1}`, 관리자 uid `admin` `{admin:1}`. 앱은 토큰 신분으로 `dataMode` 전환(`switchDataForAuth`): **full**(m/admin) = `app/state` 구독, **public**(손님·승인대기) = `app/public` 공개 요약(티저·로그인 목록, onStateChange가 생성) + 승인대기 본인은 `applicantAction{op:pendingView}`. 손님·승인대기의 쓰기(가입·주선자 신청·문의·PIN 재설정 요청·신청서 수정/철회·메시지)는 전부 CF `applicantAction`이 검증 후 대행 — **public 모드에서 app/state 직접 쓰기 금지**(규칙상 거부됨).
+- **보안 규칙**: `app/state`·`app/logs`=회원(m)·관리자만, `app/public`=누구나 읽기, `photos/{id}`=회원·관리자·본인, `pushTokens/{id}`=본인·관리자, `adminOnly/*`·`adminKey/*`=관리자만, 나머지(`secrets`·`loginGuard`·`rateLimit`·`sendContacts`·`acqFilter`) 서버 전용. ⚠️ **규칙 배포(`firebase deploy --only firestore:rules`)는 Claude 자동모드가 차단** → 소유자가 직접 실행.
+- **비밀 분리 (금고)**: PIN 해시(`pinAuth`/`pinHash`)·PIN 잠금 번호(`contactSelfEnc`)는 `secrets/{id}`(서버만), 실명·번호·경로 암호문(`realNameEnc`·`contactEnc`·`referrerEnc`, 관리자 공개키 RSA-OAEP)은 `adminOnly/{id}`(관리자만), 관리자 개인키(관리자 비번으로 감쌈)는 `adminKey/main`; state의 `adminAuth`엔 공개키만. **앱은 예전처럼 state에 써도 됨** → CF `onStateChange.sweepSecrets`가 즉시 금고로 옮기고 state에서 제거. state의 PIN 유무 표시는 `pinSet` → 앱은 `hasPin(e)`로 판단(직접 `e.pinAuth` 검사 금지). PIN 회수 시 `pinSet`도 delete. 계정 간 PIN·개인정보 승계는 `pinFrom`/`privFrom`(원래 계정 id). 관리자 화면은 `adminOnly`·`adminKey`를 구독해 메모리 state에만 덧붙임(`overlayAdminPriv`) → 관리자 코드는 그대로 `entry.contactEnc` 읽음. state에서 사라진 계정 금고는 삭제 표시 후 7일 뒤 `remindPending`이 정리.
+- **관리자 키**: RSA 키쌍(공개키 + 관리자 비번으로 감싼 개인키). 잠금 해제 = adminLogin 토큰 → adminKey 읽기 → `unlockAdminKey` → `adminPrivateKey`, 관리자만 client에서 복호화(`decryptWithAdmin`).
 - **사진**: `photos/{entryId}` 컬렉션. **푸시 토큰**: `pushTokens/{entryId}`(+ `'admin'`).
 - **Cloud Functions** (`functions/index.js`, region `asia-northeast3`, Node 22):
   - `onStateChange` — app/state 변경 감지 → 요청/승인/거절/DM/새신청 FCM 푸시
   - `remindPending` — 매시간 스케줄, pending 요청 1일/3일차 리마인더 푸시
-  - `savePhone`/`setAcqFilter`/`clearAcqFilter`/`getHiddenIds` — 보안 번호 저장소(`sendContacts/{id}`, 서버키 AES) + 지인필터
+  - `savePhone`/`setAcqFilter`/`clearAcqFilter`/`getHiddenIds` — 보안 번호 저장소(`sendContacts/{id}`, 서버키 AES) + 지인필터. 본인 토큰이면 PIN 없이, 아니면 PIN+실패 잠금(`callerOwns`)
+  - `memberLogin`/`adminLogin`/`applicantAction` — 위 인증·대행. 서버 코드 변경 시 가짜 Firestore로 로컬 시험 가능(firebase-admin을 Module._load로 모킹 후 `exports.X.run(data, context)`) — Firebase callable SDK는 window.fetch 가로채기로 막을 수 없으니 브라우저 가로채기 시험 금지(실제 전송됨)
   - `adminSendSms` — Solapi 문자(배포돼 있으나 **현재 수동 문자는 "내 폰 문자앱(sms: 링크)"** 사용, `openSmsNative`. Solapi는 070·자동/대량용으로 보류)
 
 ## 배포 워크플로 (모든 코드 변경 시 반드시)
