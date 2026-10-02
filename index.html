@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-385';
+  var APP_VERSION = '2026-10-02-386';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -2063,6 +2063,24 @@
     ov.querySelector('#sc-cancel').addEventListener('click', function () { closeModal(ov); });
     ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(ov); });
     setTimeout(function () { try { numEl.focus(); } catch (e) {} }, 50);
+  }
+
+  /* ---- 진행 중 표시 (로그인처럼 서버 확인으로 1~3초 걸리는 동작) — 반환된 함수를 부르면 닫힘 ---- */
+  function showBusy(text) {
+    var el = document.createElement('div');
+    el.setAttribute('role', 'status');
+    el.style.cssText = 'position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.28);';
+    el.innerHTML = '<div style="background:var(--card);color:var(--ink);border-radius:14px;padding:16px 22px;box-shadow:0 10px 30px rgba(0,0,0,0.25);font-weight:700;display:flex;align-items:center;gap:10px;">' +
+      '<span style="width:18px;height:18px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;display:inline-block;animation:busy-spin 0.8s linear infinite;"></span>' +
+      escapeHtml(text || '잠시만요…') + '</div>';
+    if (!document.getElementById('busy-spin-style')) {
+      var st = document.createElement('style'); st.id = 'busy-spin-style';
+      st.textContent = '@keyframes busy-spin { to { transform: rotate(360deg); } }';
+      document.head.appendChild(st);
+    }
+    document.body.appendChild(el);
+    var closed = false;
+    return function () { if (closed) return; closed = true; if (el.parentNode) el.parentNode.removeChild(el); };
   }
 
   /* ---- 개인정보 처리방침 (가입 동의 박스의 '처리방침 전문 보기') ---- */
@@ -3388,15 +3406,17 @@
       var all = (state.entries || []).concat(state.pendingEntries || []);
       var entry = all.find(function (e) { return e.id === r.id; });
       if (!entry) return modalNotice('오류', '해당 닉네임을 찾을 수 없어요.');
-      /* 서버 로그인 우선(실패 횟수 잠금 포함). 서버가 확실히 거절하면 그 사유를 보여주고,
-         네트워크·서버 오류일 때만 예전 방식(기기에서 PIN 확인)으로 넘어감 — 전환기 안전장치 */
-      /* 서버가 PIN 확인(실패 횟수 잠금 포함) → 신분 토큰 → 그 신분에 맞는 데이터로 전환 */
+      /* 서버가 PIN 확인(실패 횟수 잠금 포함) → 신분 토큰 → 그 신분에 맞는 데이터로 전환.
+         서버 확인 + 회원 데이터 받기에 1~3초 걸려 그동안 '로그인 중' 표시 */
+      var hideBusy = showBusy('로그인 중…');
       memberServerLogin(entry.id, r.pin).then(function () {
         return switchDataForAuth().then(function () { return true; });
       }, function (e) {
+        hideBusy();
         modalNotice('로그인 실패', isAuthRejection(e) ? authErrMsg(e) : '서버 연결이 불안정해요. 잠시 후 다시 시도해주세요.');
         return null;
       }).then(function (ok) {
+        hideBusy();
         if (!ok) return;
         entry = (currentState.entries || []).concat(currentState.pendingEntries || []).find(function (e) { return e.id === r.id; }) || entry;
         if (dataMode === 'full') maybeUpgradePin(entry, r.pin);
@@ -7241,6 +7261,7 @@
     }
     modalPin('관리자 인증', '비밀번호를 입력하세요.', { password: true }).then(function (pin) {
       if (!pin) return;
+      var hideBusy = showBusy('관리자 확인 중…');
       adminServerLogin(pin).then(function () {
         return switchDataForAuth();
       }, function (e) {
@@ -7251,8 +7272,9 @@
           isAdminUnlocked = true;
           saveAdminPin(pin);
           return decryptAllAdminData(full);
-        }).then(function () { paint(currentState); });
+        }).then(function () { hideBusy(); paint(currentState); });
       }).catch(function (err) {
+        hideBusy();
         modalNotice('오류', (err && err.message) || '비밀번호가 올바르지 않아요.');
       });
     });

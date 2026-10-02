@@ -2,14 +2,22 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 앱 상태(신청서·요청·최근 로그 등) — 로그인(익명 인증)한 사용자만
+    // 신분은 서버 로그인 토큰(memberLogin/adminLogin)의 claims 로 판단.
+    // 손님은 익명 토큰(claims 없음), 승인 대기는 {p:1}, 승인 회원은 {m:1}, 관리자는 {admin:1}.
+    function signedIn() { return request.auth != null; }
+    function isAdmin() { return signedIn() && request.auth.token.admin == 1; }
+    function isMember() { return signedIn() && request.auth.token.m == 1; }
+    function isSelf(id) { return signedIn() && request.auth.uid == id; }
+
+    // 앱 상태(회원·요청·채팅·메시지 등) — 승인 회원·관리자만.
+    // 손님·승인 대기의 쓰기는 서버 함수(applicantAction)가 대행
     match /app/state {
-      allow read, write: if request.auth != null;
+      allow read, write: if isMember() || isAdmin();
     }
 
-    // 활동 기록 아카이브(오래된 로그 별도 보관) — 로그인한 사용자만
+    // 활동 기록 아카이브 — 승인 회원·관리자만
     match /app/logs {
-      allow read, write: if request.auth != null;
+      allow read, write: if isMember() || isAdmin();
     }
 
     // 공개 요약(손님 화면용: 인원·티저·로그인 목록) — 서버(onStateChange)만 씀
@@ -18,17 +26,17 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // 사진 — 로그인한 사용자만
+    // 사진 — 승인 회원·관리자, 또는 본인(승인 대기자가 자기 신청서 사진 보기·수정)
     match /photos/{entryId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isMember() || isAdmin() || isSelf(entryId);
     }
 
-    // 푸시 토큰 — 로그인한 사용자만
+    // 푸시 토큰 — 본인 것만, 관리자는 전체(알림 설정 확인용)
     match /pushTokens/{entryId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isAdmin() || isSelf(entryId);
     }
 
-    // 그 외 전부 차단
+    // 그 외 전부 차단 (secrets·loginGuard·rateLimit·sendContacts 등은 서버 전용)
     match /{document=**} {
       allow read, write: if false;
     }
