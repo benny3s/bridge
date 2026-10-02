@@ -565,6 +565,7 @@ exports.remindPending = functions
       await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
     }
     await purgeDeletedSecrets().catch((e) => console.error('purgeDeletedSecrets', e));
+    if (new Date().getUTCHours() === 19) await purgeOldChats().catch((e) => console.error('purgeOldChats', e)); /* 매일 KST 04시 */
     return null;
   });
 
@@ -1056,6 +1057,8 @@ async function purgeDeletedSecrets() {
    지우기 = 내 화면에서만(clearedAt[내 id]), 두 사람 모두 지운 뒤 새 메시지가 없으면 문서 삭제.
    탈퇴·삭제된 회원이 있어도 방은 그대로(상대 쪽 기록 유지). */
 const CHAT_MAX_MSGS = 2000;
+/* 두 사람이 모두 지웠거나 둘 다 탈퇴한 대화방도 신고·분쟁 대응을 위해 서버에 90일 보관 후 삭제 (신고 중이면 보존) */
+const CHAT_RETAIN_MS = 90 * 86400000;
 function pairOf(a, b) { return [a, b].sort().join('__'); }
 function chatViewers(entries, members) {
   const v = {};
@@ -1176,7 +1179,9 @@ exports.chatAction = functions
         const snap = await tx.get(ref);
         const cur = snap.exists ? snap.data() : { pair, members: [asId, otherId].sort(), createdAt: m.at, clearedAt: {} };
         const msgs = (cur.msgs || []).concat([m]).slice(-CHAT_MAX_MSGS);
-        tx.set(ref, Object.assign({}, cur, { viewers: chatViewers(entries, cur.members || [asId, otherId]), msgs, lastAt: m.at, lastFrom: asId, updatedAt: m.at }));
+        const next = Object.assign({}, cur, { viewers: chatViewers(entries, cur.members || [asId, otherId]), msgs, lastAt: m.at, lastFrom: asId, updatedAt: m.at });
+        delete next.bothClearedAt;
+        tx.set(ref, next);
       });
       await notifyRecipient(entries, otherId, '💬 ' + nameOf(entries, asId) + '님의 채팅', text.slice(0, 40), { route: 'dm', focusId: asId }).catch(() => {});
       return { ok: true, msg: m };
@@ -1191,12 +1196,13 @@ exports.chatAction = functions
         const now = new Date().toISOString();
         const cleared = Object.assign({}, d.clearedAt || {}, { [asId]: now });
         const members = d.members || [];
-        /* 두 사람 모두 마지막 메시지 이후에 지웠고 신고 중이 아니면 문서 삭제 */
+        /* 두 사람 모두 지워도 바로 삭제하지 않음 — 보관 시작 시각만 기록, 90일 뒤 purgeOldChats 가 삭제 */
         const allCleared = members.every((id) => cleared[id] && (!d.lastAt || cleared[id] >= d.lastAt));
-        if (allCleared && !d.reportedAt) { tx.delete(ref); deleted = true; }
-        else tx.update(ref, { clearedAt: cleared });
+        const upd = { clearedAt: cleared };
+        if (allCleared && !d.bothClearedAt) upd.bothClearedAt = now;
+        tx.update(ref, upd);
       });
-      return { ok: true, deleted };
+      return { ok: true, deleted }; /* deleted 는 이제 항상 false (보관 후 자동 삭제) */
     }
 
     if (op === 'report') {
@@ -1215,3 +1221,22 @@ exports.chatAction = functions
 
     throw new HttpsError('invalid-argument', '알 수 없는 요청이에요.');
   });
+
+/* 보관 기간이 지난 대화방 삭제: (두 사람 모두 지움 또는 두 사람 모두 탈퇴) 후 90일, 신고 중이면 보존 */
+async function purgeOldChats(nowMs) {
+  const now = nowMs || Date.now();
+  const st = (await db.doc('app/state').get()).data() || {};
+  const alive = {}; allOf(st).forEach((e) => { alive[e.id] = 1; });
+  const qs = await db.collection('chats').get();
+  let removed = 0;
+  for (const d of qs.docs) {
+    const r = d.data();
+    if (r.reportedAt) continue;
+    const goneAll = (r.members || []).every((id) => !alive[id]);
+    const since = r.bothClearedAt || (goneAll ? (r.lastAt || r.updatedAt) : null);
+    if (since && now - new Date(since).getTime() > CHAT_RETAIN_MS) { await d.ref.delete(); removed++; }
+  }
+  if (removed) console.log('purgeOldChats: removed ' + removed + ' rooms');
+  return removed;
+}
+if (process.env.BRIDGE_LOCAL_TEST) exports._purgeOldChatsForTest = purgeOldChats; /* 로컬 시험 전용 (배포 시 내보내지 않음) */

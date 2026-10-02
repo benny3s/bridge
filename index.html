@@ -922,7 +922,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-389';
+  var APP_VERSION = '2026-10-02-390';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -2179,6 +2179,7 @@
       sec('4. 보유 및 파기',
         '· 삭제 요청이 승인되면 지체 없이 파기해요.<br>' +
         '· 회원끼리 주고받은 대화는 상대방 대화함에 남을 수 있어요. 대화는 두 사람만 볼 수 있고, 관리자는 <b>신고가 접수된 대화만</b> 확인해요.<br>' +
+        '· 신고·분쟁 대응을 위해, 두 사람이 모두 대화를 지우거나 탈퇴한 뒤에도 서버에 <b>90일간 보관</b> 후 삭제해요 (신고 처리 중인 대화는 처리 완료 때까지 보관).<br>' +
         '· 보관(휴면)을 고르면 다시 활동할 수 있도록 보관하며, 언제든 삭제를 요청할 수 있어요.<br>' +
         '· 장애 복구용 백업은 최대 7일 뒤 자동으로 사라져요.') +
       sec('5. 처리 위탁 및 저장 위치', 'Google(Firebase) — 데이터 저장·서버 기능·알림 발송. 저장 위치: 대한민국(서울 리전). 관리자 안내 문자는 관리자 휴대폰으로 직접 보내요.') +
@@ -3923,7 +3924,7 @@
     };
     function close() { _openChatRedraw = null; closeModal(overlay); paint(currentState); }
     overlay.querySelector('#dm-clear').addEventListener('click', function () {
-      modalConfirm('대화 지우기', '내 화면에서 지금까지의 대화를 지울까요? 상대방 화면에서는 지워지지 않아요.', '지우기', 'danger').then(function (ok) {
+      modalConfirm('대화 지우기', '내 화면에서 지금까지의 대화를 지울까요? 상대방 화면에서는 지워지지 않아요. (신고·분쟁 대응을 위해 서버에는 일정 기간 보관돼요)', '지우기', 'danger').then(function (ok) {
         if (!ok) return;
         callFn('chatAction', { op: 'clear', as: me.id, other: otherId }).then(function () {
           var room = _chats[dmPairKey(me.id, otherId)];
