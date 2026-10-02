@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-01-383';
+  var APP_VERSION = '2026-10-02-384';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1410,6 +1410,45 @@
       throw e;
     });
   }
+  /* ── 서버 로그인 토큰 ──
+     PIN·관리자 비밀번호를 서버(memberLogin/adminLogin)가 확인하고 Firebase 토큰을 발급 → 보안 규칙이
+     '토큰 있는 회원/관리자'만 데이터 접근을 허용하는 기반. 손님은 익명 토큰. */
+  function authUid() { var u = firebase.auth().currentUser; return (u && !u.isAnonymous) ? u.uid : ''; }
+  function serverSignIn(fnName, payload) {
+    return callFn(fnName, payload).then(function (r) {
+      var t = r && r.data && r.data.token;
+      if (!t) throw new Error('토큰을 받지 못했어요.');
+      return firebase.auth().signInWithCustomToken(t);
+    });
+  }
+  function memberServerLogin(entryId, pin) { return serverSignIn('memberLogin', { entryId: entryId, pin: pin }); }
+  function adminServerLogin(pw) { return serverSignIn('adminLogin', { password: pw }); }
+  /* 서버가 'PIN이 틀렸다/잠겼다/보관 계정'처럼 확실히 거절한 경우 (네트워크·서버 오류와 구분) */
+  function isAuthRejection(e) {
+    var c = ((e && e.code) || '') + '';
+    return /permission-denied|resource-exhausted|failed-precondition|not-found/.test(c);
+  }
+  function authErrMsg(e) { return ((e && e.message) || '로그인에 실패했어요.') + ''; }
+  /* 로그아웃·관리자 잠금 시 토큰을 손님으로 되돌림 (회원으로 로그인 중이면 회원 토큰 유지) */
+  function dropToGuestAuth() {
+    var u = firebase.auth().currentUser;
+    if (!u || u.isAnonymous) return Promise.resolve();
+    return firebase.auth().signOut().then(function () { return firebase.auth().signInAnonymously(); }).catch(function () {});
+  }
+  /* 저장된 로그인(기기에 남은 회원 세션·관리자 비밀번호)을 서버 토큰으로 맞춰 둠. 앱 열 때 1회 */
+  function syncServerAuth() {
+    try {
+      var savedAdmin = getAdminPin();
+      if (isAdminUnlocked && savedAdmin) {
+        if (authUid() !== 'admin') adminServerLogin(savedAdmin).catch(function (e) { try { console.warn('adminLogin', e && e.code); } catch (e2) {} });
+        return;
+      }
+      if (currentUser && currentUser.id && currentUser.pin && authUid() !== currentUser.id) {
+        memberServerLogin(currentUser.id, currentUser.pin).catch(function (e) { try { console.warn('memberLogin', e && e.code); } catch (e2) {} });
+      }
+    } catch (e) {}
+  }
+
   /* 회원 전화번호를 서버에 안전 저장(암호화). 실패해도 가입/수정 흐름은 막지 않음(best-effort) */
   function saveMyPhone(entryId, pin, phone) {
     if (!fns || !entryId || !pin || !phone) return Promise.resolve();
@@ -3046,6 +3085,7 @@
     listFilter = 'all';
     listFilterInitFor = null;
     saveSession();
+    dropToGuestAuth();
     if (activeTab === 'mine') activeTab = 'form';
     paint(currentState);
   }
@@ -3196,7 +3236,14 @@
       var all = (state.entries || []).concat(state.pendingEntries || []);
       var entry = all.find(function (e) { return e.id === r.id; });
       if (!entry) return modalNotice('오류', '해당 닉네임을 찾을 수 없어요.');
-      verifyPin(r.pin, entry).then(function (ok) {
+      /* 서버 로그인 우선(실패 횟수 잠금 포함). 서버가 확실히 거절하면 그 사유를 보여주고,
+         네트워크·서버 오류일 때만 예전 방식(기기에서 PIN 확인)으로 넘어감 — 전환기 안전장치 */
+      memberServerLogin(entry.id, r.pin).then(function () { return true; }, function (e) {
+        if (isAuthRejection(e)) { modalNotice('로그인 실패', authErrMsg(e)); return null; }
+        try { console.warn('memberLogin fallback', e && e.code); } catch (e2) {}
+        return verifyPin(r.pin, entry);
+      }).then(function (ok) {
+        if (ok === null) return;
         if (!ok) return modalNotice('오류', 'PIN이 올바르지 않아요.');
         maybeUpgradePin(entry, r.pin);
         currentUser = { id: entry.id, nickname: entry.nickname, pin: r.pin };
@@ -6991,6 +7038,7 @@
       decryptedNames = {};
       decryptedRequests = {};
       clearAdminPin();
+      dropToGuestAuth().then(syncServerAuth);
       if (activeTab === 'admin') activeTab = 'form';
       paint(state);
       return;
@@ -7010,6 +7058,7 @@
           adminPrivateKey = key;
           isAdminUnlocked = true; requestNotifPermission();
           saveAdminPin(r.p1);
+          adminServerLogin(r.p1).catch(function () {});
           return decryptAllAdminData(state);
         }).then(function () {
           paint(state);
@@ -7023,6 +7072,7 @@
         adminPrivateKey = key;
         isAdminUnlocked = true;
         saveAdminPin(pin);
+        adminServerLogin(pin).catch(function (e) { try { console.warn('adminLogin', e && e.code); } catch (e2) {} });
         return decryptAllAdminData(state);
       }).then(function () {
         paint(state);
@@ -10211,6 +10261,7 @@
         return decryptAllAdminData(state);
       }).then(function () {
         paint(state);
+        syncServerAuth();
         refreshNotifTokens();
         /* 로그인 유지 상태여도 앱 열 때 최근 방문 시간 갱신 (로그인 때만 갱신되던 문제) */
         if (currentUser && currentUser.id) {
@@ -11108,17 +11159,23 @@
     } catch (e) {}
   }
   try {
+    /* 서버 로그인 토큰(회원·관리자)이 기기에 남아 있으면 그대로 쓰고, 없을 때만 익명(손님) 로그인.
+       (예전처럼 무조건 익명 로그인하면 저장된 회원 토큰이 손님으로 덮여 버림) */
+    var _authFirst = true;
     firebase.auth().onAuthStateChanged(function (user) {
-      if (user) startApp();
+      if (user) { startApp(); return; }
+      if (!_authFirst) return;
+      _authFirst = false;
+      anonSignIn(3);
     });
     /* 익명 인증 재시도(일시 실패 자가복구) — LTE·인앱 브라우저 등에서 첫 시도가 실패해도 몇 번 더 시도 */
-    (function anonSignIn(tries) {
+    function anonSignIn(tries) {
       firebase.auth().signInAnonymously().catch(function (e) {
         if (tries > 0) { setTimeout(function () { anonSignIn(tries - 1); }, 1500); return; }
         try { console.warn('anonymous auth unavailable:', e && e.code); } catch (e2) {}
         startApp(); /* 끝내 실패해도 앱은 뜨도록(읽기 캐시). 쓰기 시 인증 가드가 안내 */
       });
-    })(3);
+    }
   } catch (e) {
     startApp();
   }

@@ -68,6 +68,92 @@ function authEntryFor(state, entry) {
   return entry;
 }
 
+/* ── 서버 로그인 (Firebase custom token) ──
+   PIN·관리자 비밀번호를 서버에서 확인하고 토큰 발급 → 보안 규칙이 토큰의 신분(claims)으로 접근을 판단.
+   claims: 승인 회원 {m:1}, 승인 대기 {p:1}, 관리자 {admin:1}. uid = 회원 entryId / 'admin'.
+   대입 공격 방지: 계정별 실패 5회마다 잠금(15분→30분→… 최대 24시간). 잠금 기록은 loginGuard(클라 접근 불가). */
+const LOGIN_MAX_FAILS = 5;
+const HttpsError = functions.https.HttpsError;
+async function loginGuardCheck(key) {
+  const ref = db.collection('loginGuard').doc(key);
+  const snap = await ref.get();
+  const g = snap.exists ? snap.data() : {};
+  if (g.lockedUntil && g.lockedUntil > Date.now()) {
+    const min = Math.ceil((g.lockedUntil - Date.now()) / 60000);
+    throw new HttpsError('resource-exhausted', '여러 번 틀려서 잠시 잠겼어요. ' + min + '분 뒤에 다시 시도해주세요.');
+  }
+  return { ref, g };
+}
+async function loginGuardResult(guard, ok) {
+  if (ok) { if (guard.g.fails) await guard.ref.delete(); return; }
+  const fails = (guard.g.fails || 0) + 1;
+  const upd = { fails, lastFailAt: Date.now() };
+  if (fails % LOGIN_MAX_FAILS === 0) {
+    const mins = Math.min(15 * Math.pow(2, fails / LOGIN_MAX_FAILS - 1), 24 * 60);
+    upd.lockedUntil = Date.now() + mins * 60000;
+  }
+  await guard.ref.set(upd, { merge: true });
+}
+function guardKey(prefix, id) { return prefix + String(id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 120); }
+/* 비밀(PIN 해시·관리자 키)은 3단계부터 secrets/ 로 옮겨짐 — state에 남아 있으면(방금 바뀐 값) 그걸 우선 */
+async function pinSourceFor(entry) {
+  if (entry && (entry.pinAuth || entry.pinHash)) return entry;
+  const sec = await db.collection('secrets').doc(entry.id).get();
+  return sec.exists ? Object.assign({ id: entry.id }, sec.data()) : entry;
+}
+/* 클라 setupAdminPin/rewrapAdminKey 와 동일: PBKDF2(150000, SHA-256) → AES-256-GCM 으로 감싼 개인키가 풀리면 비밀번호 일치 */
+function adminPasswordOk(pw, a) {
+  if (!a || !a.salt || !a.iv || !a.wrappedPrivateKey) return false;
+  try {
+    const key = nodeCrypto.pbkdf2Sync(String(pw), Buffer.from(a.salt, 'base64'), 150000, 32, 'sha256');
+    const buf = Buffer.from(a.wrappedPrivateKey, 'base64');
+    const d = nodeCrypto.createDecipheriv('aes-256-gcm', key, Buffer.from(a.iv, 'base64'));
+    d.setAuthTag(buf.subarray(buf.length - 16));
+    Buffer.concat([d.update(buf.subarray(0, buf.length - 16)), d.final()]);
+    return true;
+  } catch (e) { return false; }
+}
+
+exports.memberLogin = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 20, memory: '256MB' })
+  .https.onCall(async (data) => {
+    const entryId = String((data && data.entryId) || '');
+    const pin = String((data && data.pin) || '');
+    if (!entryId || !pin || pin.length > 64) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.');
+    const guard = await loginGuardCheck(guardKey('m_', entryId));
+    const state = (await db.doc('app/state').get()).data() || {};
+    let entry = (state.entries || []).find((e) => e.id === entryId);
+    let pending = false;
+    if (!entry) { entry = (state.pendingEntries || []).find((e) => e.id === entryId); pending = !!entry; }
+    if (!entry) throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
+    if (entry.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
+    if (entry.managedBy && entry.pinExpiresAt && Date.now() > new Date(entry.pinExpiresAt).getTime()) {
+      throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
+    }
+    const ok = verifyPinServer(pin, await pinSourceFor(entry));
+    await loginGuardResult(guard, ok);
+    if (!ok) throw new HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
+    const token = await admin.auth().createCustomToken(entryId, pending ? { p: 1 } : { m: 1 });
+    return { token, pending };
+  });
+
+exports.adminLogin = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 20, memory: '256MB' })
+  .https.onCall(async (data) => {
+    const pw = String((data && data.password) || '');
+    if (!pw || pw.length > 128) throw new HttpsError('invalid-argument', '비밀번호를 확인해주세요.');
+    const guard = await loginGuardCheck('admin');
+    const st = ((await db.doc('app/state').get()).data() || {}).adminAuth;
+    const a = (st && st.wrappedPrivateKey) ? st : (await db.collection('secrets').doc('adminAuth').get()).data();
+    const ok = adminPasswordOk(pw, a);
+    await loginGuardResult(guard, ok);
+    if (!ok) throw new HttpsError('permission-denied', '비밀번호가 올바르지 않아요.');
+    const token = await admin.auth().createCustomToken('admin', { admin: 1 });
+    return { token };
+  });
+
 /* 회원 전화번호를 안전 저장 (가입/수정 시 클라이언트가 호출). PIN 검증으로 본인만 저장 가능. */
 exports.savePhone = functions
   .region('asia-northeast3')
@@ -512,4 +598,12 @@ exports.adminSendSms = functions
     }
     const okCount = results.filter((r) => r.ok).length;
     return { ok: okCount, fail: results.length - okCount, results: results };
+  });
+
+/* [임시] custom token 서명 권한 점검용 — 토큰은 반환하지 않고 성공 여부만. 점검 후 삭제 예정 */
+exports.authSelfTest = functions
+  .region('asia-northeast3')
+  .https.onCall(async () => {
+    try { await admin.auth().createCustomToken('selftest-probe', { t: 1 }); return { ok: true }; }
+    catch (e) { return { ok: false, err: String((e && (e.code || e.message)) || e).slice(0, 300) }; }
   });
