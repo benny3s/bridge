@@ -46,6 +46,14 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // 대화방(두 사람당 1개) — 대화 당사자(+각자의 주선자)만 읽기, 관리자는 신고된 방만.
+    // 보내기·지우기·신고는 서버 함수(chatAction)만
+    match /chats/{pair} {
+      allow read: if signedIn() && (request.auth.uid in resource.data.viewers
+                                    || (isAdmin() && resource.data.reportedAt != null));
+      allow write: if false;
+    }
+
     // 그 외 전부 차단 (secrets(PIN 해시)·loginGuard·rateLimit·sendContacts 등은 서버 전용)
     match /{document=**} {
       allow read, write: if false;

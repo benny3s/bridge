@@ -117,6 +117,7 @@
   }
   .live-banner b { color: var(--accent); font-variant-numeric: tabular-nums; }
   .live-dot { opacity: 0.4; margin: 0 2px; font-weight: 400; }
+  .live-rot { display: inline-block; transition: opacity 0.35s ease; }
   .admin-link {
     background: none; border: 1px solid rgba(251,243,238,0.3); color: var(--paper);
     opacity: 0.8; font-size: 0.78rem; padding: 5px 12px; border-radius: 999px; cursor: pointer;
@@ -921,7 +922,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-387';
+  var APP_VERSION = '2026-10-02-388';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -942,8 +943,8 @@
   var openMsgFolds = {}; /* 관리자 메시지: 펼쳐둔 회원 대화 (리페인트 후 유지용) */
   var _mmFoldOpen = {};  /* 주선자 탭: 카드별 접힘 상태 (리페인트 후 유지용, 기본 열림) */
   var adminEditMode = false; /* 관리자 섹션 편집(순서·기본 열림) 모드 */
-  var DEFAULT_SEC_ORDER = ['usage', 'connlog', 'couple', 'pending', 'pinreset', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
-  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
+  var DEFAULT_SEC_ORDER = ['usage', 'connlog', 'couple', 'pending', 'pinreset', 'reports', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
+  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', reports: '🚨 신고된 대화', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
   /* 섹션 열림 상태는 "세션 메모리에만" 저장 → 리페인트(버튼 클릭 등) 동안엔 유지되지만,
      새로고침하면 초기화되어 모두 접힌 상태로 시작 (이전에 열었던 걸 기억하지 않음) */
   var _adminSecOpen = {}, _adminSecOrder = null;
@@ -1104,6 +1105,7 @@
       dateRequests: [], approvedPairs: [], logs: [], dm: [],
       messages: (pv && pv.messages) || [],
       connLog: new Array(pub.connCount || 0),
+      memberTotal: typeof pub.memberTotal === 'number' ? pub.memberTotal : undefined,
       coupleReports: (pub.reviews || []).slice(),
       appVersion: pub.appVersion || '', announce: pub.announce || null, popup: pub.popup || null,
       adminAuth: pub.adminPub ? { publicKeyJwk: pub.adminPub } : null
@@ -1203,6 +1205,7 @@
       var mode = (c.admin === 1 || c.m === 1) ? 'full' : 'public';
       if (mode === 'public') _pendingView = null;
       _authIsAdmin = c.admin === 1;
+      startChats(c);
       var privReady = _authIsAdmin ? startAdminPriv() : (stopAdminPriv(), Promise.resolve());
       return privReady.then(function () { return subscribeData(mode); }).then(function (s) {
         if (mode === 'public' && c.p === 1) return refreshPendingView().then(function () { return currentState; });
@@ -2121,6 +2124,22 @@
     setTimeout(function () { try { numEl.focus(); } catch (e) {} }, 50);
   }
 
+  /* ---- 현황 배너 회전: 항목을 한 번에 하나씩, 4초마다 서서히 바꿈. 다시 그려져도 순서 유지(_liveRotIdx) ---- */
+  var _liveRotIdx = 0, _liveRotTimer = null;
+  function startLiveRotator() {
+    if (_liveRotTimer) return;
+    _liveRotTimer = setInterval(function () {
+      var el = document.getElementById('live-rotator');
+      if (!el || document.hidden) return;
+      var bits; try { bits = JSON.parse(el.getAttribute('data-bits') || '[]'); } catch (e) { bits = []; }
+      if (bits.length < 2) return;
+      _liveRotIdx = (_liveRotIdx + 1) % bits.length;
+      var span = el.querySelector('.live-rot'); if (!span) return;
+      span.style.opacity = '0';
+      setTimeout(function () { span.innerHTML = bits[_liveRotIdx % bits.length]; span.style.opacity = '1'; }, 350);
+    }, 4000);
+  }
+
   /* ---- 진행 중 표시 (로그인처럼 서버 확인으로 1~3초 걸리는 동작) — 반환된 함수를 부르면 닫힘 ---- */
   function showBusy(text) {
     var el = document.createElement('div');
@@ -2159,6 +2178,7 @@
         '· 실명·연락처는 <b>암호화</b>되어 관리자만 볼 수 있고, 다른 회원에게 제공하지 않아요.') +
       sec('4. 보유 및 파기',
         '· 삭제 요청이 승인되면 지체 없이 파기해요.<br>' +
+        '· 회원끼리 주고받은 대화는 상대방 대화함에 남을 수 있어요. 대화는 두 사람만 볼 수 있고, 관리자는 <b>신고가 접수된 대화만</b> 확인해요.<br>' +
         '· 보관(휴면)을 고르면 다시 활동할 수 있도록 보관하며, 언제든 삭제를 요청할 수 있어요.<br>' +
         '· 장애 복구용 백업은 최대 7일 뒤 자동으로 사라져요.') +
       sec('5. 처리 위탁 및 저장 위치', 'Google(Firebase) — 데이터 저장·서버 기능·알림 발송. 저장 위치: 대한민국(서울 리전). 관리자 안내 문자는 관리자 휴대폰으로 직접 보내요.') +
@@ -3779,35 +3799,66 @@
     return e ? e.nickname : '(알 수 없음)';
   }
 
-  /* ── 회원↔회원 대화 채팅 (연결된 대화 신청 사이). state.dm 배열, 쪽지처럼 단순·모달 기반(비실시간) ── */
+  /* ── 회원↔회원 대화 채팅 (3단계-②: 대화방 chats/{pair}) ──
+     두 사람당 문서 1개, 읽기는 두 사람(+주선자)만 — 관리자는 신고된 방만. 보내기·지우기·신고는 서버(chatAction).
+     내 대화방 목록은 실시간 구독(_chats). 예전 state.dm 에 남은 메시지도 함께 보여 줌(서버가 곧 옮김). */
+  var _chats = {};            /* pair → 대화방 문서 */
+  var _reportedChats = {};    /* 관리자: 신고된 대화방 */
+  var _chatsUnsub = null;
+  var _openChatRedraw = null; /* 열려 있는 채팅창 다시 그리기 */
+  function stopChats() { if (_chatsUnsub) { try { _chatsUnsub(); } catch (e) {} } _chatsUnsub = null; _chats = {}; _reportedChats = {}; }
+  function startChats(claims) {
+    stopChats();
+    var uid = authUid();
+    if (!uid) return;
+    var q, isAdm = claims.admin === 1;
+    if (isAdm) q = db.collection('chats').where('reportedAt', '!=', null);
+    else if (claims.m === 1) q = db.collection('chats').where('viewers', 'array-contains', uid);
+    else return;
+    _chatsUnsub = q.onSnapshot(function (qs) {
+      var m = {}; qs.forEach(function (d) { m[d.id] = d.data(); });
+      if (isAdm) _reportedChats = m; else _chats = m;
+      if (_openChatRedraw) _openChatRedraw();
+      schedulePaint();
+    }, function (err) { try { console.warn('chats listen', err && err.code); } catch (e) {} });
+  }
   function dmPairKey(a, b) { return [a, b].sort().join('__'); }
   function dmThread(state, meId, otherId) {
     var key = dmPairKey(meId, otherId);
-    return (state.dm || []).filter(function (m) { return m.pair === key; })
-      .sort(function (a, b) { return (a.at || '').localeCompare(b.at || ''); });
+    var room = _chats[key] || _reportedChats[key] || null;
+    var cleared = (room && room.clearedAt && room.clearedAt[meId]) || '';
+    var seenIds = {}, out = [];
+    ((room && room.msgs) || []).concat((state.dm || []).filter(function (m) { return m.pair === key; })).forEach(function (m) {
+      if (seenIds[m.id]) return; seenIds[m.id] = 1;
+      if (cleared && (m.at || '') <= cleared) return; /* 내가 지운 시점 이전 메시지는 내 화면에서만 숨김 */
+      out.push(m);
+    });
+    return out.sort(function (a, b) { return (a.at || '').localeCompare(b.at || ''); });
   }
   function dmUnreadFrom(state, meId, otherId) {
     if (!meId) return 0;
     var seen = ''; try { seen = localStorage.getItem('dmseen_' + meId + '_' + otherId) || ''; } catch (e) {}
-    var key = dmPairKey(meId, otherId);
-    return (state.dm || []).filter(function (m) { return m.pair === key && m.toId === meId && (m.at || '') > seen; }).length;
+    return dmThread(state, meId, otherId).filter(function (m) { return m.toId === meId && (m.at || '') > seen; }).length;
+  }
+  /* 이 프로필(meId)이 참여한 대화방들 (지난 대화 목록용) */
+  function myChatRooms(meId) {
+    return Object.keys(_chats).map(function (k) { return _chats[k]; }).filter(function (r) { return (r.members || []).indexOf(meId) >= 0; });
   }
   function markDmSeen(meId, otherId) { try { localStorage.setItem('dmseen_' + meId + '_' + otherId, new Date().toISOString()); } catch (e) {} }
-  function sendDm(meId, otherId, text, viaMm) {
+  function sendDm(meId, otherId, text) {
     text = (text || '').trim();
     if (!text || !meId || !otherId) return Promise.resolve();
-    /* 보관(휴면) 계정에게는 채팅 전송 불가 — 로그인도 못 하고 푸시도 가면 안 됨 */
+    /* 보관(휴면) 계정에게는 채팅 전송 불가 — 로그인도 못 하고 푸시도 가면 안 됨 (서버도 다시 확인) */
     var otherE = ((currentState && currentState.entries) || []).find(function (x) { return x.id === otherId; });
     if (otherE && otherE.deactivated) return Promise.reject(new Error('상대가 지금 휴면(보관) 중이라 메시지를 보낼 수 없어요.'));
-    var m = { id: genId(), pair: dmPairKey(meId, otherId), fromId: meId, toId: otherId, text: text, at: new Date().toISOString() };
-    if (viaMm) m.viaMm = true; /* 주선자가 친구 대신 보낸 메시지 */
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var dm = (s.dm || []).concat([m]);
-        if (dm.length > 3000) dm = dm.slice(dm.length - 3000);
-        tx.update(stateRef, { dm: dm });
-      });
+    /* 서버가 권한(내 프로필·주선자, 대화 수락 여부) 확인 후 대화방에 저장하고 상대에게 알림 */
+    return callFn('chatAction', { op: 'send', as: meId, other: otherId, text: text }).then(function (r) {
+      var m = r && r.data && r.data.msg; var key = dmPairKey(meId, otherId);
+      if (m) { /* 구독 갱신 전에도 바로 보이도록 */
+        var room = _chats[key] || { pair: key, members: [meId, otherId].sort(), msgs: [] };
+        if (!(room.msgs || []).some(function (x) { return x.id === m.id; })) room.msgs = (room.msgs || []).concat([m]);
+        _chats[key] = room;
+      }
     });
   }
   /* 대화 상대(친구 측) 메시지의 발신 주체 라벨: 주선자 대신 보냄 vs 친구 본인 */
@@ -3832,18 +3883,28 @@
     if (!me) { modalNotice('로그인 필요', '먼저 로그인해주세요.'); return; }
     /* 주선자가 친구로 전환한 상태에서 대신 대화할 수 있음 → 보낸 메시지엔 "🤝 주선자" 라벨이 붙음 */
     var viaMm = !!(me.managedBy && me.managedBy === currentUser.id && !me.ownerSelf && isMatchmakerEntry(myAuthEntry(currentState)));
-    if (!canViewContactOf(currentState, me.id, otherId)) { modalNotice('안내', '대화 신청이 수락되면 채팅할 수 있어요.'); return; }
-    var otherNick = nickForEntry(currentState, otherId);
+    var connected = canViewContactOf(currentState, me.id, otherId);
+    var hasRoom = !!_chats[dmPairKey(me.id, otherId)];
+    if (!connected && !hasRoom) { modalNotice('안내', '대화 신청이 수락되면 채팅할 수 있어요.'); return; }
+    var otherAlive = !!((currentState.entries || []).find(function (x) { return x.id === otherId; }));
+    var otherNick = otherAlive ? nickForEntry(currentState, otherId) : '(탈퇴한 회원)';
     var otherDeac = !!((currentState.entries || []).find(function (x) { return x.id === otherId && x.deactivated; }));
+    var readOnly = !connected || !otherAlive; /* 연결이 해제됐거나 탈퇴한 상대: 지난 대화만 보기 */
     var overlay = openModal(
       '<h3>💬 ' + escapeHtml(otherNick) + '님과의 채팅</h3>' +
       (viaMm ? '<p class="modal-msg" style="background:var(--gold-soft);border:1px solid var(--gold);border-radius:8px;padding:6px 10px;margin:0 0 8px;font-size:0.82rem;">🤝 주선자로 대신 대화 중이에요. 보내는 메시지엔 <b>주선자</b> 표시가 붙어요.</p>' : '') +
       '<div id="dm-body" style="max-height:44vh;overflow-y:auto;margin:6px 0 10px;padding:0 2px;"></div>' +
       (otherDeac ? '<p class="modal-msg" style="background:#f1f3f4;border-radius:8px;padding:6px 10px;margin:0 0 8px;font-size:0.84rem;">💤 ' + escapeHtml(otherNick) + '님은 지금 <b>휴면(보관) 중</b>이라 메시지를 보낼 수 없어요. 이전 대화는 볼 수 있어요.</p>' : '') +
-      '<textarea class="modal-input" id="dm-text" rows="2" maxlength="500" placeholder="' + (otherDeac ? '휴면 중인 회원에게는 보낼 수 없어요' : '메시지 입력 (최대 500자)') + '"' + (otherDeac ? ' disabled' : '') + '></textarea>' +
+      (readOnly && !otherDeac ? '<p class="modal-msg" style="background:#f1f3f4;border-radius:8px;padding:6px 10px;margin:0 0 8px;font-size:0.84rem;">📁 ' + (otherAlive ? '대화 연결이 해제돼' : '탈퇴한 회원이라') + ' 지난 대화만 볼 수 있어요.</p>' : '') +
+      '<textarea class="modal-input" id="dm-text" rows="2" maxlength="500" placeholder="' + (otherDeac ? '휴면 중인 회원에게는 보낼 수 없어요' : (readOnly ? '지금은 보낼 수 없어요' : '메시지 입력 (최대 500자)')) + '"' + ((otherDeac || readOnly) ? ' disabled' : '') + '></textarea>' +
+      '<div style="display:flex;gap:6px;margin-top:8px;">' +
+        '<button type="button" class="card-btn" id="dm-clear" style="flex:none;padding:3px 10px;font-size:0.78rem;">🗑 대화 지우기</button>' +
+        '<button type="button" class="card-btn" id="dm-report" style="flex:none;padding:3px 10px;font-size:0.78rem;color:#c5221f;">🚨 신고</button>' +
+      '</div>' +
+      '<p class="modal-msg" style="margin:6px 0 0;font-size:0.74rem;color:var(--muted);">🔒 대화는 두 사람만 볼 수 있어요. 관리자는 신고가 접수된 대화만 확인해요.</p>' +
       '<div class="modal-actions">' +
         '<button type="button" class="card-btn" id="modal-cancel">닫기</button>' +
-        '<button type="button" class="card-btn primary" id="dm-send"' + (otherDeac ? ' disabled style="opacity:.45;"' : '') + '>보내기</button>' +
+        '<button type="button" class="card-btn primary" id="dm-send"' + ((otherDeac || readOnly) ? ' disabled style="opacity:.45;"' : '') + '>보내기</button>' +
       '</div>'
     );
     overlay.classList.add('wide-modal');
@@ -3855,29 +3916,69 @@
     }
     draw(); markDmSeen(me.id, otherId);
     var lastCount = dmThread(currentState, me.id, otherId).length;
-    /* 열려 있는 동안 자동 갱신(폴링): 상대가 보낸 새 메시지를 앱 전체 리페인트 없이 채팅창에만 반영 */
-    var poll = setInterval(function () {
-      stateRef.get({ source: 'server' }).then(function (doc) {
-        if (!doc.exists) return;
-        currentState = doc.data();
-        var th = dmThread(currentState, me.id, otherId);
-        if (th.length !== lastCount) { lastCount = th.length; draw(); markDmSeen(me.id, otherId); }
-      }).catch(function () {});
-    }, 3500);
-    function close() { clearInterval(poll); closeModal(overlay); paint(currentState); }
+    /* 대화방 실시간 구독이 새 메시지를 받으면 채팅창만 다시 그림 (예전: 3.5초마다 메인 문서 전체를 다시 받던 폴링) */
+    _openChatRedraw = function () {
+      var th = dmThread(currentState, me.id, otherId);
+      if (th.length !== lastCount) { lastCount = th.length; draw(); markDmSeen(me.id, otherId); }
+    };
+    function close() { _openChatRedraw = null; closeModal(overlay); paint(currentState); }
+    overlay.querySelector('#dm-clear').addEventListener('click', function () {
+      modalConfirm('대화 지우기', '내 화면에서 지금까지의 대화를 지울까요? 상대방 화면에서는 지워지지 않아요.', '지우기', 'danger').then(function (ok) {
+        if (!ok) return;
+        callFn('chatAction', { op: 'clear', as: me.id, other: otherId }).then(function () {
+          var room = _chats[dmPairKey(me.id, otherId)];
+          if (room) { room.clearedAt = Object.assign({}, room.clearedAt || {}); room.clearedAt[me.id] = new Date().toISOString(); }
+          lastCount = -1; _openChatRedraw && _openChatRedraw();
+        }).catch(function (err) { modalNotice('오류', '지우지 못했어요: ' + ((err && err.message) || err)); });
+      });
+    });
+    overlay.querySelector('#dm-report').addEventListener('click', function () {
+      modalMessage('🚨 대화 신고', '신고하면 관리자가 이 대화를 확인할 수 있게 돼요. 어떤 점이 문제였는지 알려주세요.', '신고하기', 'danger', '예: 불쾌한 표현, 금전 요구, 사칭 의심 등', true).then(function (reason) {
+        reason = (reason || '').trim();
+        if (!reason) return;
+        callFn('chatAction', { op: 'report', as: me.id, other: otherId, reason: reason }).then(function () {
+          modalNotice('신고 접수 ✅', '관리자가 확인할게요. 불편을 드려 죄송해요.');
+        }).catch(function (err) { modalNotice('오류', '신고하지 못했어요: ' + ((err && err.message) || err)); });
+      });
+    });
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
     overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
     overlay.querySelector('#dm-send').addEventListener('click', function () {
       var ta = overlay.querySelector('#dm-text'); var t = ta.value.trim();
       if (!t) return;
       var btn = overlay.querySelector('#dm-send'); btn.disabled = true;
-      sendDm(me.id, otherId, t, viaMm).then(function () {
-        ta.value = ''; return refreshNow();
+      sendDm(me.id, otherId, t).then(function () {
+        ta.value = '';
       }).then(function () {
         draw(); markDmSeen(me.id, otherId);
         lastCount = dmThread(currentState, me.id, otherId).length;
         btn.disabled = false;
       }).catch(function (err) { btn.disabled = false; modalNotice('오류', '전송 실패: ' + (err.message || err)); });
+    });
+  }
+  /* 관리자: 신고된 대화 읽기 전용 보기 (열람 기록은 서버가 남김) */
+  function openReportedChat(pair) {
+    var r = _reportedChats[pair]; if (!r) return;
+    callFn('chatAction', { op: 'adminViewed', pair: pair }).catch(function () {});
+    var names = (r.members || []).map(function (id) { return nickForEntry(currentState, id); });
+    var lines = (r.msgs || []).map(function (m) {
+      var mine = m.fromId === (r.members || [])[0];
+      return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? 'flex-start' : 'flex-end') + ';margin:6px 0;">' +
+        '<div style="font-size:0.66rem;font-weight:700;color:var(--muted);">' + escapeHtml(nickForEntry(currentState, m.fromId)) + (m.viaMm ? ' (🤝 주선자)' : '') + ' · ' + fmtDate(m.at) + '</div>' +
+        '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:#efefef;white-space:pre-wrap;word-break:break-word;">' + escapeHtml(m.text) + '</div></div>';
+    }).join('');
+    var ov = openModal('<h3>🚨 신고된 대화</h3>' +
+      '<p class="modal-msg" style="font-size:0.8rem;">' + escapeHtml(names.join(' ↔ ')) + ' · 사유: ' + escapeHtml(r.reportReason || '') + '</p>' +
+      '<div style="max-height:52vh;overflow-y:auto;">' + (lines || '<p class="sub">메시지가 없어요.</p>') + '</div>' +
+      '<div class="modal-actions"><button type="button" class="card-btn primary" id="modal-ok">닫기</button></div>');
+    ov.classList.add('wide-modal');
+    ov.querySelector('#modal-ok').addEventListener('click', function () { closeModal(ov); });
+  }
+  function resolveReportedChat(pair) {
+    modalConfirm('신고 처리 완료', '이 신고를 처리 완료로 닫을까요? 닫으면 관리자도 이 대화를 다시 볼 수 없어요.', '처리 완료', 'primary').then(function (ok) {
+      if (!ok) return;
+      callFn('chatAction', { op: 'resolve', pair: pair }).then(function () { modalNotice('완료', '신고를 처리 완료로 닫았어요.'); })
+        .catch(function (err) { modalNotice('오류', '처리하지 못했어요: ' + ((err && err.message) || err)); });
     });
   }
   /* 관리자↔회원 메시지를 대화방(말풍선)으로 렌더 — 관리자=오른쪽(accent) · 회원=왼쪽(회색). withDel이면 개별 삭제 ✕ */
@@ -5573,6 +5674,22 @@
     var body = rows.length
       ? (rows.length > 5 ? '<div style="max-height:340px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + rows.join('') + '</div>' : rows.join(''))
       : '<p class="sub" style="margin:0;">아직 연결된 사람이 없어요. 사진·대화 요청이 승인되면 여기 표시돼요.</p>';
+    /* 지금은 연결이 없지만 대화 기록이 남은 방 (연결 해제·탈퇴): 읽기 전용으로 열기 */
+    var pastRooms = myChatRooms(me.id).filter(function (r) {
+      var other = (r.members || []).filter(function (id) { return id !== me.id; })[0];
+      return other && !canViewContactOf(state, me.id, other) && dmThread(state, me.id, other).length;
+    });
+    if (pastRooms.length) {
+      body += '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);">' +
+        '<div class="sub" style="margin:0 0 6px;font-size:0.8rem;">📁 지난 대화 (연결 해제·탈퇴한 상대, 읽기 전용)</div>' +
+        pastRooms.map(function (r) {
+          var other = (r.members || []).filter(function (id) { return id !== me.id; })[0];
+          var alive = (state.entries || []).some(function (e) { return e.id === other; });
+          var un = dmUnreadFrom(state, me.id, other);
+          return '<button type="button" class="card-btn" data-action="dm-chat" data-id="' + escapeHtml(other) + '" style="flex:none;margin:0 6px 6px 0;padding:4px 10px;font-size:0.8rem;">💬 ' +
+            escapeHtml(alive ? nickForEntry(state, other) : '(탈퇴한 회원)') + (un ? ' <span class="count blink">' + un + '</span>' : '') + '</button>';
+        }).join('') + '</div>';
+    }
     return '<div class="mine-section">' +
         '<h3>🔗 내 연결<span class="count">' + rows.length + '</span></h3>' +
         '<p class="sub" style="margin:0 0 6px;">사진·대화 권한이 있는 상대예요. 이름=프로필 · 파란 버튼이 현재 상태(누르면 회수) · 💬 대화는 채팅으로 이어져요.</p>' +
@@ -6736,7 +6853,23 @@
             '<th>회원</th><th style="text-align:center;">👀 무응답</th><th style="text-align:center;">📭 미접속</th><th style="text-align:center;">💤 접속</th>' +
           '</tr></thead><tbody>' + contactTable + '</tbody></table></div>'
         : '<p class="sub">연락이 필요한 회원이 없어요 🙆</p>'), false, 'stale');
+    /* 🚨 신고된 대화: 신고가 접수된 대화방만 관리자가 열람 가능(규칙으로 강제). 열람·처리는 서버가 기록 */
+    var repRooms = Object.keys(_reportedChats).map(function (k) { return _reportedChats[k]; })
+      .sort(function (a, b) { return (b.reportedAt || '').localeCompare(a.reportedAt || ''); });
+    var reportsSection = adminFold('🚨 신고된 대화', repRooms.length,
+      '<p class="sub">회원이 신고한 대화만 여기 보여요. [대화 보기]를 누르면 열람 기록이 남아요. 처리가 끝나면 [처리 완료]로 닫아 주세요(다시 열람 불가).</p>' +
+      (repRooms.length ? repRooms.map(function (r) {
+        var names = (r.members || []).map(function (id) { return escapeHtml(nickForEntry(state, id)); }).join(' ↔ ');
+        return '<div style="border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:8px;">' +
+          '<div style="font-weight:700;">' + names + '</div>' +
+          '<div class="sub" style="margin:3px 0;">신고: ' + escapeHtml(nickForEntry(state, r.reportedBy)) + ' · ' + fmtDate(r.reportedAt) + '</div>' +
+          '<div style="font-size:0.86rem;margin-bottom:6px;">사유: ' + escapeHtml(r.reportReason || '') + '</div>' +
+          '<button type="button" class="card-btn" data-action="report-view" data-id="' + escapeHtml(r.pair) + '" style="flex:none;">대화 보기</button> ' +
+          '<button type="button" class="card-btn approve" data-action="report-resolve" data-id="' + escapeHtml(r.pair) + '" style="flex:none;">처리 완료</button>' +
+        '</div>';
+      }).join('') : '<p class="sub">신고된 대화가 없어요 🙆</p>'), false, 'reports');
     var secHtml = {
+      reports: reportsSection,
       usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), pending: pendingSection, pinreset: pinResetSectionHtml(state, adminFold), held: heldSection, stale: staleSection, editrev: editRevSection,
       deaclist: deacListSection, dellog: delLogSection,
       active: activeReqSection, adminmsg: adminMsgSection,
@@ -6909,14 +7042,20 @@
     var connNow = (state.dateRequests || []).filter(function (r) { return (r.type || 'contact') === 'contact' && r.approved; }).length;
     var connCount = Array.isArray(state.connLog) ? state.connLog.length : Math.max((typeof state.connEver === 'number' ? state.connEver : 0), connNow);
     var coupleCount = (state.coupleReports || []).filter(function (r) { return r.confirmed; }).length; /* 관리자 확인된 커플만 */
+    /* 누적 가입 = 승인된 회원(보관 포함, 주선자·테스트 제외). 공개 모드는 서버가 계산한 값 */
+    var memberTotal = (typeof state.memberTotal === 'number') ? state.memberTotal
+      : (state.entries || []).filter(function (e) { return !e.isMatchmaker && !e.testAccount; }).length;
     var liveBits = [];
     if (newThisWeek > 0) liveBits.push('이번 주 새 멤버 <b>' + newThisWeek + '</b>명');
     if (connCount > 0) liveBits.push('누적 연결 <b>' + connCount + '</b>쌍');
+    if (memberTotal > 0) liveBits.push('누적 가입 <b>' + memberTotal + '</b>명');
     if (coupleCount > 0) liveBits.push('🎉 커플 탄생 <b>' + coupleCount + '</b>쌍');
-    if (!liveBits.length && liveMembers.length > 0) liveBits.push('함께하는 멤버 <b>' + liveMembers.length + '</b>명');
+    /* 한 번에 하나씩, 몇 초마다 바뀜 (startLiveRotator) */
+    var liveIdx = liveBits.length ? (_liveRotIdx % liveBits.length) : 0;
     var liveBanner = (liveBits.length
-      ? '<div class="live-banner">✨ ' + liveBits.join(' <span class="live-dot">·</span> ') + '</div>'
+      ? '<div class="live-banner" id="live-rotator" data-bits="' + escapeHtml(JSON.stringify(liveBits)) + '">✨ <span class="live-rot">' + liveBits[liveIdx] + '</span></div>'
       : '') + coupleReviewsHtml(state);
+    startLiveRotator();
     /* 보류(보완 요청)된 신청자에게 모든 탭 상단에 눈에 띄는 안내 배너 */
     var myPendNow = currentUser ? findMyPending(state) : null;
     var heldBanner = (myPendNow && myPendNow.heldReason)
@@ -10283,6 +10422,8 @@
       }
       else if (action === 'reveal-mine') handleRevealMine(id);
       else if (action === 'dm-chat') openDmChat(id);
+      else if (action === 'report-view') { if (isAdminUnlocked) openReportedChat(id); }
+      else if (action === 'report-resolve') { if (isAdminUnlocked) resolveReportedChat(id); }
       else if (action === 'revoke-photo-viewer') handleRevokePhotoViewer(id);
       else if (action === 'revoke-photo-link') handleRevokePhotoViewer(id);
       else if (action === 'revoke-contact-link') handleRevokeContactLink(id);

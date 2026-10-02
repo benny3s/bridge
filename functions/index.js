@@ -420,6 +420,8 @@ exports.onStateChange = functions
     const jobs = [];
     jobs.push(syncPublicView(after).catch((e) => console.error('syncPublicView', e)));
     jobs.push(sweepSecrets(before, after).catch((e) => console.error('sweepSecrets', e)));
+    jobs.push(migrateDmToChats(after).catch((e) => console.error('migrateDmToChats', e)));
+    jobs.push(refreshChatViewers(before, after).catch((e) => console.error('refreshChatViewers', e)));
     (after.dateRequests || []).forEach((r) => {
       const prev = beforeMap[r.id];
       const type = (r.type || 'contact') === 'photo' ? '사진' : '대화'; /* 앱 용어(대화 신청)와 통일 */
@@ -671,7 +673,8 @@ function buildPublicView(state) {
     adminPub: (state.adminAuth && state.adminAuth.publicKeyJwk) || null,
     teaser, loginDir, reviews,
     connCount: Array.isArray(state.connLog) ? state.connLog.length : Math.max(typeof state.connEver === 'number' ? state.connEver : 0, connNow),
-    coupleCount: reports.filter((r) => r.confirmed).length
+    coupleCount: reports.filter((r) => r.confirmed).length,
+    memberTotal: entries.filter((e) => !e.isMatchmaker && !e.testAccount).length
   };
 }
 async function syncPublicView(state) {
@@ -1045,3 +1048,168 @@ async function purgeDeletedSecrets() {
     }
   }
 }
+
+/* ══ 3단계-②: 대화방 (chats/{pair}) ══
+   두 사람당 문서 1개. 읽기는 viewers(두 사람 + 각자의 주선자) — 관리자는 신고된 방만(규칙에서 강제).
+   쓰기는 서버만: 보내기·지우기·신고는 chatAction. 예전 state.dm 은 onStateChange 가 대화방으로 옮김.
+   지우기 = 내 화면에서만(clearedAt[내 id]), 두 사람 모두 지운 뒤 새 메시지가 없으면 문서 삭제.
+   탈퇴·삭제된 회원이 있어도 방은 그대로(상대 쪽 기록 유지). */
+const CHAT_MAX_MSGS = 2000;
+function pairOf(a, b) { return [a, b].sort().join('__'); }
+function chatViewers(entries, members) {
+  const v = {};
+  members.forEach((id) => {
+    v[id] = 1;
+    const e = (entries || []).find((x) => x.id === id);
+    if (e && e.managedBy) v[e.managedBy] = 1;
+  });
+  return Object.keys(v);
+}
+function chatApproved(state, a, b) {
+  return (state.dateRequests || []).some((r) => (r.type || 'contact') === 'contact' && r.approved &&
+    ((r.fromId === a && r.toId === b) || (r.fromId === b && r.toId === a)));
+}
+/* 호출자(토큰 uid)가 이 프로필로 행동할 수 있는지: 본인이거나 그 프로필의 주선자 */
+function actsAs(context, entry) {
+  const uid = context.auth && context.auth.uid;
+  return !!(entry && uid && (uid === entry.id || (entry.managedBy && uid === entry.managedBy)));
+}
+/* 예전 state.dm(한 배열)을 대화방 문서로 이동. 옮긴 메시지는 state.dm 에서 제거 */
+async function migrateDmToChats(after) {
+  const dm = after.dm || [];
+  if (!dm.length) return;
+  const entries = after.entries || [];
+  const byPair = {};
+  dm.forEach((m) => { const p = m.pair || pairOf(m.fromId, m.toId); (byPair[p] = byPair[p] || []).push(m); });
+  const moved = {};
+  for (const p of Object.keys(byPair)) {
+    const ref = db.collection('chats').doc(p);
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const cur = snap.exists ? snap.data() : null;
+      const have = {}; ((cur && cur.msgs) || []).forEach((m) => { have[m.id] = 1; });
+      const add = byPair[p].filter((m) => !have[m.id]).map((m) => {
+        const o = { id: m.id, fromId: m.fromId, toId: m.toId, text: String(m.text || ''), at: m.at || new Date().toISOString() };
+        if (m.viaMm) o.viaMm = true;
+        return o;
+      });
+      const members = p.split('__');
+      const msgs = ((cur && cur.msgs) || []).concat(add).sort((x, y) => String(x.at).localeCompare(String(y.at))).slice(-CHAT_MAX_MSGS);
+      const last = msgs[msgs.length - 1] || {};
+      tx.set(ref, Object.assign({}, cur || { pair: p, members, createdAt: new Date().toISOString(), clearedAt: {} }, {
+        viewers: chatViewers(entries, members), msgs, lastAt: last.at || null, lastFrom: last.fromId || null, updatedAt: new Date().toISOString()
+      }));
+    });
+    byPair[p].forEach((m) => { moved[m.id] = 1; });
+  }
+  const ref = db.doc('app/state');
+  await db.runTransaction(async (tx) => {
+    const s = (await tx.get(ref)).data() || {};
+    const left = (s.dm || []).filter((m) => !moved[m.id]);
+    if (left.length !== (s.dm || []).length) tx.update(ref, { dm: left });
+  });
+}
+/* 주선자가 바뀐 회원이 있으면 그 회원의 대화방 viewers 갱신 */
+async function refreshChatViewers(before, after) {
+  const prev = {}; (before.entries || []).forEach((e) => { prev[e.id] = e.managedBy || ''; });
+  const changed = (after.entries || []).filter((e) => prev[e.id] !== undefined && prev[e.id] !== (e.managedBy || '')).map((e) => e.id);
+  for (const id of changed) {
+    const qs = await db.collection('chats').where('members', 'array-contains', id).get();
+    for (const d of qs.docs) {
+      await d.ref.set({ viewers: chatViewers(after.entries || [], d.data().members || []) }, { merge: true });
+    }
+  }
+}
+
+exports.chatAction = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 20, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    data = data || {};
+    const c = claimsOf(context);
+    const op = String(data.op || '');
+    const state = (await db.doc('app/state').get()).data() || {};
+    const entries = state.entries || [];
+
+    /* ── 관리자: 신고된 방 열람 기록 · 신고 처리 완료 ── */
+    if (op === 'adminViewed' || op === 'resolve') {
+      if (c.admin !== 1) throw new HttpsError('permission-denied', '관리자만 할 수 있어요.');
+      const pair = String(data.pair || '');
+      const ref = db.collection('chats').doc(pair);
+      const snap = await ref.get();
+      if (!snap.exists || !snap.data().reportedAt) throw new HttpsError('failed-precondition', '신고된 대화방이 아니에요.');
+      const names = (snap.data().members || []).map((id) => nameOf(entries, id)).join(' ↔ ');
+      if (op === 'resolve') {
+        const d = snap.data();
+        const hist = (d.reportHistory || []).concat([{ at: d.reportedAt, by: d.reportedBy || '', reason: d.reportReason || '', resolvedAt: new Date().toISOString() }]).slice(-20);
+        await ref.set({ reportHistory: hist, reportedAt: admin.firestore.FieldValue.delete(), reportedBy: admin.firestore.FieldValue.delete(), reportReason: admin.firestore.FieldValue.delete() }, { merge: true });
+      }
+      await db.runTransaction(async (tx) => {
+        const s = (await tx.get(db.doc('app/state'))).data() || {};
+        tx.update(db.doc('app/state'), { logs: (s.logs || []).concat([logItem('admin', '관리자', (op === 'resolve' ? '신고 대화 처리 완료: ' : '신고 대화 열람: ') + names)]) });
+      });
+      return { ok: true };
+    }
+
+    if (c.m !== 1) throw new HttpsError('permission-denied', '승인된 회원만 대화할 수 있어요.');
+    const asId = String(data.as || '');
+    const otherId = String(data.other || '');
+    const asE = entries.find((e) => e.id === asId);
+    if (!asE || !actsAs(context, asE)) throw new HttpsError('permission-denied', '이 프로필로 대화할 수 없어요.');
+    if (!otherId || otherId === asId) throw new HttpsError('invalid-argument', '대화 상대를 확인해주세요.');
+    const pair = pairOf(asId, otherId);
+    const ref = db.collection('chats').doc(pair);
+
+    if (op === 'send') {
+      const text = String(data.text || '').trim().slice(0, 500);
+      if (!text) throw new HttpsError('invalid-argument', '메시지를 입력해주세요.');
+      const otherE = entries.find((e) => e.id === otherId);
+      if (!otherE) throw new HttpsError('failed-precondition', '탈퇴한 회원에게는 보낼 수 없어요.');
+      if (otherE.deactivated) throw new HttpsError('failed-precondition', '상대가 지금 휴면(보관) 중이라 메시지를 보낼 수 없어요.');
+      if (asE.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요.');
+      if (!chatApproved(state, asId, otherId)) throw new HttpsError('failed-precondition', '대화 신청이 수락된 사이에서만 대화할 수 있어요.');
+      const m = { id: nodeCrypto.randomUUID(), fromId: asId, toId: otherId, text, at: new Date().toISOString() };
+      if (asE.managedBy && context.auth.uid === asE.managedBy && !asE.ownerSelf) m.viaMm = true; /* 주선자가 친구 대신 보냄 */
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const cur = snap.exists ? snap.data() : { pair, members: [asId, otherId].sort(), createdAt: m.at, clearedAt: {} };
+        const msgs = (cur.msgs || []).concat([m]).slice(-CHAT_MAX_MSGS);
+        tx.set(ref, Object.assign({}, cur, { viewers: chatViewers(entries, cur.members || [asId, otherId]), msgs, lastAt: m.at, lastFrom: asId, updatedAt: m.at }));
+      });
+      await notifyRecipient(entries, otherId, '💬 ' + nameOf(entries, asId) + '님의 채팅', text.slice(0, 40), { route: 'dm', focusId: asId }).catch(() => {});
+      return { ok: true, msg: m };
+    }
+
+    if (op === 'clear') {
+      let deleted = false;
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) return;
+        const d = snap.data();
+        const now = new Date().toISOString();
+        const cleared = Object.assign({}, d.clearedAt || {}, { [asId]: now });
+        const members = d.members || [];
+        /* 두 사람 모두 마지막 메시지 이후에 지웠고 신고 중이 아니면 문서 삭제 */
+        const allCleared = members.every((id) => cleared[id] && (!d.lastAt || cleared[id] >= d.lastAt));
+        if (allCleared && !d.reportedAt) { tx.delete(ref); deleted = true; }
+        else tx.update(ref, { clearedAt: cleared });
+      });
+      return { ok: true, deleted };
+    }
+
+    if (op === 'report') {
+      const reason = String(data.reason || '').trim().slice(0, 300);
+      if (!reason) throw new HttpsError('invalid-argument', '신고 사유를 적어주세요.');
+      const snap = await ref.get();
+      if (!snap.exists) throw new HttpsError('not-found', '대화 내용이 없어요.');
+      await ref.set({ reportedAt: new Date().toISOString(), reportedBy: asId, reportReason: reason }, { merge: true });
+      await db.runTransaction(async (tx) => {
+        const s = (await tx.get(db.doc('app/state'))).data() || {};
+        tx.update(db.doc('app/state'), { logs: (s.logs || []).concat([logItem('report', nameOf(entries, asId), '대화 신고 → ' + nameOf(entries, otherId))]) });
+      });
+      await sendToAdmin('🚨 대화 신고', nameOf(entries, asId) + '님이 ' + nameOf(entries, otherId) + '님과의 대화를 신고했어요').catch(() => {});
+      return { ok: true };
+    }
+
+    throw new HttpsError('invalid-argument', '알 수 없는 요청이에요.');
+  });
