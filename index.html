@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-400';
+  var APP_VERSION = '2026-10-02-401';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -3767,11 +3767,10 @@
   function appendLog(type, actor, detail) {
     if (dataMode !== 'full') return; /* 손님·승인 대기 기록은 서버(applicantAction)가 남김 */
     var entry = { id: genId(), at: new Date().toISOString(), type: type, actor: actor || '', detail: detail || '' };
-    stateRef.get().then(function (doc) {
-      var s = doc.exists ? doc.data() : {};
-      var logs = (s.logs || []).concat([entry]);
-      return stateRef.update({ logs: logs });
-    }).then(function () { maybeArchiveLogs(); }).catch(function () {});
+    /* 한 줄만 원자적으로 추가 (예전: 전체 읽기→추가→전체 덮어쓰기라, 두 사람이 동시에 기록하면 늦게 쓴 쪽이
+       먼저 쓴 기록을 지워버렸음 — 보안 감시가 '기록 삭제'로 오탐. 메인 문서 전체를 읽던 비용도 없어짐) */
+    stateRef.update({ logs: firebase.firestore.FieldValue.arrayUnion(entry) })
+      .then(function () { maybeArchiveLogs(); }).catch(function () {});
   }
   var _archivingLogs = false;
   /* 최근 로그가 임계치를 넘으면 오래된 것을 app/logs 로 배치 이동 (매 기록마다 X · ~수일에 한 번).

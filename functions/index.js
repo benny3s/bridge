@@ -1397,7 +1397,9 @@ function detectTamperIssues(before, after) {
   /* 활동 기록: 회원은 덧붙이기만. 오래된 기록 일괄 보관(archive, 150건 이상 한꺼번에)은 정상, 몇 건만 지우거나 고치면 흔적 지우기 의심 */
   const lb = {}; (before.logs || []).forEach((l) => { if (l && l.id) lb[l.id] = l; });
   const la = {}; (after.logs || []).forEach((l) => { if (l && l.id) la[l.id] = l; });
-  const removedLogs = Object.keys(lb).filter((id) => !la[id]).map((id) => lb[id]);
+  /* 2분 이내에 생긴 기록이 사라진 건 예전 앱의 동시 저장 충돌(읽기→덮어쓰기)일 가능성이 커서 제외 */
+  const recentCut = Date.now() - 120000;
+  const removedLogs = Object.keys(lb).filter((id) => !la[id]).map((id) => lb[id]).filter((l) => !(l.at && new Date(l.at).getTime() > recentCut));
   const editedLogs = Object.keys(lb).filter((id) => la[id] && stableJson(lb[id]) !== stableJson(la[id]));
   if ((removedLogs.length && removedLogs.length < 150) || editedLogs.length) {
     issues.push({ coll: 'logs', id: '-', kind: 'removed', fields: [], before: removedLogs.concat(editedLogs.map((id) => lb[id])).slice(0, 50), after: null });
