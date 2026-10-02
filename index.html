@@ -922,7 +922,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-393';
+  var APP_VERSION = '2026-10-02-394';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1084,22 +1084,32 @@
       o._wn = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random());
       return o;
     }
+    /* 트랜잭션·배치 객체는 라이브러리 내부 하위 클래스라 원형(prototype) 수정이 안 먹음 → 만들어질 때 그 객체를 감쌈 */
+    function wrapWriter(w) {
+      if (!w || w.__stamped) return w;
+      var u0 = w.update, s0 = w.set;
+      w.update = function (ref, data) {
+        var args = Array.prototype.slice.call(arguments);
+        if (isState(ref) && args.length === 2) args[1] = stamp(data);
+        return u0.apply(w, args);
+      };
+      w.set = function (ref, data) {
+        var args = Array.prototype.slice.call(arguments);
+        if (isState(ref)) args[1] = stamp(data);
+        return s0.apply(w, args);
+      };
+      w.__stamped = true;
+      return w;
+    }
     try {
       var FS = firebase.firestore;
-      ['Transaction', 'WriteBatch'].forEach(function (cls) {
-        var P = FS[cls] && FS[cls].prototype; if (!P) return;
-        var u0 = P.update, s0 = P.set;
-        P.update = function (ref, data) {
-          var args = Array.prototype.slice.call(arguments);
-          if (isState(ref) && args.length === 2) args[1] = stamp(data);
-          return u0.apply(this, args);
-        };
-        P.set = function (ref, data) {
-          var args = Array.prototype.slice.call(arguments);
-          if (isState(ref)) args[1] = stamp(data);
-          return s0.apply(this, args);
-        };
-      });
+      var FP = FS.Firestore.prototype, rt0 = FP.runTransaction, b0 = FP.batch;
+      FP.runTransaction = function (fn) {
+        var args = Array.prototype.slice.call(arguments);
+        args[0] = function (tx) { return fn(wrapWriter(tx)); };
+        return rt0.apply(this, args);
+      };
+      FP.batch = function () { return wrapWriter(b0.apply(this, arguments)); };
       var D = FS.DocumentReference.prototype, du = D.update, ds = D.set;
       D.update = function (data) {
         var args = Array.prototype.slice.call(arguments);
