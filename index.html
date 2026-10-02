@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-403';
+  var APP_VERSION = '2026-10-02-404';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1189,7 +1189,8 @@
     return state;
   }
   var _secAlerts = [];
-  var _contactFilter = 'all';   /* 📞 연락 필요 필터: all | noreply | unseen | dormant | nosms */
+  var _contactFilter = 'all';
+  var _amFilter = 'talk';   /* 💬 관리자 메시지 필터: talk | auto | all */   /* 📞 연락 필요 필터: all | noreply | unseen | dormant | nosms */
   function applyContactFilter() {
     var rows = document.querySelectorAll('.contact-table tbody tr[data-cf]');
     for (var i = 0; i < rows.length; i++) {
@@ -4107,6 +4108,23 @@
     });
   }
   /* 관리자↔회원 메시지를 대화방(말풍선)으로 렌더 — 관리자=오른쪽(accent) · 회원=왼쪽(회색). withDel이면 개별 삭제 ✕ */
+  /* 관리자가 직접 쓴 말이 아닌 자동 안내(응답 재촉·휴면 안내·승인 축하·공지) — 관리자 메시지함에서 접어 보여줌 */
+  var AUTO_MSG_RE = /^(\[베니브릿지\] 확인 대기|회원님과 연결되었던|\(자동 메세지\)|축하해요! 프로필이 승인|주선자 등록이 승인)/;
+  function isAutoMsg(m) { return !!m && m.from === 'admin' && !!(m.auto || m.broadcast || AUTO_MSG_RE.test(m.text || '')); }
+  /* 연달아 온 자동 안내는 한 줄(🤖 자동 안내 N건)로 접고, 누르면 펼침 */
+  function adminThreadHtml(msgs) {
+    var out = '', run = [];
+    function flush() {
+      if (!run.length) return;
+      out += '<details class="am-auto" style="margin:6px 0;">' +
+        '<summary style="cursor:pointer;font-size:0.74rem;color:var(--muted);">🤖 자동 안내 ' + run.length + '건 · ' + fmtDate(run[run.length - 1].at) + '</summary>' +
+        run.map(function (m) { return adminChatBubble(m, true); }).join('') + '</details>';
+      run = [];
+    }
+    msgs.forEach(function (m) { if (isAutoMsg(m)) run.push(m); else { flush(); out += adminChatBubble(m, true); } });
+    flush();
+    return out;
+  }
   function adminChatBubble(m, withDel) {
     var mine = m.from === 'admin';
     var who = (mine ? '👑 관리자' : (m.guestName ? '🙋 ' + escapeHtml(m.guestName) + ' · 비회원' : '🙋 회원')) + (m.broadcast ? ' · 📢 공지' : '');
@@ -4313,6 +4331,27 @@
     }).then(function () { return refreshNow(); });
   }
   /* 관리자: 특정 회원과의 메시지 전체 삭제 (내 화면) */
+  /* 자동 안내만 있는(회원 답·직접 쓴 말 없음) 대화를 관리자 목록에서 숨김 */
+  function cleanAutoOnlyThreads() {
+    var n = 0;
+    return db.runTransaction(function (tx) {
+      return tx.get(stateRef).then(function (doc) {
+        var s = doc.data();
+        var by = {};
+        (s.messages || []).forEach(function (m) { if (!m.hiddenByAdmin) (by[m.entryId] = by[m.entryId] || []).push(m); });
+        var target = {};
+        Object.keys(by).forEach(function (eid) { if (!by[eid].some(function (m) { return m.from === 'user' || !isAutoMsg(m); })) target[eid] = 1; });
+        n = Object.keys(target).length;
+        if (!n) return;
+        var msgs = (s.messages || []).map(function (m) {
+          if (target[m.entryId] && !m.hiddenByAdmin) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByAdmin = true; return c; }
+          return m;
+        });
+        tx.update(stateRef, { messages: msgs });
+      });
+    }).then(function () { _amFilter = 'talk'; return refreshNow(); }).then(function () { modalNotice("정리 완료", n + "명을 목록에서 정리했어요."); })
+      .catch(function (e) { modalNotice('정리 실패', (e && e.message) || String(e)); });
+  }
   function deleteAdminThread(entryId) {
     return db.runTransaction(function (tx) {
       return tx.get(stateRef).then(function (doc) {
@@ -6875,7 +6914,10 @@
       (msgByEntry[m.entryId] = msgByEntry[m.entryId] || []).push(m);
     });
     function amUnreadOf(eid) { return msgByEntry[eid].filter(function (m) { return m.from === 'user' && !m.readByAdmin; }).length; }
-    function amLastAtOf(eid) { var a = msgByEntry[eid]; return a.length ? (a[a.length - 1].at || '') : ''; }
+    /* 최근 활동 = 자동 안내를 뺀 마지막 메시지 기준 (재촉 문자가 순서를 흔들지 않게) */
+    function amLastAtOf(eid) { var a = msgByEntry[eid].filter(function (m) { return !isAutoMsg(m); }); if (!a.length) a = msgByEntry[eid]; return a.reduce(function (x, m) { return (m.at || '') > x ? (m.at || '') : x; }, ''); }
+    /* 실제 대화 = 회원이 한 번이라도 썼거나 내가 직접 쓴 메시지가 있음. 아니면 '자동 안내만' */
+    function amIsTalk(eid) { return msgByEntry[eid].some(function (m) { return m.from === 'user' || !isAutoMsg(m); }); }
     /* 전체 공지(broadcast)만 받고 개인 대화(개인 메시지·회원 답장)가 없는 사람은 목록에서 제외 → 실제 나눈 대화만 */
     var msgEntryIds = Object.keys(msgByEntry).filter(function (eid) {
       return msgByEntry[eid].some(function (m) { return !m.broadcast; });
@@ -6886,10 +6928,14 @@
       if (ua !== ub) return ub - ua;
       return amLastAtOf(b).localeCompare(amLastAtOf(a));
     });
-    var adminMsgItems = msgEntryIds.map(function (eid) {
+    var amTalkIds = msgEntryIds.filter(amIsTalk);
+    var amAutoIds = msgEntryIds.filter(function (eid) { return !amIsTalk(eid); });
+    var amShownIds = _amFilter === 'auto' ? amAutoIds : (_amFilter === 'all' ? msgEntryIds : amTalkIds);
+    var adminMsgItems = amShownIds.map(function (eid) {
       var msgs = msgByEntry[eid].slice().sort(function (a, b) { return (a.at || '').localeCompare(b.at || ''); });
-      var lines = msgs.map(function (m) { return adminChatBubble(m, true); }).join('');
-      var last = msgs[msgs.length - 1];
+      var lines = adminThreadHtml(msgs);
+      var realMsgs = msgs.filter(function (m) { return !isAutoMsg(m); });
+      var last = realMsgs.length ? realMsgs[realMsgs.length - 1] : msgs[msgs.length - 1];
       var preview = (last.from === 'admin' ? '나: ' : '') + (last.broadcast ? '📢 ' : '') + (last.text || '');
       var unreadHere = amUnreadOf(eid);
       var unreadBadge = unreadHere ? ' <span class="blink-soft" style="display:inline-block;margin-left:6px;background:var(--accent);color:#fff;border-radius:999px;padding:1px 9px;font-size:0.72rem;font-weight:700;vertical-align:middle;">🔔 새 ' + unreadHere + '</span>' : '';
@@ -6916,9 +6962,17 @@
     }).join('');
     var adminMsgUnreadTotal = (state.messages || []).filter(function (m) { return m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin; }).length;
     var adminMsgTitle = '💬 관리자 메시지' + (adminMsgUnreadTotal ? ' <span class="blink-soft" style="background:var(--accent);color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">🔔 새 ' + adminMsgUnreadTotal + '</span>' : '');
-    var adminMsgSection = adminFold(adminMsgTitle, msgEntryIds.length,
-      '<p class="sub">나와 대화를 주고받은 회원이에요 (전체 공지만 받은 사람은 제외). 안 읽은 대화는 <b>위에 강조·자동 펼침</b>돼요. [💬 대화]로 답장, [👤 프로필]로 바로 이동. (✕ 개별 / 전체 삭제)</p>' +
-      (msgEntryIds.length ? adminMsgItems : '<p class="sub">아직 주고받은 대화가 없어요.</p>'), false, 'adminmsg');
+    var amBtn = function (k, label, n) { return '<button type="button" class="card-btn' + (_amFilter === k ? ' primary' : '') + '" data-action="am-filter" data-id="' + k + '" style="flex:none;padding:3px 10px;font-size:0.8rem;">' + label + ' ' + n + '</button>'; };
+    var adminMsgSection = adminFold(adminMsgTitle, amTalkIds.length,
+      '<div style="display:flex;gap:5px;flex-wrap:wrap;margin:0 0 8px;">' +
+        amBtn('talk', '💬 대화', amTalkIds.length) + amBtn('auto', '🤖 자동 안내만', amAutoIds.length) + amBtn('all', '전체', msgEntryIds.length) +
+      '</div>' +
+      (_amFilter === 'auto'
+        ? '<p class="sub">재촉·휴면 안내·승인 축하처럼 <b>자동으로 나간 안내만</b> 있고 주고받은 말은 없는 회원이에요.' +
+            (amAutoIds.length ? ' <button type="button" class="card-btn" data-action="am-clean-auto" style="flex:none;padding:2px 10px;font-size:0.78rem;">🧹 목록에서 모두 정리</button>' : '') +
+            ' <span style="color:var(--muted);">(관리자 목록에서만 숨겨요 · 회원 쪽 메시지는 그대로)</span></p>'
+        : '<p class="sub">회원이 답했거나 내가 직접 쓴 대화만 보여요. 자동 안내는 대화 안에서 <b>🤖 한 줄로 접혀</b> 있어요. 안 읽은 대화는 위에 강조·자동 펼침.</p>') +
+      (amShownIds.length ? adminMsgItems : '<p class="sub">' + (_amFilter === 'auto' ? '자동 안내만 받은 회원이 없어요 🙆' : '아직 주고받은 대화가 없어요.') + '</p>'), false, 'adminmsg');
 
     var reqEmpty = pendingStale
       ? '<p class="sub">요청 후 미접속인 대기자가 없어요 🙆</p>'
@@ -10628,6 +10682,12 @@
       else if (action === 'reveal-mine') handleRevealMine(id);
       else if (action === 'dm-chat') openDmChat(id);
       else if (action === 'report-view') { if (isAdminUnlocked) openReportedChat(id); }
+      else if (action === 'am-filter') { _amFilter = id || 'talk'; paint(currentState); var _md = document.querySelector('[data-sec="adminmsg"]'); if (_md) _md.open = true; return; }
+      else if (action === 'am-clean-auto') {
+        if (!isAdminUnlocked) return;
+        modalConfirm('자동 안내 정리', '자동 안내만 받은 회원들을 관리자 메시지 목록에서 숨길까요?\n(회원 쪽 메시지는 그대로예요. 나중에 회원이 답하면 다시 보여요.)').then(function (ok) { if (ok) cleanAutoOnlyThreads(); });
+        return;
+      }
       else if (action === 'cf-filter') { _contactFilter = id || 'all'; paint(currentState); var _sd = document.querySelector('[data-sec="stale"]'); if (_sd) _sd.open = true; return; }
       else if (action === 'sec-jump') { var _d = document.querySelector('[data-sec="' + id + '"]'); if (_d) { _d.open = true; _d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } return; }
       else if (action === 'sec-ack') { if (isAdminUnlocked) db.collection('securityAlerts').doc(id).update({ resolved: true, resolvedAt: new Date().toISOString() }).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); }); }
