@@ -1108,6 +1108,7 @@ async function migrateDmToChats(after) {
     const left = (s.dm || []).filter((m) => !moved[m.id]);
     if (left.length !== (s.dm || []).length) tx.update(ref, { dm: left });
   });
+  console.log('migrateDmToChats: moved ' + Object.keys(moved).length + ' msgs into ' + Object.keys(byPair).length + ' rooms'); /* 건수만 (내용 X) */
 }
 /* 주선자가 바뀐 회원이 있으면 그 회원의 대화방 viewers 갱신 */
 async function refreshChatViewers(before, after) {
