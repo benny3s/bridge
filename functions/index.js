@@ -95,11 +95,32 @@ async function loginGuardResult(guard, ok) {
   await guard.ref.set(upd, { merge: true });
 }
 function guardKey(prefix, id) { return prefix + String(id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 120); }
-/* 비밀(PIN 해시·관리자 키)은 3단계부터 secrets/ 로 옮겨짐 — state에 남아 있으면(방금 바뀐 값) 그걸 우선 */
-async function pinSourceFor(entry) {
+/* 비밀(PIN 해시 등)은 secrets/{id}(서버 전용)로 옮겨짐 — state에 남아 있으면(방금 바뀌어 아직 안 옮겨진 값) 그걸 우선.
+   계정 전환으로 PIN을 다른 계정에서 물려받는 경우 entry.pinFrom 이 원래 계정 id */
+async function pinRecord(id, state) {
+  const inline = ((state && state.entries) || []).concat((state && state.pendingEntries) || []).find((e) => e.id === id);
+  if (inline && (inline.pinAuth || inline.pinHash)) return { pinAuth: inline.pinAuth || null, pinHash: inline.pinHash || null };
+  const sec = (await db.collection('secrets').doc(id).get()).data() || {};
+  return { pinAuth: sec.pinAuth || null, pinHash: sec.pinHash || null };
+}
+async function pinSourceFor(entry, state) {
   if (entry && (entry.pinAuth || entry.pinHash)) return entry;
-  const sec = await db.collection('secrets').doc(entry.id).get();
-  return sec.exists ? Object.assign({ id: entry.id }, sec.data()) : entry;
+  let rec = await pinRecord(entry.id, null);
+  if (!rec.pinAuth && !rec.pinHash && entry.pinFrom) rec = await pinRecord(entry.pinFrom, state);
+  return Object.assign({ id: entry.id }, rec);
+}
+/* PIN이 필요한 서버 기능(번호 저장·지인 필터) 공통 본인 확인: 서버 로그인 토큰이 그 계정이면 통과,
+   아니면 PIN 확인(로그인과 같은 실패 횟수 잠금 적용 — 예전엔 잠금 없이 PIN을 무제한 시도할 수 있었음) */
+async function callerOwns(context, state, entry, pin) {
+  const authE = authEntryFor(state, entry);
+  const c = (context.auth && context.auth.token) || {};
+  const uid = context.auth && context.auth.uid;
+  if ((c.m === 1 || c.p === 1) && (uid === authE.id || uid === entry.id)) return true;
+  if (!pin) return false;
+  const guard = await loginGuardCheck(guardKey('m_', authE.id));
+  const ok = verifyPinServer(pin, await pinSourceFor(authE, state));
+  await loginGuardResult(guard, ok);
+  return ok;
 }
 /* 클라 setupAdminPin/rewrapAdminKey 와 동일: PBKDF2(150000, SHA-256) → AES-256-GCM 으로 감싼 개인키가 풀리면 비밀번호 일치 */
 function adminPasswordOk(pw, a) {
@@ -131,9 +152,16 @@ exports.memberLogin = functions
     if (entry.managedBy && entry.pinExpiresAt && Date.now() > new Date(entry.pinExpiresAt).getTime()) {
       throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
     }
-    const ok = verifyPinServer(pin, await pinSourceFor(entry));
+    const src = await pinSourceFor(entry, state);
+    const ok = verifyPinServer(pin, src);
     await loginGuardResult(guard, ok);
     if (!ok) throw new HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
+    if (!src.pinAuth && src.pinHash) {
+      /* 옛 방식(솔트 없는 sha256) → PBKDF2로 올림 (서버 전용 금고에만 저장) */
+      const salt = nodeCrypto.randomBytes(16);
+      const hash = nodeCrypto.pbkdf2Sync(pin, salt, 150000, 32, 'sha256').toString('base64');
+      await db.collection('secrets').doc(entryId).set({ pinAuth: { v: 2, salt: salt.toString('base64'), hash }, pinHash: admin.firestore.FieldValue.delete() }, { merge: true }).catch(() => {});
+    }
     const token = await admin.auth().createCustomToken(entryId, pending ? { p: 1 } : { m: 1 });
     return { token, pending };
   });
@@ -146,7 +174,7 @@ exports.adminLogin = functions
     if (!pw || pw.length > 128) throw new HttpsError('invalid-argument', '비밀번호를 확인해주세요.');
     const guard = await loginGuardCheck('admin');
     const st = ((await db.doc('app/state').get()).data() || {}).adminAuth;
-    const a = (st && st.wrappedPrivateKey) ? st : (await db.collection('secrets').doc('adminAuth').get()).data();
+    const a = (st && st.wrappedPrivateKey) ? st : (await db.collection('adminKey').doc('main').get()).data();
     const ok = adminPasswordOk(pw, a);
     await loginGuardResult(guard, ok);
     if (!ok) throw new HttpsError('permission-denied', '비밀번호가 올바르지 않아요.');
@@ -163,13 +191,13 @@ exports.savePhone = functions
     const entryId = String((data && data.entryId) || '');
     const pin = String((data && data.pin) || '');
     const phone = normPhone(data && data.phone);
-    if (!entryId || !pin) throw new functions.https.HttpsError('invalid-argument', '정보가 부족해요.');
+    if (!entryId) throw new functions.https.HttpsError('invalid-argument', '정보가 부족해요.');
     if (!phone) throw new functions.https.HttpsError('invalid-argument', '전화번호 형식이 올바르지 않아요.');
     const snap = await db.doc('app/state').get();
     const state = snap.data() || {};
     const entry = (state.entries || []).concat(state.pendingEntries || []).find((e) => e.id === entryId);
     if (!entry) throw new functions.https.HttpsError('not-found', '계정을 찾을 수 없어요.');
-    if (!verifyPinServer(pin, authEntryFor(state, entry))) {
+    if (!(await callerOwns(context, state, entry, pin))) {
       throw new functions.https.HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
     }
     await db.doc('sendContacts/' + entryId).set({ enc: encPhone(phone), ph: hmacPhone(phone), at: new Date().toISOString() });
@@ -187,12 +215,12 @@ exports.setAcqFilter = functions
     const pin = String((data && data.pin) || '');
     const mode = (data && data.mode) === 'replace' ? 'replace' : 'append';
     const numbers = Array.isArray(data && data.numbers) ? data.numbers : [];
-    if (!entryId || !pin) throw new functions.https.HttpsError('invalid-argument', '정보가 부족해요.');
+    if (!entryId) throw new functions.https.HttpsError('invalid-argument', '정보가 부족해요.');
     const snap = await db.doc('app/state').get();
     const state = snap.data() || {};
     const entry = (state.entries || []).find((e) => e.id === entryId);
     if (!entry) throw new functions.https.HttpsError('not-found', '계정을 찾을 수 없어요.');
-    if (!verifyPinServer(pin, authEntryFor(state, entry))) {
+    if (!(await callerOwns(context, state, entry, pin))) {
       throw new functions.https.HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
     }
     const myPh = ((await db.doc('sendContacts/' + entryId).get()).data() || {}).ph || null;
@@ -227,12 +255,12 @@ exports.clearAcqFilter = functions
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', '로그인이 필요해요.');
     const entryId = String((data && data.entryId) || '');
     const pin = String((data && data.pin) || '');
-    if (!entryId || !pin) throw new functions.https.HttpsError('invalid-argument', '정보가 부족해요.');
+    if (!entryId) throw new functions.https.HttpsError('invalid-argument', '정보가 부족해요.');
     const snap = await db.doc('app/state').get();
     const state = snap.data() || {};
     const entry = (state.entries || []).find((e) => e.id === entryId);
     if (!entry) throw new functions.https.HttpsError('not-found', '계정을 찾을 수 없어요.');
-    if (!verifyPinServer(pin, authEntryFor(state, entry))) {
+    if (!(await callerOwns(context, state, entry, pin))) {
       throw new functions.https.HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
     }
     await db.doc('acqFilter/' + entryId).delete().catch(function () {});
@@ -253,12 +281,12 @@ exports.getHiddenIds = functions
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', '로그인이 필요해요.');
     const entryId = String((data && data.entryId) || '');
     const pin = String((data && data.pin) || '');
-    if (!entryId || !pin) throw new functions.https.HttpsError('invalid-argument', '정보가 부족해요.');
+    if (!entryId) throw new functions.https.HttpsError('invalid-argument', '정보가 부족해요.');
     const snap = await db.doc('app/state').get();
     const state = snap.data() || {};
     const entry = (state.entries || []).find((e) => e.id === entryId);
     if (!entry) throw new functions.https.HttpsError('not-found', '계정을 찾을 수 없어요.');
-    if (!verifyPinServer(pin, authEntryFor(state, entry))) {
+    if (!(await callerOwns(context, state, entry, pin))) {
       throw new functions.https.HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
     }
     const myFilter = (await db.doc('acqFilter/' + entryId).get()).data() || {};
@@ -391,6 +419,7 @@ exports.onStateChange = functions
 
     const jobs = [];
     jobs.push(syncPublicView(after).catch((e) => console.error('syncPublicView', e)));
+    jobs.push(sweepSecrets(before, after).catch((e) => console.error('sweepSecrets', e)));
     (after.dateRequests || []).forEach((r) => {
       const prev = beforeMap[r.id];
       const type = (r.type || 'contact') === 'photo' ? '사진' : '대화'; /* 앱 용어(대화 신청)와 통일 */
@@ -533,6 +562,7 @@ exports.remindPending = functions
     if (result && result.sends.length) {
       await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
     }
+    await purgeDeletedSecrets().catch((e) => console.error('purgeDeletedSecrets', e));
     return null;
   });
 
@@ -715,6 +745,19 @@ async function rateLimit(context, key, maxPerHour) {
     tx.set(ref, { hits });
   });
 }
+/* 신청자 쓰기 대행에서 비밀 항목을 state 대신 금고 문서로 바로 저장 */
+async function stashSecrets(id, obj) {
+  const sec = {}, priv = {};
+  SECRET_KEYS.forEach((k) => { if (obj[k] != null) { sec[k] = obj[k]; delete obj[k]; } });
+  PRIV_KEYS.forEach((k) => { if (obj[k] != null) { priv[k] = obj[k]; delete obj[k]; } });
+  const at = new Date().toISOString();
+  if (Object.keys(sec).length) {
+    if (sec.pinAuth) sec.pinHash = admin.firestore.FieldValue.delete();
+    await db.collection('secrets').doc(id).set(Object.assign({ at }, sec), { merge: true });
+    if (sec.pinAuth) obj.pinSet = true;
+  }
+  if (Object.keys(priv).length) await db.collection('adminOnly').doc(id).set(Object.assign({ at }, priv), { merge: true });
+}
 function claimsOf(context) { return (context.auth && context.auth.token) || {}; }
 
 exports.applicantAction = functions
@@ -743,6 +786,11 @@ exports.applicantAction = functions
       if (/^qa_/i.test(entry.nickname)) entry.testAccount = true;
       entry.submittedAt = new Date().toISOString();
       const photos = kind === 'self' ? cleanPhotos(data.photos) : null;
+      {
+        const s0 = (await stateRef.get()).data() || {};
+        if ((s0.entries || []).concat(s0.pendingEntries || []).some((e) => e.id === id)) throw new HttpsError('already-exists', '이미 접수된 신청이에요.');
+      }
+      await stashSecrets(id, entry); /* PIN 해시·실명·번호는 금고로, state 에는 pinSet 표시만 */
       await db.runTransaction(async (tx) => {
         const s = (await tx.get(stateRef)).data() || {};
         if ((s.entries || []).concat(s.pendingEntries || []).some((e) => e.id === id)) throw new HttpsError('already-exists', '이미 접수된 신청이에요.');
@@ -813,12 +861,14 @@ exports.applicantAction = functions
         if (!me) throw new HttpsError('not-found', '신청서를 찾을 수 없어요.');
         const patch = pickProfile(src, me.isMatchmaker ? 'mm' : 'self');
         const pa = cleanPinAuth(src.pinAuth);
+        if (pa) patch.pinAuth = pa;
+        await stashSecrets(uid, patch); /* 바뀐 PIN·실명·번호는 금고로 */
         if (patch.nickname && nickTaken(s, patch.nickname, uid)) throw new HttpsError('already-exists', '이미 사용 중인 닉네임이에요.');
         let nick = '';
         const pend = (s.pendingEntries || []).map((e) => {
           if (e.id !== uid) return e;
           const u = Object.assign({}, e, patch);
-          if (pa) { u.pinAuth = pa; delete u.pinHash; }
+          if (patch.pinSet) delete u.pinHash;
           delete u.rejectedReason; delete u.rejectedAt; delete u.heldReason; delete u.heldAt;
           u.submittedAt = new Date().toISOString();
           nick = u.nickname || '';
@@ -877,3 +927,114 @@ exports.applicantAction = functions
 
     throw new HttpsError('invalid-argument', '알 수 없는 요청이에요.');
   });
+
+/* ══ 3단계-①: 비밀 분리 ══
+   app/state(회원이면 누구나 읽음)에 들어온 비밀을 회원별 문서로 옮기고 state 에서는 지움.
+   - secrets/{id}   (서버 전용, 규칙상 아무도 못 읽음): PIN 해시(pinAuth/pinHash/pinEnc), PIN으로 잠근 번호(contactSelfEnc)
+   - adminOnly/{id} (관리자만): 관리자 키로 암호화한 실명·번호·알게 된 경로
+   - adminKey/main  (관리자만): 관리자 비밀번호로 감싼 개인키 (공개키는 모두가 암호화에 쓰므로 state 에 남김)
+   앱은 예전처럼 state 에 값을 써도 되고(여기서 곧바로 옮겨짐), PIN이 있다는 표시는 entry.pinSet.
+   계정 전환으로 PIN·개인정보를 다른 계정에서 물려받을 땐 entry.pinFrom / entry.privFrom 에 원래 계정 id. */
+const SECRET_KEYS = ['pinAuth', 'pinHash', 'pinEnc', 'contactSelfEnc'];
+const PRIV_KEYS = ['realNameEnc', 'contactEnc', 'referrerEnc'];
+const SECRET_PURGE_MS = 7 * 86400000; /* state 에서 사라진 계정의 금고는 7일 뒤 삭제 (실수로 지워졌다 복구될 때 대비) */
+function allOf(s) { return ((s && s.entries) || []).concat((s && s.pendingEntries) || []); }
+function hasPinInline(e) { return !!(e && (e.pinAuth || e.pinHash)); }
+async function sweepSecrets(before, after) {
+  const FV = admin.firestore.FieldValue;
+  const beforeMap = {}; allOf(before).forEach((e) => { beforeMap[e.id] = e; });
+  const afterIds = {}; allOf(after).forEach((e) => { afterIds[e.id] = 1; });
+  const work = [];
+  allOf(after).forEach((e) => {
+    const sec = {}, priv = {};
+    SECRET_KEYS.forEach((k) => { if (e[k] != null) sec[k] = e[k]; });
+    PRIV_KEYS.forEach((k) => { if (e[k] != null) priv[k] = e[k]; });
+    const prev = beforeMap[e.id];
+    /* PIN 회수: 전엔 PIN이 있었는데 지금은 표시·값·물려받기 모두 없음 → 금고의 PIN도 지움 */
+    const revoke = !!(prev && (prev.pinSet || hasPinInline(prev)) && !e.pinSet && !hasPinInline(e) && !e.pinFrom);
+    if (Object.keys(sec).length || Object.keys(priv).length || e.pinFrom || e.privFrom || revoke) work.push({ e, sec, priv, revoke });
+  });
+  const removed = Object.keys(beforeMap).filter((id) => !afterIds[id]);
+  const keyInline = (after.adminAuth && after.adminAuth.wrappedPrivateKey) ? after.adminAuth : null;
+  if (!work.length && !removed.length && !keyInline) return;
+
+  /* 1) 금고에 쓰기 — 물려받기(pinFrom/privFrom)를 반드시 먼저: 원래 계정의 PIN 회수가 먼저 돌면 복사할 PIN이 사라짐 */
+  work.sort((a, b) => ((b.e.pinFrom || b.e.privFrom) ? 1 : 0) - ((a.e.pinFrom || a.e.privFrom) ? 1 : 0));
+  const done = [];
+  for (const w of work) {
+    const id = w.e.id;
+    const sec = Object.assign({}, w.sec), priv = Object.assign({}, w.priv);
+    if (w.e.pinFrom && !hasPinInline(sec)) {
+      const src = await pinRecord(w.e.pinFrom, after);
+      if (src.pinAuth) sec.pinAuth = src.pinAuth; else if (src.pinHash) sec.pinHash = src.pinHash;
+    }
+    if (w.e.privFrom) {
+      const fromInline = allOf(after).find((x) => x.id === w.e.privFrom) || {};
+      const fromDoc = (await db.collection('adminOnly').doc(w.e.privFrom).get()).data() || {};
+      PRIV_KEYS.forEach((k) => { if (priv[k] == null) { const v = fromInline[k] != null ? fromInline[k] : fromDoc[k]; if (v != null) priv[k] = v; } });
+    }
+    if (Object.keys(sec).length) {
+      const put = Object.assign({ deletedAt: FV.delete(), at: new Date().toISOString() }, sec);
+      if (sec.pinAuth && !sec.pinHash) put.pinHash = FV.delete(); /* 새 방식 PIN이 들어오면 옛 해시 제거 */
+      await db.collection('secrets').doc(id).set(put, { merge: true });
+    } else if (w.revoke) {
+      await db.collection('secrets').doc(id).set({ pinAuth: FV.delete(), pinHash: FV.delete(), pinEnc: FV.delete() }, { merge: true }).catch(() => {});
+    }
+    if (Object.keys(priv).length) {
+      await db.collection('adminOnly').doc(id).set(Object.assign({ deletedAt: FV.delete(), at: new Date().toISOString() }, priv), { merge: true });
+    }
+    done.push({ id, sec: w.sec, priv: w.priv, pinNow: hasPinInline(sec), hadPinFrom: !!w.e.pinFrom, hadPrivFrom: !!w.e.privFrom });
+  }
+  if (keyInline) {
+    await db.collection('adminKey').doc('main').set({ salt: keyInline.salt, iv: keyInline.iv, wrappedPrivateKey: keyInline.wrappedPrivateKey, publicKeyJwk: keyInline.publicKeyJwk || null, at: new Date().toISOString() });
+  }
+
+  /* 2) state 에서 지우기 — 옮긴 값과 똑같을 때만 (그사이 새 값이 들어왔으면 다음 차례에 다시 옮김) */
+  const doneMap = {}; done.forEach((d) => { doneMap[d.id] = d; });
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const ref = db.doc('app/state');
+  await db.runTransaction(async (tx) => {
+    const s = (await tx.get(ref)).data() || {};
+    let changed = false;
+    const strip = (list) => (list || []).map((e) => {
+      const d = doneMap[e.id];
+      if (!d) return e;
+      const u = Object.assign({}, e);
+      let touched = false;
+      Object.keys(d.sec).forEach((k) => { if (same(u[k], d.sec[k])) { delete u[k]; touched = true; } });
+      Object.keys(d.priv).forEach((k) => { if (same(u[k], d.priv[k])) { delete u[k]; touched = true; } });
+      if (d.pinNow && !u.pinSet && !hasPinInline(u)) { u.pinSet = true; touched = true; }
+      if (d.hadPinFrom && u.pinFrom) { delete u.pinFrom; touched = true; }
+      if (d.hadPrivFrom && u.privFrom) { delete u.privFrom; touched = true; }
+      if (touched) changed = true;
+      return touched ? u : e;
+    });
+    const upd = { entries: strip(s.entries), pendingEntries: strip(s.pendingEntries) };
+    if (keyInline && s.adminAuth && same(s.adminAuth.wrappedPrivateKey, keyInline.wrappedPrivateKey)) {
+      upd.adminAuth = { publicKeyJwk: s.adminAuth.publicKeyJwk || null };
+      changed = true;
+    }
+    if (changed) tx.update(ref, upd);
+  });
+
+  /* 3) 사라진 계정: 금고에 삭제 표시만 (7일 뒤 remindPending 이 정리) */
+  for (const id of removed) {
+    const at = new Date().toISOString();
+    await db.collection('secrets').doc(id).set({ deletedAt: at }, { merge: true }).catch(() => {});
+    await db.collection('adminOnly').doc(id).set({ deletedAt: at }, { merge: true }).catch(() => {});
+  }
+}
+/* 삭제 표시 후 7일 지난 금고 문서 정리 (그사이 계정이 되살아났으면 표시만 지움) */
+async function purgeDeletedSecrets() {
+  const st = (await db.doc('app/state').get()).data() || {};
+  const alive = {}; allOf(st).forEach((e) => { alive[e.id] = 1; });
+  for (const col of ['secrets', 'adminOnly']) {
+    const qs = await db.collection(col).where('deletedAt', '!=', null).get().catch(() => null);
+    if (!qs) continue;
+    for (const d of qs.docs) {
+      const t = new Date(d.data().deletedAt).getTime();
+      if (alive[d.id]) await d.ref.set({ deletedAt: admin.firestore.FieldValue.delete() }, { merge: true });
+      else if (t && Date.now() - t > SECRET_PURGE_MS) await d.ref.delete();
+    }
+  }
+}

@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-386';
+  var APP_VERSION = '2026-10-02-387';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1111,9 +1111,59 @@
     for (var i = s.coupleReports.length; i < (pub.coupleCount || 0); i++) s.coupleReports.push({ confirmed: true });
     return s;
   }
+  /* ── 관리자 전용 데이터 (3단계-①) ──
+     실명·번호·경로 암호문은 adminOnly/{id}, 관리자 개인키는 adminKey/main 에 있음(관리자만 읽기).
+     관리자 화면 코드는 예전처럼 entry.contactEnc 등을 읽으므로, 받아온 값을 메모리 state 에만 덧붙임. */
+  var adminOnlyRef = db.collection('adminOnly');
+  var adminKeyRef = db.collection('adminKey').doc('main');
+  var _adminPriv = {};
+  var _adminKeyDoc = null;
+  var _adminPrivUnsubs = [];
+  var _authIsAdmin = false;
+  var ADMIN_PRIV_KEYS = ['realNameEnc', 'contactEnc', 'referrerEnc'];
+  function overlayAdminPriv(state) {
+    if (!_authIsAdmin || !state || state._public) return state;
+    ['entries', 'pendingEntries'].forEach(function (k) {
+      (state[k] || []).forEach(function (e) {
+        var p = _adminPriv[e.id]; if (!p) return;
+        ADMIN_PRIV_KEYS.forEach(function (f) { if (p[f] && !e[f]) e[f] = p[f]; });
+      });
+    });
+    if (_adminKeyDoc && _adminKeyDoc.wrappedPrivateKey && state.adminAuth && !state.adminAuth.wrappedPrivateKey) {
+      state.adminAuth = { publicKeyJwk: state.adminAuth.publicKeyJwk || _adminKeyDoc.publicKeyJwk, salt: _adminKeyDoc.salt, iv: _adminKeyDoc.iv, wrappedPrivateKey: _adminKeyDoc.wrappedPrivateKey };
+    }
+    return state;
+  }
+  function stopAdminPriv() {
+    _adminPrivUnsubs.forEach(function (u) { try { u(); } catch (e) {} });
+    _adminPrivUnsubs = []; _adminPriv = {}; _adminKeyDoc = null;
+  }
+  /* 관리자 토큰일 때 관리자 전용 문서 구독. 첫 데이터가 오면 resolve (권한 거부여도 진행 — 옮기기 전 데이터는 state 에 그대로 있음) */
+  function startAdminPriv() {
+    if (_adminPrivUnsubs.length) return Promise.resolve();
+    var keyReady = new Promise(function (resolve) {
+      _adminPrivUnsubs.push(adminKeyRef.onSnapshot(function (d) {
+        _adminKeyDoc = d.exists ? d.data() : null;
+        if (currentState) overlayAdminPriv(currentState);
+        resolve();
+      }, function (err) { try { console.warn('adminKey', err && err.code); } catch (e) {} resolve(); }));
+    });
+    var privReady = new Promise(function (resolve) {
+      _adminPrivUnsubs.push(adminOnlyRef.onSnapshot(function (qs) {
+        var m = {}; qs.forEach(function (d) { m[d.id] = d.data(); }); _adminPriv = m;
+        if (currentState && dataMode === 'full') {
+          overlayAdminPriv(currentState);
+          decryptAllAdminData(currentState).then(function () { schedulePaint(); });
+        }
+        resolve();
+      }, function (err) { try { console.warn('adminOnly', err && err.code); } catch (e) {} resolve(); }));
+    });
+    return Promise.all([keyReady, privReady]);
+  }
   /* 명단·현황 배너용 프로필 목록 (공개 모드면 티저) */
   function profileEntries(state) { return (state && state.teaser) || (state && state.entries) || []; }
   function onDataArrived(state, first) {
+    overlayAdminPriv(state);
     if (!currentUser) restoreSession(state);
     checkVersion(state);
     currentState = state;
@@ -1152,7 +1202,9 @@
     return authClaims().then(function (c) {
       var mode = (c.admin === 1 || c.m === 1) ? 'full' : 'public';
       if (mode === 'public') _pendingView = null;
-      return subscribeData(mode).then(function (s) {
+      _authIsAdmin = c.admin === 1;
+      var privReady = _authIsAdmin ? startAdminPriv() : (stopAdminPriv(), Promise.resolve());
+      return privReady.then(function () { return subscribeData(mode); }).then(function (s) {
         if (mode === 'public' && c.p === 1) return refreshPendingView().then(function () { return currentState; });
         return s;
       });
@@ -1542,6 +1594,10 @@
       if (!t) throw new Error('토큰을 받지 못했어요.');
       return firebase.auth().signInWithCustomToken(t);
     });
+  }
+  function reauthCurrentUser() {
+    if (!currentUser || !currentUser.id || !currentUser.pin) return Promise.resolve();
+    return memberServerLogin(currentUser.id, currentUser.pin).then(switchDataForAuth).catch(function (e) { try { console.warn('reauth', e && e.code); } catch (e2) {} });
   }
   function memberServerLogin(entryId, pin) { return serverSignIn('memberLogin', { entryId: entryId, pin: pin }); }
   function adminServerLogin(pw) { return serverSignIn('adminLogin', { password: pw }); }
@@ -2717,6 +2773,9 @@
     if (lv === 3) return '<span class="chip" style="background:#e8f0fe;color:#1a73e8;">🤝 주선자·본인</span>';
     return '<span class="chip" style="background:#f1f1f1;color:#777;">일반</span>';
   }
+  /* PIN이 설정돼 있는지 — 해시는 서버 금고(secrets)로 옮겨지고 state 에는 pinSet 표시만 남음
+     (옮겨지기 직전의 pinAuth/pinHash, 공개 요약의 pinOn 도 인정) */
+  function hasPin(e) { return !!(e && (e.pinAuth || e.pinHash || e.pinSet || e.pinOn)); }
   /* sub 임시 로그인 PIN 유효기간(1일) */
   var SUB_PIN_TTL_MS = 24 * 60 * 60 * 1000;
   function subPinExpired(e) {
@@ -2832,7 +2891,7 @@
   function doExtendSubPin(subId) {
     var sub = ((currentState && currentState.entries) || []).find(function (e) { return e.id === subId && e.managedBy === currentUser.id; });
     if (!sub) return;
-    if (!sub.pinAuth) return handleIssueSubPin(subId);
+    if (!hasPin(sub)) return handleIssueSubPin(subId);
     var expiresAt = new Date(Date.now() + SUB_PIN_TTL_MS).toISOString();
     db.runTransaction(function (tx) {
       return tx.get(stateRef).then(function (doc) {
@@ -2858,7 +2917,7 @@
         var s = doc.data();
         var entries = (s.entries || []).map(function (e) {
           if (e.id !== subId) return e;
-          var c = JSON.parse(JSON.stringify(e)); delete c.pinAuth; delete c.pinExpiresAt; return c;
+          var c = JSON.parse(JSON.stringify(e)); delete c.pinAuth; delete c.pinSet; delete c.pinExpiresAt; return c;
         });
         tx.update(stateRef, { entries: entries });
       });
@@ -2875,7 +2934,7 @@
     if (!currentUser) return;
     var sub = ((currentState && currentState.entries) || []).find(function (e) { return e.id === subId && e.managedBy === currentUser.id; });
     if (!sub) return;
-    if (!sub.pinAuth || subPinExpired(sub)) return handleIssueSubPin(subId);
+    if (!hasPin(sub) || subPinExpired(sub)) return handleIssueSubPin(subId);
     var overlay = openModal(
       '<h3>🔑 임시 로그인 PIN</h3>' +
       '<p class="modal-msg">' + escapeHtml(sub.nickname) + '님의 임시 PIN이 ' + escapeHtml(subPinUntilText(sub)) + ' 유효해요. (' + escapeHtml(subPinRemainText(sub)) + ')</p>' +
@@ -3075,11 +3134,13 @@
         var meNow = (s.entries || []).find(function (e) { return e.id === me.id; });
         if (!meNow) throw new Error('내 계정을 찾을 수 없어요.');
         /* 기존 고유번호(serial+submittedAt)를 그대로 물려받아 번호가 바뀌지 않게 함 */
-        var mm = { id: mmId, nickname: meNow.nickname, isMatchmaker: true, pinAuth: meNow.pinAuth, contactEnc: meNow.contactEnc || null,
+        var mm = { id: mmId, nickname: meNow.nickname, isMatchmaker: true, pinFrom: me.id, privFrom: me.id, /* 서버가 금고에서 PIN·실명·번호를 복사 */
           submittedAt: meNow.submittedAt || new Date().toISOString(), serial: (meNow.serial != null ? meNow.serial : null) };
+        if (meNow.pinAuth) mm.pinAuth = meNow.pinAuth;        /* 아직 금고로 안 옮겨진 값이면 그대로 */
+        if (meNow.contactEnc) mm.contactEnc = meNow.contactEnc;
         if (meNow.testAccount) mm.testAccount = true;
         var entries = (s.entries || []).map(function (e) {
-          if (e.id === me.id) { var c = JSON.parse(JSON.stringify(e)); c.managedBy = mmId; c.ownerSelf = true; delete c.pinAuth; delete c.pinExpiresAt; return c; }
+          if (e.id === me.id) { var c = JSON.parse(JSON.stringify(e)); c.managedBy = mmId; c.ownerSelf = true; delete c.pinAuth; delete c.pinSet; delete c.pinExpiresAt; return c; }
           if (e.managedBy === me.id) { var c2 = JSON.parse(JSON.stringify(e)); c2.managedBy = mmId; return c2; } /* 기존 친구들 재부모 */
           return e;
         });
@@ -3090,7 +3151,7 @@
       currentUser = { id: mmId, nickname: me.nickname, pin: currentUser.pin }; saveSession();
       actingResolved = false; actingAs = null; formRole = 'matchmaker';
       appendLog('edit', me.nickname, '일반→주선자 계정 전환');
-      return refreshNow();
+      return reauthCurrentUser().then(refreshNow);
     });
   }
   function handleConvertToMatchmaker() {
@@ -3149,6 +3210,7 @@
             var c = JSON.parse(JSON.stringify(e));
             delete c.managedBy; delete c.ownerSelf; delete c.proxyConsentAt; delete c.pinExpiresAt;
             if (mmNow && mmNow.pinAuth) c.pinAuth = mmNow.pinAuth; /* 주선자 PIN을 이 계정 로그인 PIN으로 */
+            else if (mmNow) c.pinFrom = mmNow.id;                    /* PIN이 금고에 있으면 서버가 복사 */
             return c;
           });
           var jrs = (s.joinRequests || []).filter(function (j) { return j.toId !== me.id; });
@@ -3158,7 +3220,7 @@
         currentUser = { id: ownSelf.id, nickname: ownSelf.nickname, pin: currentUser.pin }; saveSession();
         actingResolved = false; actingAs = null; formRole = 'self';
         appendLog('edit', ownSelf.nickname, '주선자→일반 계정 전환');
-        return refreshNow();
+        return reauthCurrentUser().then(refreshNow);
       }).then(function () {
         activeTab = 'mine'; paint(currentState);
         modalNotice('전환 완료 🙋', ownSelf.nickname + '님, 이제 일반 소개팅 계정이에요. 같은 PIN으로 로그인해요.');
@@ -3276,7 +3338,7 @@
     /* 후보 풀: 보관 계정은 로그인 불가로 제외 · 대리 프로필은 유효한 임시 PIN 있을 때만 포함 */
     var pool = sortedEntries.concat(state.pendingEntries || []).filter(function (e) {
       if (e.deactivated) return false; /* 🗄 보관 계정은 로그인 불가 */
-      if (e.managedBy && (!(e.pinAuth || e.pinOn) || subPinExpired(e))) return false;
+      if (e.managedBy && (!hasPin(e) || subPinExpired(e))) return false;
       return true;
     }).map(function (e) {
       var uid = formatUid(e);
@@ -4479,7 +4541,7 @@
        단, 직접 로그인이 불가한 대리 계정(로그인 PIN 없음)은 접속/알림이 무의미하므로 표시하지 않음 */
     var adminInfoHtml = '';
     if (detailMode && isAdminUnlocked) {
-      var canSelfLogin = !!(entry.pinAuth || entry.pinHash);
+      var canSelfLogin = hasPin(entry);
       if (canSelfLogin) {
         var seenTxt = entry.lastSeenAt ? new Date(entry.lastSeenAt).toLocaleString('ko-KR') : '기록 없음';
         adminInfoHtml =
@@ -5699,7 +5761,7 @@
     var headBtns = '';
     if (viaMatchmaker && !me.ownerSelf) {
       /* 주선자가 친구(sub)로 전환해서 볼 때: 1일 임시 PIN 발급/연장 + 독립(일반) 계정 전환 */
-      var pinOn = me.pinAuth && !subPinExpired(me);
+      var pinOn = hasPin(me) && !subPinExpired(me);
       var pinBtn = pinOn
         ? '<button type="button" class="card-btn approve" data-action="sub-pin-manage" data-id="' + escapeHtml(me.id) + '" style="flex:none;" title="눌러서 연장/회수">🔑 임시 PIN (' + escapeHtml(subPinUntilText(me)) + ')</button>'
         : '<button type="button" class="card-btn" data-action="sub-pin-issue" data-id="' + escapeHtml(me.id) + '" style="flex:none;">🔑 1일 PIN 발급</button>';
@@ -5709,7 +5771,7 @@
     } else if (isSubProfile) {
       /* 친구(sub)가 임시 PIN으로 직접 로그인한 경우: 프로필 수정 + 만료 시각 표시 */
       headBtns = '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>';
-      if (me.pinAuth && !subPinExpired(me)) {
+      if (hasPin(me) && !subPinExpired(me)) {
         headBtns += '<span class="chip" style="background:#e6f4ea;color:#137333;align-self:center;">🔑 임시 로그인 ' + escapeHtml(subPinUntilText(me)) + ' (' + escapeHtml(subPinRemainText(me)) + ')</span>';
       }
     } else if (!isSubProfile) {
@@ -6803,7 +6865,7 @@
       var childHtml = '';
       if (own.length) childHtml += '<button type="button" class="pf-switch-chip" data-action="card-detail" data-id="' + escapeHtml(own[0].id) + '">🙋 ' + escapeHtml(own[0].nickname) + ' (본인)</button>';
       childHtml += subs.map(function (f) {
-        var pinOn = f.pinAuth && !subPinExpired(f);
+        var pinOn = hasPin(f) && !subPinExpired(f);
         return '<button type="button" class="pf-switch-chip" data-action="card-detail" data-id="' + escapeHtml(f.id) + '">🤝 ' + escapeHtml(f.nickname) + statChip(f) + (pinOn ? ' 🔑' : '') + '</button>';
       }).join('');
       if (!own.length && !subs.length) childHtml = '<span class="ps-none">아직 소개한 친구가 없어요.</span>';
@@ -6916,7 +6978,7 @@
         var chipList = friendSubs.map(function (s) {
           var on = actingAs === s.id;
           /* 🔑 = 임시 PIN 활성(친구가 직접 로그인 가능) */
-          var pinActive = s.pinAuth && !subPinExpired(s);
+          var pinActive = hasPin(s) && !subPinExpired(s);
           var keyBadge = pinActive ? ' <span style="opacity:.9;">🔑</span>' : '';
           /* 이 친구에게 온 안 읽은 알림(요청·승인·관리자 메시지) — 주선자가 전환 안 해도 보이게 배지 */
           var un = userUnread(state, s); friendUnreadTotal += un;
@@ -8515,7 +8577,7 @@
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
     var wasManaged = !!(entry.managedBy && !entry.ownerSelf); /* 주선자 밑 친구였음 → 독립 전환 */
-    var noOwnLogin = !entry.pinAuth && !entry.pinHash;         /* 자체 로그인 수단 없음 */
+    var noOwnLogin = !hasPin(entry);         /* 자체 로그인 수단 없음 */
     var needReset = wasManaged || noOwnLogin;
     var msg = escapeHtml(entry.nickname) + '님을 다시 명단에 노출(일반 계정)할까요?' + (needReset ? ' 로그인 PIN은 <b>1234</b>로 초기화돼요. (로그인 후 변경 안내)' : '');
     modalConfirm('다시 활성화', msg, '활성화', 'approve').then(function (ok) {

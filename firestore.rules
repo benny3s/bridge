@@ -36,7 +36,17 @@ service cloud.firestore {
       allow read, write: if isAdmin() || isSelf(entryId);
     }
 
-    // 그 외 전부 차단 (secrets·loginGuard·rateLimit·sendContacts 등은 서버 전용)
+    // 관리자 전용: 회원별 실명·번호·알게 된 경로(관리자 키로 암호화된 값) — 관리자만
+    match /adminOnly/{entryId} {
+      allow read, write: if isAdmin();
+    }
+
+    // 관리자 개인키(관리자 비밀번호로 감싼 값) — 관리자만
+    match /adminKey/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // 그 외 전부 차단 (secrets(PIN 해시)·loginGuard·rateLimit·sendContacts 등은 서버 전용)
     match /{document=**} {
       allow read, write: if false;
     }
