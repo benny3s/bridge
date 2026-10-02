@@ -85,7 +85,7 @@ async function loginGuardCheck(key) {
   return { ref, g };
 }
 async function loginGuardResult(guard, ok) {
-  if (ok) { if (guard.g.fails) await guard.ref.delete(); return; }
+  if (ok) { if (guard.g.fails) await guard.ref.delete(); return 0; }
   const fails = (guard.g.fails || 0) + 1;
   const upd = { fails, lastFailAt: Date.now() };
   if (fails % LOGIN_MAX_FAILS === 0) {
@@ -93,6 +93,7 @@ async function loginGuardResult(guard, ok) {
     upd.lockedUntil = Date.now() + mins * 60000;
   }
   await guard.ref.set(upd, { merge: true });
+  return fails;
 }
 function guardKey(prefix, id) { return prefix + String(id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 120); }
 /* 비밀(PIN 해시 등)은 secrets/{id}(서버 전용)로 옮겨짐 — state에 남아 있으면(방금 바뀌어 아직 안 옮겨진 값) 그걸 우선.
@@ -117,9 +118,13 @@ async function callerOwns(context, state, entry, pin) {
   const uid = context.auth && context.auth.uid;
   if ((c.m === 1 || c.p === 1) && (uid === authE.id || uid === entry.id)) return true;
   if (!pin) return false;
-  const guard = await loginGuardCheck(guardKey('m_', authE.id));
+  const ip = clientIp(context);
+  await ipBlockedCheck(ip);
+  const gk = guardKey('m_', authE.id);
+  const guard = await loginGuardCheck(gk);
   const ok = verifyPinServer(pin, await pinSourceFor(authE, state));
-  await loginGuardResult(guard, ok);
+  const fails = await loginGuardResult(guard, ok);
+  if (!ok) { await ipFailRecord(ip, 'pin'); await lockAlert(gk, fails, ip, authE.nickname); }
   return ok;
 }
 /* 클라 setupAdminPin/rewrapAdminKey 와 동일: PBKDF2(150000, SHA-256) → AES-256-GCM 으로 감싼 개인키가 풀리면 비밀번호 일치 */
@@ -138,11 +143,14 @@ function adminPasswordOk(pw, a) {
 exports.memberLogin = functions
   .region('asia-northeast3')
   .runWith({ timeoutSeconds: 20, memory: '256MB' })
-  .https.onCall(async (data) => {
+  .https.onCall(async (data, context) => {
     const entryId = String((data && data.entryId) || '');
     const pin = String((data && data.pin) || '');
     if (!entryId || !pin || pin.length > 64) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.');
-    const guard = await loginGuardCheck(guardKey('m_', entryId));
+    const ip = clientIp(context);
+    await ipBlockedCheck(ip);
+    const gk = guardKey('m_', entryId);
+    const guard = await loginGuardCheck(gk);
     const state = (await db.doc('app/state').get()).data() || {};
     let entry = (state.entries || []).find((e) => e.id === entryId);
     let pending = false;
@@ -154,8 +162,12 @@ exports.memberLogin = functions
     }
     const src = await pinSourceFor(entry, state);
     const ok = verifyPinServer(pin, src);
-    await loginGuardResult(guard, ok);
-    if (!ok) throw new HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
+    const fails = await loginGuardResult(guard, ok);
+    if (!ok) {
+      await ipFailRecord(ip, 'member');
+      await lockAlert(gk, fails, ip, entry.nickname);
+      throw new HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
+    }
     if (!src.pinAuth && src.pinHash) {
       /* 옛 방식(솔트 없는 sha256) → PBKDF2로 올림 (서버 전용 금고에만 저장) */
       const salt = nodeCrypto.randomBytes(16);
@@ -169,15 +181,21 @@ exports.memberLogin = functions
 exports.adminLogin = functions
   .region('asia-northeast3')
   .runWith({ timeoutSeconds: 20, memory: '256MB' })
-  .https.onCall(async (data) => {
+  .https.onCall(async (data, context) => {
     const pw = String((data && data.password) || '');
     if (!pw || pw.length > 128) throw new HttpsError('invalid-argument', '비밀번호를 확인해주세요.');
+    const ip = clientIp(context);
+    await ipBlockedCheck(ip);
     const guard = await loginGuardCheck('admin');
     const st = ((await db.doc('app/state').get()).data() || {}).adminAuth;
     const a = (st && st.wrappedPrivateKey) ? st : (await db.collection('adminKey').doc('main').get()).data();
     const ok = adminPasswordOk(pw, a);
-    await loginGuardResult(guard, ok);
-    if (!ok) throw new HttpsError('permission-denied', '비밀번호가 올바르지 않아요.');
+    const fails = await loginGuardResult(guard, ok);
+    if (!ok) {
+      await ipFailRecord(ip, 'admin');
+      await lockAlert('admin', fails, ip, '관리자');
+      throw new HttpsError('permission-denied', '비밀번호가 올바르지 않아요.');
+    }
     const token = await admin.auth().createCustomToken('admin', { admin: 1 });
     return { token };
   });
@@ -423,6 +441,7 @@ exports.onStateChange = functions
     jobs.push(migrateDmToChats(after).catch((e) => console.error('migrateDmToChats', e)));
     jobs.push(refreshChatViewers(before, after).catch((e) => console.error('refreshChatViewers', e)));
     jobs.push(syncPhotoAcl(after, false).catch((e) => console.error('syncPhotoAcl', e)));
+    jobs.push(detectTamper(before, after).catch((e) => console.error('detectTamper', e)));
     (after.dateRequests || []).forEach((r) => {
       const prev = beforeMap[r.id];
       const type = (r.type || 'contact') === 'photo' ? '사진' : '대화'; /* 앱 용어(대화 신청)와 통일 */
@@ -1243,7 +1262,7 @@ async function purgeOldChats(nowMs) {
   if (removed) console.log('purgeOldChats: removed ' + removed + ' rooms');
   return removed;
 }
-if (process.env.BRIDGE_LOCAL_TEST) exports._purgeOldChatsForTest = purgeOldChats; /* 로컬 시험 전용 (배포 시 내보내지 않음) */
+if (process.env.BRIDGE_LOCAL_TEST) { exports._purgeOldChatsForTest = purgeOldChats; exports._detectTamperIssuesForTest = (b, a) => detectTamperIssues(b, a); } /* 로컬 시험 전용 (배포 시 내보내지 않음) */
 
 /* ══ 3단계-③: 사진 원본 열람 권한 ══
    photos/{id} 에 서버가 viewers(볼 수 있는 uid)·owners(고칠 수 있는 uid)를 유지 → 규칙이 이 목록으로 판단.
@@ -1289,4 +1308,110 @@ async function syncPhotoAcl(state, force) {
   }
   await cacheRef.set({ map: acl, at: new Date().toISOString() });
   return changed.length;
+}
+
+/* ══ 보안 감시 ══
+   (1) 이상 변경 감지: 앱의 모든 app/state 쓰기에는 쓴 사람(_w = 토큰 uid)과 새 난수(_wn)가 붙고 규칙이 진짜인지 확인.
+       _wn 이 그대로면 서버 쓰기. 회원이 자기(와 자기가 관리하는 친구)와 관계없는 항목을 바꾸면 securityAlerts 에
+       바뀌기 전·후를 기록하고 관리자에게 푸시 → 관리자 화면 '🛡 보안 경고'에서 되돌리기.
+   (2) 로그인 공격: 계정 잠금 시 알림, 한 IP에서 시간당 20회 넘게 틀리면 그 IP 1시간 차단 + 알림. */
+const IP_FAIL_LIMIT = 20;
+function clientIp(context) {
+  const req = (context && context.rawRequest) || {};
+  return String(req.ip || (req.headers && req.headers['x-forwarded-for']) || 'unknown').split(',')[0].trim();
+}
+/* 경고 기록·푸시는 실패해도 본 처리(로그인 등)를 깨지 않게 모두 삼킴 */
+async function securityAlert(doc, pushTitle, pushBody) {
+  try { await db.collection('securityAlerts').add(Object.assign({ at: new Date().toISOString(), resolved: false }, doc)); } catch (e) { console.error('securityAlert', e); }
+  try { await sendToAdmin(pushTitle, pushBody); } catch (e) { /* 알림 실패 무시 */ }
+}
+async function ipBlockedCheck(ip) {
+  const s = await db.collection('loginIp').doc(guardKey('ip_', ip)).get();
+  const d = s.exists ? s.data() : {};
+  if (d.blockedUntil && d.blockedUntil > Date.now()) throw new HttpsError('resource-exhausted', '시도가 너무 많아요. 잠시 후 다시 시도해주세요.');
+}
+async function ipFailRecord(ip, what) {
+  const ref = db.collection('loginIp').doc(guardKey('ip_', ip));
+  let blockedNow = false, n = 0;
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref);
+    const d = s.exists ? s.data() : {};
+    const now = Date.now();
+    const fails = (d.fails || []).filter((t) => now - t < 3600000);
+    fails.push(now); n = fails.length;
+    const upd = { fails: fails.slice(-50) };
+    if (n >= IP_FAIL_LIMIT && !(d.blockedUntil > now)) { upd.blockedUntil = now + 3600000; blockedNow = true; }
+    tx.set(ref, upd, { merge: true });
+  });
+  if (blockedNow) await securityAlert({ type: 'ip-block', ip, what, fails: n }, '🛡 로그인 공격 의심', '한 곳에서 1시간에 ' + n + '번 로그인 실패 → 1시간 차단했어요');
+}
+/* 계정 잠금이 걸린 순간 알림 (5회마다) */
+async function lockAlert(guardKeyName, fails, ip, label) {
+  if (!fails || fails % LOGIN_MAX_FAILS !== 0) return;
+  const isAdminKey = guardKeyName === 'admin';
+  await securityAlert({ type: isAdminKey ? 'admin-lock' : 'login-lock', target: label || guardKeyName, fails, ip },
+    isAdminKey ? '🚨 관리자 로그인 잠김' : '🛡 로그인 잠김',
+    (isAdminKey ? '관리자 비밀번호가 ' : (label || '회원') + ' 계정 PIN이 ') + fails + '번 틀려 잠겼어요');
+}
+
+function changedKeys(b, a) {
+  const ks = {}; Object.keys(b || {}).forEach((k) => { ks[k] = 1; }); Object.keys(a || {}).forEach((k) => { ks[k] = 1; });
+  return Object.keys(ks).filter((k) => stableJson((b || {})[k]) !== stableJson((a || {})[k]));
+}
+function detectTamperIssues(before, after) {
+  if (!after._wn || after._wn === before._wn) return null;           /* 서버 쓰기 */
+  const writer = String(after._w || '');
+  if (!writer || writer === 'admin') return null;                      /* 관리자는 신뢰 */
+  /* '내 것' 판단은 변경 전 관계로만 (변경 후로 하면 남을 내 관리 대상으로 바꾸는 납치가 정상으로 보임) */
+  const owned = {}; owned[writer] = 1;
+  allOf(before).forEach((e) => { if (e.managedBy === writer) owned[e.id] = 1; });
+  const own = (id) => !!(id && owned[id]);
+  const joinFrom = {}; (before.joinRequests || []).forEach((j) => { if (own(j.toId)) joinFrom[j.fromId] = 1; });
+  const issues = [];
+  const diffList = (coll, bl, al, okFn) => {
+    const bm = {}, am = {};
+    (bl || []).forEach((x) => { if (x && x.id) bm[x.id] = x; });
+    (al || []).forEach((x) => { if (x && x.id) am[x.id] = x; });
+    Object.keys(Object.assign({}, bm, am)).forEach((id) => {
+      const b = bm[id], a = am[id];
+      if (b && a && stableJson(b) === stableJson(a)) return;
+      if (okFn(b, a, id)) return;
+      issues.push({ coll, id, kind: !b ? 'added' : (!a ? 'removed' : 'changed'), fields: (b && a) ? changedKeys(b, a) : [], before: b || null, after: a || null });
+    });
+  };
+  diffList('entries', before.entries, after.entries, (b, a, id) => own(id)
+    || (a && a.managedBy === writer && joinFrom[id])                                   /* 주선자 요청 승인 */
+    || (!b && a && a.isMatchmaker && a.pinFrom === writer)                             /* 일반→주선자 전환: 새 주선자 계정 */
+    || (b && a && changedKeys(b, a).every((k) => k === 'serial')));                   /* 고유번호 백필 */
+  diffList('pendingEntries', before.pendingEntries, after.pendingEntries, (b, a, id) => own(id)
+    || (!b && a && a.managedBy === writer)                                             /* 친구 대신 등록(새 신청) */
+    || (b && b.managedBy === writer));
+  const reqOk = (r) => r && (own(r.fromId) || own(r.toId));
+  diffList('dateRequests', before.dateRequests, after.dateRequests, (b, a) => reqOk(b) || reqOk(a));
+  diffList('messages', before.messages, after.messages, (b, a) => (b && own(b.entryId)) || (a && own(a.entryId)));
+  diffList('joinRequests', before.joinRequests, after.joinRequests, (b, a) => reqOk(b) || reqOk(a));
+  diffList('connLog', before.connLog, after.connLog, (b, a) => [b, a].some((x) => x && (own(x.a) || own(x.b))));
+  diffList('coupleReports', before.coupleReports, after.coupleReports, (b, a) => [b, a].some((x) => x && own(x.byId)));
+  /* 활동 기록: 회원은 덧붙이기만. 오래된 기록 일괄 보관(archive, 150건 이상 한꺼번에)은 정상, 몇 건만 지우거나 고치면 흔적 지우기 의심 */
+  const lb = {}; (before.logs || []).forEach((l) => { if (l && l.id) lb[l.id] = l; });
+  const la = {}; (after.logs || []).forEach((l) => { if (l && l.id) la[l.id] = l; });
+  const removedLogs = Object.keys(lb).filter((id) => !la[id]).map((id) => lb[id]);
+  const editedLogs = Object.keys(lb).filter((id) => la[id] && stableJson(lb[id]) !== stableJson(la[id]));
+  if ((removedLogs.length && removedLogs.length < 150) || editedLogs.length) {
+    issues.push({ coll: 'logs', id: '-', kind: 'removed', fields: [], before: removedLogs.concat(editedLogs.map((id) => lb[id])).slice(0, 50), after: null });
+  }
+  return issues.length ? { writer, issues } : null;
+}
+async function detectTamper(before, after) {
+  const r = detectTamperIssues(before, after);
+  if (!r) return;
+  const entries = allOf(after).concat(allOf(before));
+  const nick = (id) => { const e = entries.find((x) => x.id === id); return e ? e.nickname : id; };
+  const summary = r.issues.slice(0, 5).map((i) => {
+    const who = i.coll === 'entries' || i.coll === 'pendingEntries' ? nick(i.id)
+      : (i.coll === 'dateRequests' ? nick((i.before || i.after).fromId) + '→' + nick((i.before || i.after).toId) : i.coll);
+    return i.coll + ':' + who + '(' + (i.kind === 'changed' ? '변경 ' + i.fields.slice(0, 4).join(',') : (i.kind === 'removed' ? '삭제' : '추가')) + ')';
+  }).join(' / ');
+  await securityAlert({ type: 'tamper', writer: r.writer, writerNick: nick(r.writer), summary, issues: r.issues.slice(0, 30) },
+    '🚨 이상 변경 감지', nick(r.writer) + '님 계정으로 다른 회원 데이터 ' + r.issues.length + '건 변경 — 관리자 화면에서 확인·되돌리기');
 }

@@ -922,7 +922,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-392';
+  var APP_VERSION = '2026-10-02-393';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -943,8 +943,8 @@
   var openMsgFolds = {}; /* 관리자 메시지: 펼쳐둔 회원 대화 (리페인트 후 유지용) */
   var _mmFoldOpen = {};  /* 주선자 탭: 카드별 접힘 상태 (리페인트 후 유지용, 기본 열림) */
   var adminEditMode = false; /* 관리자 섹션 편집(순서·기본 열림) 모드 */
-  var DEFAULT_SEC_ORDER = ['usage', 'connlog', 'couple', 'pending', 'pinreset', 'reports', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
-  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', reports: '🚨 신고된 대화', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
+  var DEFAULT_SEC_ORDER = ['security', 'usage', 'connlog', 'couple', 'pending', 'pinreset', 'reports', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
+  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', reports: '🚨 신고된 대화', security: '🛡 보안 경고', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
   /* 섹션 열림 상태는 "세션 메모리에만" 저장 → 리페인트(버튼 클릭 등) 동안엔 유지되지만,
      새로고침하면 초기화되어 모두 접힌 상태로 시작 (이전에 열었던 걸 기억하지 않음) */
   var _adminSecOpen = {}, _adminSecOrder = null;
@@ -1071,6 +1071,48 @@
   try { firebase.appCheck().activate(RECAPTCHA_SITE_KEY, true); } catch (e) { try { console.warn('appCheck', e); } catch (e2) {} }
   var db = firebase.firestore();
   var stateRef = db.collection('app').doc('state');
+  /* ── 쓰기 서명: app/state 에 쓰는 모든 앱 쓰기에 쓴 사람(_w = 내 토큰 uid)과 새 난수(_wn)를 붙임.
+     보안 규칙이 _w 가 진짜 내 uid 인지 확인하고, 서버(onStateChange)는 이걸로 '누가 무엇을 바꿨는지' 보고
+     남의 데이터를 바꾼 경우 관리자에게 경고(🛡 보안 경고). _wn 이 그대로인 변경 = 서버가 쓴 것 ── */
+  (function stampStateWrites() {
+    function isState(ref) { return !!(ref && ref.path === 'app/state'); }
+    function stamp(data) {
+      if (!data || typeof data !== 'object') return data;
+      var u = firebase.auth().currentUser;
+      var o = Object.assign({}, data);
+      o._w = (u && u.uid) || '';
+      o._wn = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random());
+      return o;
+    }
+    try {
+      var FS = firebase.firestore;
+      ['Transaction', 'WriteBatch'].forEach(function (cls) {
+        var P = FS[cls] && FS[cls].prototype; if (!P) return;
+        var u0 = P.update, s0 = P.set;
+        P.update = function (ref, data) {
+          var args = Array.prototype.slice.call(arguments);
+          if (isState(ref) && args.length === 2) args[1] = stamp(data);
+          return u0.apply(this, args);
+        };
+        P.set = function (ref, data) {
+          var args = Array.prototype.slice.call(arguments);
+          if (isState(ref)) args[1] = stamp(data);
+          return s0.apply(this, args);
+        };
+      });
+      var D = FS.DocumentReference.prototype, du = D.update, ds = D.set;
+      D.update = function (data) {
+        var args = Array.prototype.slice.call(arguments);
+        if (isState(this) && args.length === 1) args[0] = stamp(data);
+        return du.apply(this, args);
+      };
+      D.set = function (data) {
+        var args = Array.prototype.slice.call(arguments);
+        if (isState(this)) args[0] = stamp(data);
+        return ds.apply(this, args);
+      };
+    } catch (e) { try { console.warn('stampStateWrites', e); } catch (e2) {} }
+  })();
   /* ══ 데이터 모드 (보안 2단계) ══
      full   = 승인 회원·관리자(서버 토큰 m/admin) → app/state 전체를 구독
      public = 손님·승인 대기 → app/public(공개 요약)만 구독 + 승인 대기면 내 신청서·메시지(applicantAction)
@@ -1136,9 +1178,10 @@
     }
     return state;
   }
+  var _secAlerts = [];
   function stopAdminPriv() {
     _adminPrivUnsubs.forEach(function (u) { try { u(); } catch (e) {} });
-    _adminPrivUnsubs = []; _adminPriv = {}; _adminKeyDoc = null;
+    _adminPrivUnsubs = []; _adminPriv = {}; _adminKeyDoc = null; _secAlerts = [];
   }
   /* 관리자 토큰일 때 관리자 전용 문서 구독. 첫 데이터가 오면 resolve (권한 거부여도 진행 — 옮기기 전 데이터는 state 에 그대로 있음) */
   function startAdminPriv() {
@@ -1160,6 +1203,11 @@
         resolve();
       }, function (err) { try { console.warn('adminOnly', err && err.code); } catch (e) {} resolve(); }));
     });
+    /* 🛡 보안 경고 (서버가 기록: 이상 변경·로그인 잠금·IP 차단) */
+    _adminPrivUnsubs.push(db.collection('securityAlerts').orderBy('at', 'desc').limit(40).onSnapshot(function (qs) {
+      var arr = []; qs.forEach(function (d) { var x = d.data(); x._id = d.id; arr.push(x); }); _secAlerts = arr;
+      schedulePaint();
+    }, function (err) { try { console.warn('securityAlerts', err && err.code); } catch (e) {} }));
     return Promise.all([keyReady, privReady]);
   }
   /* 명단·현황 배너용 프로필 목록 (공개 모드면 티저) */
@@ -3965,6 +4013,39 @@
         ta.value = t; btn.disabled = false;
         modalNotice('오류', '전송 실패: ' + (err.message || err));
       });
+    });
+  }
+  /* 관리자: 이상 변경 되돌리기 — 경고에 보관된 '바뀌기 전' 항목으로 교체(추가된 건 삭제, 지워진 건 복구) */
+  function restoreTamper(alertId) {
+    var al = _secAlerts.find(function (a) { return a._id === alertId; });
+    if (!al || !al.issues) return;
+    modalConfirm('되돌리기', (al.writerNick || '') + '님 계정으로 바뀐 ' + al.issues.length + '건을 바뀌기 전으로 되돌릴까요? (그 뒤에 같은 항목이 다시 바뀌었다면 그 변경도 덮어써요)', '되돌리기', 'danger').then(function (ok) {
+      if (!ok) return;
+      db.runTransaction(function (tx) {
+        return tx.get(stateRef).then(function (doc) {
+          var s = doc.data() || {}, upd = {};
+          al.issues.forEach(function (i) {
+            if (i.coll === 'logs') {
+              var cur = upd.logs || (s.logs || []).slice(), have = {};
+              cur.forEach(function (l) { have[l.id] = 1; });
+              (i.before || []).forEach(function (l) { if (l && !have[l.id]) cur.push(l); });
+              upd.logs = cur.sort(function (x, y) { return String(x.at || '').localeCompare(String(y.at || '')); });
+              return;
+            }
+            var list = (upd[i.coll] || s[i.coll] || []).slice();
+            var idx = list.findIndex(function (x) { return x && x.id === i.id; });
+            if (i.before) { if (idx >= 0) list[idx] = i.before; else list.push(i.before); }
+            else if (idx >= 0) list.splice(idx, 1);
+            upd[i.coll] = list;
+          });
+          tx.update(stateRef, upd);
+        });
+      }).then(function () {
+        return db.collection('securityAlerts').doc(alertId).update({ restoredAt: new Date().toISOString(), resolved: true, resolvedAt: new Date().toISOString() });
+      }).then(function () {
+        appendLog('admin', '관리자', '이상 변경 되돌림: ' + (al.writerNick || al.writer || ''));
+        modalNotice('되돌림 완료', '바뀌기 전 상태로 되돌렸어요.');
+      }).catch(function (e) { modalNotice('오류', '되돌리지 못했어요: ' + ((e && e.message) || e)); });
     });
   }
   /* 관리자: 신고된 대화 읽기 전용 보기 (열람 기록은 서버가 남김) */
@@ -6879,7 +6960,26 @@
           '<button type="button" class="card-btn approve" data-action="report-resolve" data-id="' + escapeHtml(r.pair) + '" style="flex:none;">처리 완료</button>' +
         '</div>';
       }).join('') : '<p class="sub">신고된 대화가 없어요 🙆</p>'), false, 'reports');
+    /* 🛡 보안 경고: 회원이 남의 데이터를 바꿈(되돌리기 가능)·로그인 잠금·IP 차단 */
+    var SEC_TYPE = { tamper: '🚨 이상 변경', 'login-lock': '🔒 회원 로그인 잠김', 'admin-lock': '🚨 관리자 로그인 잠김', 'ip-block': '🛡 IP 차단' };
+    var secOpen = _secAlerts.filter(function (a) { return !a.resolved; });
+    var securitySection = adminFold('🛡 보안 경고' + (secOpen.length ? ' <span class="blink-soft" style="background:#c5221f;color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">확인 필요 ' + secOpen.length + '</span>' : ''), secOpen.length,
+      '<p class="sub">회원 계정으로 <b>다른 회원 데이터가 바뀌면</b>(개발자 도구 조작 의심) 바뀌기 전 내용과 함께 기록돼요. [되돌리기]로 원래대로 돌릴 수 있어요. 로그인 잠금·IP 차단도 여기 표시돼요. (7일 이내면 전체 시점 복구도 가능)</p>' +
+      (_secAlerts.length ? _secAlerts.map(function (a) {
+        var head = '<b>' + (SEC_TYPE[a.type] || a.type) + '</b> · ' + fmtDate(a.at);
+        var body = '';
+        if (a.type === 'tamper') body = escapeHtml(a.writerNick || a.writer || '') + '님 계정으로 ' + (a.issues || []).length + '건 — ' + escapeHtml(a.summary || '');
+        else if (a.type === 'ip-block') body = '한 곳에서 1시간에 ' + (a.fails || 0) + '번 실패 → 1시간 차단';
+        else body = escapeHtml(a.target || '') + ' · ' + (a.fails || 0) + '번 틀림';
+        var btns = '';
+        if (!a.resolved && a.type === 'tamper' && !a.restoredAt) btns += '<button type="button" class="card-btn danger" data-action="sec-restore" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">되돌리기</button> ';
+        if (!a.resolved) btns += '<button type="button" class="card-btn" data-action="sec-ack" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">확인함</button>';
+        if (a.restoredAt) body += ' <span style="color:#137333;">(되돌림 ' + fmtDate(a.restoredAt) + ')</span>';
+        return '<div style="border:1px solid ' + (a.resolved ? 'var(--line)' : '#f1b0ab') + ';background:' + (a.resolved ? 'transparent' : '#fdecea') + ';border-radius:10px;padding:8px 11px;margin-bottom:6px;' + (a.resolved ? 'opacity:.6;' : '') + '">' +
+          '<div style="font-size:0.86rem;">' + head + '</div><div style="font-size:0.84rem;margin:3px 0 5px;">' + body + '</div>' + btns + '</div>';
+      }).join('') : '<p class="sub">경고가 없어요 🙆</p>'), !!secOpen.length, 'security');
     var secHtml = {
+      security: securitySection,
       reports: reportsSection,
       usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), pending: pendingSection, pinreset: pinResetSectionHtml(state, adminFold), held: heldSection, stale: staleSection, editrev: editRevSection,
       deaclist: deacListSection, dellog: delLogSection,
@@ -10435,6 +10535,8 @@
       else if (action === 'reveal-mine') handleRevealMine(id);
       else if (action === 'dm-chat') openDmChat(id);
       else if (action === 'report-view') { if (isAdminUnlocked) openReportedChat(id); }
+      else if (action === 'sec-ack') { if (isAdminUnlocked) db.collection('securityAlerts').doc(id).update({ resolved: true, resolvedAt: new Date().toISOString() }).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); }); }
+      else if (action === 'sec-restore') { if (isAdminUnlocked) restoreTamper(id); }
       else if (action === 'report-resolve') { if (isAdminUnlocked) resolveReportedChat(id); }
       else if (action === 'revoke-photo-viewer') handleRevokePhotoViewer(id);
       else if (action === 'revoke-photo-link') handleRevokePhotoViewer(id);
