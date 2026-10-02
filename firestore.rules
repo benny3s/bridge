@@ -12,6 +12,12 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    // 공개 요약(손님 화면용: 인원·티저·로그인 목록) — 서버(onStateChange)만 씀
+    match /app/public {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // 사진 — 로그인한 사용자만
     match /photos/{entryId} {
       allow read, write: if request.auth != null;

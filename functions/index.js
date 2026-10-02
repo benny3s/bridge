@@ -390,6 +390,7 @@ exports.onStateChange = functions
     (before.dateRequests || []).forEach((r) => { beforeMap[r.id] = r; });
 
     const jobs = [];
+    jobs.push(syncPublicView(after).catch((e) => console.error('syncPublicView', e)));
     (after.dateRequests || []).forEach((r) => {
       const prev = beforeMap[r.id];
       const type = (r.type || 'contact') === 'photo' ? '사진' : '대화'; /* 앱 용어(대화 신청)와 통일 */
@@ -600,10 +601,279 @@ exports.adminSendSms = functions
     return { ok: okCount, fail: results.length - okCount, results: results };
   });
 
-/* [임시] custom token 서명 권한 점검용 — 토큰은 반환하지 않고 성공 여부만. 점검 후 삭제 예정 */
-exports.authSelfTest = functions
+/* ══ 2단계: 손님·승인대기용 공개 요약 + 신청자 쓰기 대행 ══
+   보안 규칙상 app/state 는 승인 회원·관리자만 읽고 쓸 수 있음. 손님 화면은 app/public(요약)으로 그리고,
+   손님·승인대기의 쓰기(가입 신청·문의·PIN 재설정 요청·신청서 수정/철회)는 applicantAction 이 대신 처리. */
+function clip(s, n) { return String(s == null ? '' : s).replace(/\s+/g, ' ').slice(0, n); }
+function roundHour(iso) {
+  const t = iso ? new Date(iso).getTime() : 0;
+  return t ? new Date(Math.floor(t / 3600000) * 3600000).toISOString() : null;
+}
+function buildPublicView(state) {
+  const entries = state.entries || [];
+  const byId = {}; entries.forEach((e) => { byId[e.id] = e; });
+  const lastOf = (e) => { let v = e.lastSeenAt; if (e.managedBy && byId[e.managedBy] && byId[e.managedBy].lastSeenAt) v = byId[e.managedBy].lastSeenAt; return v || e.submittedAt || null; };
+  /* 티저: 승인 회원 중 명단 노출 대상. 신원 연결 안 되게 닉네임·id·사진 없음, 소개는 앞 18자만 */
+  const teaser = entries.filter((e) => !e.isMatchmaker && !e.deactivated && !e.testAccount).map((e, i) => ({
+    id: 't' + i, gender: e.gender || '', birthYear: e.birthYear || null, region: clip(e.region, 20),
+    intro: clip(e.intro, 18), idealType: clip(e.idealType, 18),
+    submittedAt: e.submittedAt || null, lastSeenAt: roundHour(lastOf(e)), serial: e.serial || null
+  }));
+  /* 로그인 목록·닉네임 중복 확인용 (기존 로그인 창에 이미 보이던 수준) */
+  const dirOf = (e, pending) => {
+    const d = { id: e.id, nickname: e.nickname || '', serial: e.serial || null, submittedAt: e.submittedAt || null, pinOn: !!(e.pinAuth || e.pinHash || e.pinSet) };
+    if (pending) d.pending = true;
+    ['deactivated', 'isMatchmaker', 'ownerSelf', 'testAccount'].forEach((k) => { if (e[k]) d[k] = true; });
+    if (e.managedBy) d.managedBy = e.managedBy;
+    if (e.pinExpiresAt) d.pinExpiresAt = e.pinExpiresAt;
+    return d;
+  };
+  const loginDir = entries.map((e) => dirOf(e, false)).concat((state.pendingEntries || []).map((e) => dirOf(e, true)));
+  const reports = state.coupleReports || [];
+  const reviews = reports.filter((r) => r.confirmed && r.review && (r.vis === 'public' || r.vis === 'anon'))
+    .map((r) => ({ confirmed: true, review: clip(r.review, 300), vis: r.vis, byNick: r.vis === 'public' ? (r.byNick || '') : '', partner: r.vis === 'public' ? (r.partner || '') : '', confirmedAt: r.confirmedAt || null, at: r.at || null }));
+  const connNow = (state.dateRequests || []).filter((r) => (r.type || 'contact') === 'contact' && r.approved).length;
+  return {
+    v: 1,
+    appVersion: state.appVersion || '',
+    announce: state.announce || null,
+    popup: state.popup || null,
+    adminPub: (state.adminAuth && state.adminAuth.publicKeyJwk) || null,
+    teaser, loginDir, reviews,
+    connCount: Array.isArray(state.connLog) ? state.connLog.length : Math.max(typeof state.connEver === 'number' ? state.connEver : 0, connNow),
+    coupleCount: reports.filter((r) => r.confirmed).length
+  };
+}
+async function syncPublicView(state) {
+  const view = buildPublicView(state);
+  const h = nodeCrypto.createHash('sha1').update(JSON.stringify(view)).digest('hex');
+  const ref = db.doc('app/public');
+  const cur = await ref.get();
+  if (cur.exists && cur.data().h === h) return;
+  await ref.set(Object.assign({ h, updatedAt: new Date().toISOString() }, view));
+}
+
+/* ── 신청자 쓰기 대행 ── */
+const ENTRY_TEXT_LIMITS = { nickname: 20, region: 40, workplace: 60, height: 10, intro: 1000, idealType: 600, dealbreaker: 600, degreeChoice: 20 };
+const ENC_FIELDS = ['realNameEnc', 'contactEnc', 'referrerEnc', 'contactSelfEnc'];
+function isSmallObj(v, max) { return !!v && typeof v === 'object' && JSON.stringify(v).length <= (max || 8000); }
+function cleanPinAuth(p) {
+  if (!p || typeof p !== 'object') return null;
+  if (typeof p.salt !== 'string' || typeof p.hash !== 'string' || p.salt.length > 64 || p.hash.length > 128) return null;
+  return { v: 2, salt: p.salt, hash: p.hash };
+}
+/* 클라가 보낸 프로필 필드 중 허용된 것만 골라 검증 (managedBy·testAccount·승인 관련 필드는 절대 받지 않음) */
+function pickProfile(src, kind) {
+  const out = {};
+  if (typeof src.nickname === 'string') out.nickname = src.nickname.trim().slice(0, ENTRY_TEXT_LIMITS.nickname);
+  ENC_FIELDS.forEach((k) => { if (isSmallObj(src[k])) out[k] = src[k]; });
+  if (kind === 'mm') return out;
+  ['region', 'workplace', 'height', 'intro', 'idealType', 'dealbreaker', 'degreeChoice'].forEach((k) => {
+    if (typeof src[k] === 'string') out[k] = src[k].trim().slice(0, ENTRY_TEXT_LIMITS[k]);
+  });
+  if (src.gender === 'male' || src.gender === 'female') out.gender = src.gender;
+  const by = parseInt(src.birthYear, 10);
+  if (by >= 1900 && by <= new Date().getFullYear() - 19) out.birthYear = by;
+  if (typeof src.photoThumb === 'string' && /^data:image\//.test(src.photoThumb) && src.photoThumb.length <= 120000) out.photoThumb = src.photoThumb;
+  else if (src.photoThumb === null) out.photoThumb = null;
+  const pc = parseInt(src.photoCount, 10);
+  if (pc >= 0 && pc <= 3) out.photoCount = pc;
+  if (typeof src.blurPhoto === 'boolean') out.blurPhoto = src.blurPhoto;
+  return out;
+}
+function cleanPhotos(photos) {
+  if (photos == null) return null;
+  if (!Array.isArray(photos) || photos.length > 3) throw new HttpsError('invalid-argument', '사진은 최대 3장이에요.');
+  let total = 0;
+  photos.forEach((p) => {
+    if (typeof p !== 'string' || !/^data:image\//.test(p)) throw new HttpsError('invalid-argument', '사진 형식이 올바르지 않아요.');
+    total += p.length;
+  });
+  if (total > 1000000) throw new HttpsError('invalid-argument', '사진 용량이 너무 커요.');
+  return photos;
+}
+function nickTaken(state, nickname, exceptId) {
+  const n = String(nickname || '').trim().toLowerCase();
+  const all = (state.entries || []).concat(state.pendingEntries || []);
+  /* 주선자 본인 프로필 ↔ 주선자 계정은 같은 닉네임 허용 (클라 nickExemptIds 와 같은 취지) */
+  const exempt = {};
+  (state.entries || []).forEach((e) => { if (e.managedBy && e.ownerSelf) { exempt[e.id] = 1; exempt[e.managedBy] = 1; } });
+  return all.some((e) => e.id !== exceptId && !exempt[e.id] && (e.nickname || '').trim().toLowerCase() === n);
+}
+function logItem(type, actor, detail) { return { id: nodeCrypto.randomUUID(), at: new Date().toISOString(), type, actor: actor || '', detail: detail || '' }; }
+/* 손님 쓰기(가입·문의·PIN 요청) 남용 방지: 접속 IP 기준 시간당 횟수 제한 */
+async function rateLimit(context, key, maxPerHour) {
+  const req = context.rawRequest || {};
+  const ip = String(req.ip || (req.headers && req.headers['x-forwarded-for']) || 'unknown').split(',')[0].trim();
+  const ref = db.collection('rateLimit').doc(guardKey(key + '_', ip));
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref);
+    const now = Date.now();
+    const hits = (s.exists ? (s.data().hits || []) : []).filter((t) => now - t < 3600000);
+    if (hits.length >= maxPerHour) throw new HttpsError('resource-exhausted', '잠시 후 다시 시도해주세요.');
+    hits.push(now);
+    tx.set(ref, { hits });
+  });
+}
+function claimsOf(context) { return (context.auth && context.auth.token) || {}; }
+
+exports.applicantAction = functions
   .region('asia-northeast3')
-  .https.onCall(async () => {
-    try { await admin.auth().createCustomToken('selftest-probe', { t: 1 }); return { ok: true }; }
-    catch (e) { return { ok: false, err: String((e && (e.code || e.message)) || e).slice(0, 300) }; }
+  .runWith({ timeoutSeconds: 30, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError('unauthenticated', '연결 인증이 안 됐어요. 새로고침 후 다시 시도해주세요.');
+    data = data || {};
+    const op = String(data.op || '');
+    const stateRef = db.doc('app/state');
+    const uid = context.auth.uid;
+    const pendingSelf = claimsOf(context).p === 1;
+
+    if (op === 'submit') {
+      await rateLimit(context, 'submit', 6);
+      const kind = data.kind === 'mm' ? 'mm' : 'self';
+      const src = data.entry || {};
+      const id = String(src.id || '');
+      if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) throw new HttpsError('invalid-argument', '잘못된 요청이에요.');
+      const entry = pickProfile(src, kind);
+      entry.id = id;
+      entry.pinAuth = cleanPinAuth(src.pinAuth);
+      if (!entry.nickname || !entry.pinAuth || !entry.contactEnc || !entry.realNameEnc) throw new HttpsError('invalid-argument', '필수 항목이 빠졌어요.');
+      if (kind === 'self' && (!entry.gender || !entry.birthYear)) throw new HttpsError('invalid-argument', '필수 항목이 빠졌어요. (만 19세 이상만 가입할 수 있어요)');
+      if (kind === 'mm') entry.isMatchmaker = true;
+      if (/^qa_/i.test(entry.nickname)) entry.testAccount = true;
+      entry.submittedAt = new Date().toISOString();
+      const photos = kind === 'self' ? cleanPhotos(data.photos) : null;
+      await db.runTransaction(async (tx) => {
+        const s = (await tx.get(stateRef)).data() || {};
+        if ((s.entries || []).concat(s.pendingEntries || []).some((e) => e.id === id)) throw new HttpsError('already-exists', '이미 접수된 신청이에요.');
+        if (nickTaken(s, entry.nickname, id)) throw new HttpsError('already-exists', '이미 사용 중인 닉네임이에요. 다른 닉네임을 사용해주세요.');
+        tx.update(stateRef, {
+          pendingEntries: (s.pendingEntries || []).concat([entry]),
+          logs: (s.logs || []).concat([logItem('signup', entry.nickname, kind === 'mm' ? '주선자 등록 신청' : '신청서 제출')])
+        });
+      });
+      if (photos && photos.length) await db.collection('photos').doc(id).set({ photos });
+      const token = await admin.auth().createCustomToken(id, { p: 1 });
+      return { ok: true, token };
+    }
+
+    if (op === 'guestMessage') {
+      await rateLimit(context, 'msg', 10);
+      const text = clip(data.text, 300).trim();
+      const name = clip(data.name, 30).trim();
+      if (!text || !name || !isSmallObj(data.phoneEnc)) throw new HttpsError('invalid-argument', '이름·전화번호·내용을 모두 입력해주세요.');
+      const m = { id: nodeCrypto.randomUUID(), entryId: 'guest-' + nodeCrypto.randomUUID(), from: 'user', text, at: new Date().toISOString(), guestName: name, guestPhoneEnc: data.phoneEnc };
+      await db.runTransaction(async (tx) => {
+        const s = (await tx.get(stateRef)).data() || {};
+        tx.update(stateRef, { messages: (s.messages || []).concat([m]), logs: (s.logs || []).concat([logItem('message', name + ' (비로그인)', '관리자에게 문의')]) });
+      });
+      return { ok: true };
+    }
+
+    if (op === 'pinReset') {
+      await rateLimit(context, 'pinreset', 5);
+      const nick = clip(data.nickname, 30).trim();
+      if (!nick || !isSmallObj(data.phoneEnc)) throw new HttpsError('invalid-argument', '닉네임과 전화번호를 넣어주세요.');
+      await db.runTransaction(async (tx) => {
+        const s = (await tx.get(stateRef)).data() || {};
+        const ent = (s.entries || []).concat(s.pendingEntries || []).find((e) => (e.nickname || '').trim() === nick);
+        if (!ent) throw new HttpsError('not-found', '그 닉네임을 찾지 못했어요. 로그인 목록에 보이는 닉네임 그대로 넣어주세요.');
+        if (ent.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
+        let list = (s.pinResetReqs || []).filter((q) => !(q.entryId === ent.id && q.status === 'pending'));
+        list.push({ id: nodeCrypto.randomUUID(), entryId: ent.id, nickname: ent.nickname || nick, phoneEnc: data.phoneEnc, at: new Date().toISOString(), status: 'pending' });
+        if (list.length > 50) list = list.slice(list.length - 50);
+        tx.update(stateRef, { pinResetReqs: list, logs: (s.logs || []).concat([logItem('message', nick + ' (비로그인)', 'PIN 재설정 요청')]) });
+      });
+      return { ok: true };
+    }
+
+    /* ── 이하: 승인 대기 본인만 (토큰 p:1, uid = 내 신청서 id) ── */
+    if (!pendingSelf) throw new HttpsError('permission-denied', '승인 대기 중인 본인만 할 수 있어요.');
+
+    if (op === 'pendingView') {
+      const s = (await stateRef.get()).data() || {};
+      const me = (s.pendingEntries || []).find((e) => e.id === uid);
+      if (!me) {
+        /* 그사이 승인됨 → 회원 토큰으로 바꿔 쓰도록 알림 */
+        const approved = (s.entries || []).some((e) => e.id === uid);
+        return { entry: null, messages: [], approved };
+      }
+      const entry = Object.assign({}, me); delete entry.pinAuth; delete entry.pinHash;
+      const messages = (s.messages || []).filter((m) => m.entryId === uid);
+      return { entry, messages };
+    }
+
+    if (op === 'edit') {
+      const src = data.entry || {};
+      const photos = data.photos === undefined ? undefined : cleanPhotos(data.photos);
+      const resubmitMsg = clip(data.resubmitMsg, 300).trim();
+      await db.runTransaction(async (tx) => {
+        const s = (await tx.get(stateRef)).data() || {};
+        const me = (s.pendingEntries || []).find((e) => e.id === uid);
+        if (!me) throw new HttpsError('not-found', '신청서를 찾을 수 없어요.');
+        const patch = pickProfile(src, me.isMatchmaker ? 'mm' : 'self');
+        const pa = cleanPinAuth(src.pinAuth);
+        if (patch.nickname && nickTaken(s, patch.nickname, uid)) throw new HttpsError('already-exists', '이미 사용 중인 닉네임이에요.');
+        let nick = '';
+        const pend = (s.pendingEntries || []).map((e) => {
+          if (e.id !== uid) return e;
+          const u = Object.assign({}, e, patch);
+          if (pa) { u.pinAuth = pa; delete u.pinHash; }
+          delete u.rejectedReason; delete u.rejectedAt; delete u.heldReason; delete u.heldAt;
+          u.submittedAt = new Date().toISOString();
+          nick = u.nickname || '';
+          return u;
+        });
+        const upd = { pendingEntries: pend, logs: (s.logs || []).concat([logItem('edit', nick, (me.nickname !== nick ? '닉네임 변경: ' + me.nickname + ' → ' + nick : '신청서 수정'))]) };
+        if (resubmitMsg) upd.messages = (s.messages || []).concat([{ id: nodeCrypto.randomUUID(), entryId: uid, from: 'user', text: '[재신청] ' + resubmitMsg, at: new Date().toISOString() }]);
+        tx.update(stateRef, upd);
+      });
+      if (photos !== undefined) {
+        if (photos && photos.length) await db.collection('photos').doc(uid).set({ photos });
+        else await db.collection('photos').doc(uid).delete().catch(() => {});
+      }
+      return { ok: true };
+    }
+
+    if (op === 'withdraw') {
+      await db.runTransaction(async (tx) => {
+        const s = (await tx.get(stateRef)).data() || {};
+        const me = (s.pendingEntries || []).find((e) => e.id === uid);
+        if (!me) throw new HttpsError('not-found', '취소할 신청서를 찾을 수 없어요.');
+        tx.update(stateRef, {
+          pendingEntries: (s.pendingEntries || []).filter((e) => e.id !== uid),
+          logs: (s.logs || []).concat([logItem('withdraw', me.nickname || '신청자', '신청 취소(본인 철회)')])
+        });
+      });
+      await db.collection('photos').doc(uid).delete().catch(() => {});
+      await db.collection('pushTokens').doc(uid).delete().catch(() => {});
+      return { ok: true };
+    }
+
+    if (op === 'message') {
+      const text = clip(data.text, 300).trim();
+      if (!text) throw new HttpsError('invalid-argument', '내용을 입력해주세요.');
+      await db.runTransaction(async (tx) => {
+        const s = (await tx.get(stateRef)).data() || {};
+        const me = (s.pendingEntries || []).find((e) => e.id === uid);
+        if (!me) throw new HttpsError('not-found', '신청서를 찾을 수 없어요.');
+        tx.update(stateRef, {
+          messages: (s.messages || []).concat([{ id: nodeCrypto.randomUUID(), entryId: uid, from: 'user', text, at: new Date().toISOString() }]),
+          logs: (s.logs || []).concat([logItem('message', me.nickname || '신청자', '관리자에게 메시지')])
+        });
+      });
+      return { ok: true };
+    }
+
+    if (op === 'hideMessages') {
+      const one = data.id ? String(data.id) : '';
+      await db.runTransaction(async (tx) => {
+        const s = (await tx.get(stateRef)).data() || {};
+        const msgs = (s.messages || []).map((m) => (m.entryId === uid && !m.hiddenByUser && (!one || m.id === one)) ? Object.assign({}, m, { hiddenByUser: true }) : m);
+        tx.update(stateRef, { messages: msgs });
+      });
+      return { ok: true };
+    }
+
+    throw new HttpsError('invalid-argument', '알 수 없는 요청이에요.');
   });

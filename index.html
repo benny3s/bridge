@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-384';
+  var APP_VERSION = '2026-10-02-385';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1046,6 +1046,7 @@
 
   var NTFY_TOPIC = 'benny3s-meeting-notify';
   function notifyAdmin(title, body) {
+    return; /* 보안: ntfy.sh 공개 토픽은 누구나 구독 가능해 닉네임·문의 내용이 새어 나감 → 사용 중지 (관리자 알림은 FCM) */
     try {
       fetch('https://ntfy.sh', {
         method: 'POST',
@@ -1069,6 +1070,127 @@
   try { firebase.appCheck().activate(RECAPTCHA_SITE_KEY, true); } catch (e) { try { console.warn('appCheck', e); } catch (e2) {} }
   var db = firebase.firestore();
   var stateRef = db.collection('app').doc('state');
+  /* ══ 데이터 모드 (보안 2단계) ══
+     full   = 승인 회원·관리자(서버 토큰 m/admin) → app/state 전체를 구독
+     public = 손님·승인 대기 → app/public(공개 요약)만 구독 + 승인 대기면 내 신청서·메시지(applicantAction)
+     보안 규칙상 app/state 는 full 만 읽고 쓸 수 있음. 손님·승인 대기의 쓰기는 applicantAction 이 대행. */
+  var publicRef = db.collection('app').doc('public');
+  var dataMode = '';
+  var _dataUnsub = null;
+  var _publicDoc = null;
+  var _pendingView = null;
+  var _sessionExpired = false;
+  function authClaims() {
+    var u = firebase.auth().currentUser;
+    if (!u || u.isAnonymous) return Promise.resolve({});
+    return u.getIdTokenResult().then(function (r) { return r.claims || {}; }).catch(function () { return {}; });
+  }
+  function normalizeState(s) {
+    ['entries', 'pendingEntries', 'dateRequests', 'approvedPairs', 'logs', 'messages'].forEach(function (k) { if (!Array.isArray(s[k])) s[k] = []; });
+    return s;
+  }
+  /* 공개 요약 → 기존 화면 코드가 그대로 쓰는 state 모양으로. entries/pendingEntries = 로그인 목록(닉네임 등 최소),
+     teaser = 명단 티저(닉네임·사진 없음). 승인 대기 본인은 내 신청서·메시지를 덧붙임 */
+  function buildPublicState() {
+    var pub = _publicDoc || {}, pv = _pendingView;
+    var dir = pub.loginDir || [];
+    var pend = dir.filter(function (d) { return d.pending; });
+    if (pv && pv.entry) pend = pend.filter(function (d) { return d.id !== pv.entry.id; }).concat([pv.entry]);
+    var s = {
+      _public: true,
+      entries: dir.filter(function (d) { return !d.pending; }),
+      pendingEntries: pend,
+      teaser: pub.teaser || [],
+      dateRequests: [], approvedPairs: [], logs: [], dm: [],
+      messages: (pv && pv.messages) || [],
+      connLog: new Array(pub.connCount || 0),
+      coupleReports: (pub.reviews || []).slice(),
+      appVersion: pub.appVersion || '', announce: pub.announce || null, popup: pub.popup || null,
+      adminAuth: pub.adminPub ? { publicKeyJwk: pub.adminPub } : null
+    };
+    for (var i = s.coupleReports.length; i < (pub.coupleCount || 0); i++) s.coupleReports.push({ confirmed: true });
+    return s;
+  }
+  /* 명단·현황 배너용 프로필 목록 (공개 모드면 티저) */
+  function profileEntries(state) { return (state && state.teaser) || (state && state.entries) || []; }
+  function onDataArrived(state, first) {
+    if (!currentUser) restoreSession(state);
+    checkVersion(state);
+    currentState = state;
+    if (!first) schedulePaint();
+  }
+  function subscribeData(mode) {
+    if (_dataUnsub) { try { _dataUnsub(); } catch (e) {} _dataUnsub = null; }
+    dataMode = mode;
+    return new Promise(function (resolve) {
+      var first = true;
+      function done(s) { if (first) { first = false; resolve(s); } }
+      if (mode === 'full') {
+        _dataUnsub = stateRef.onSnapshot(function (doc) {
+          if (!doc.exists) return;
+          var s = normalizeState(doc.data());
+          onDataArrived(s, first); done(s);
+        }, function (err) {
+          try { console.warn('state listen', err && err.code); } catch (e) {}
+          /* 회원 토큰이 거부됨(만료·보관 등) → 공개 모드로 내려감 */
+          if (dataMode === 'full') subscribeData('public').then(function (s) { if (first) done(s); else schedulePaint(); });
+        });
+      } else {
+        _dataUnsub = publicRef.onSnapshot(function (doc) {
+          _publicDoc = doc.exists ? doc.data() : {};
+          var s = buildPublicState();
+          onDataArrived(s, first); done(s);
+        }, function (err) {
+          try { console.warn('public listen', err && err.code); } catch (e) {}
+          var s = buildPublicState(); onDataArrived(s, first); done(s);
+        });
+      }
+    });
+  }
+  /* 지금 토큰의 신분에 맞춰 구독 전환 → 첫 데이터가 오면 resolve */
+  function switchDataForAuth() {
+    return authClaims().then(function (c) {
+      var mode = (c.admin === 1 || c.m === 1) ? 'full' : 'public';
+      if (mode === 'public') _pendingView = null;
+      return subscribeData(mode).then(function (s) {
+        if (mode === 'public' && c.p === 1) return refreshPendingView().then(function () { return currentState; });
+        return s;
+      });
+    });
+  }
+  /* 승인 대기 본인: 내 신청서·관리자 메시지를 서버에서 받아옴. 그사이 승인됐으면 회원 토큰으로 갈아탐 */
+  var _pendingPoll = null;
+  function refreshPendingView() {
+    return callFn('applicantAction', { op: 'pendingView' }).then(function (r) {
+      var d = (r && r.data) || {};
+      if (d.approved && currentUser && currentUser.pin) {
+        return memberServerLogin(currentUser.id, currentUser.pin).then(switchDataForAuth).then(function () { schedulePaint(); });
+      }
+      _pendingView = d.entry ? { entry: d.entry, messages: d.messages || [] } : null;
+      if (dataMode === 'public') { currentState = buildPublicState(); schedulePaint(); }
+      if (!_pendingPoll) _pendingPoll = setInterval(function () {
+        if (dataMode === 'public' && currentUser && !document.hidden) refreshPendingView().catch(function () {});
+      }, 60000);
+    }).catch(function (e) { try { console.warn('pendingView', e && e.code); } catch (e2) {} });
+  }
+  /* 앱 시작 시: 기기에 남은 로그인(회원 세션·관리자 비밀번호)을 서버 토큰으로 맞춤 */
+  function prepareSessionAuth() {
+    var sess = null;
+    try { sess = JSON.parse(localStorage.getItem('meetUser') || sessionStorage.getItem('meetUser') || 'null'); } catch (e) {}
+    var savedAdmin = getAdminPin();
+    return authClaims().then(function (c) {
+      if (savedAdmin) {
+        if (c.admin === 1) return;
+        return adminServerLogin(savedAdmin).catch(function (e) { if (isAuthRejection(e)) clearAdminPin(); });
+      }
+      if (sess && sess.id) {
+        if ((c.m === 1 || c.p === 1) && authUid() === sess.id) return;
+        if (!sess.pin) { _sessionExpired = true; return; }
+        return memberServerLogin(sess.id, sess.pin).catch(function (e) { if (isAuthRejection(e)) _sessionExpired = true; });
+      }
+      if (c.m === 1 || c.p === 1) return dropToGuestAuth(); /* 세션은 없는데 회원 토큰만 남음 → 손님으로 */
+    }).catch(function () {});
+  }
   var pushTokensRef = db.collection('pushTokens');
   var VAPID_KEY = 'BNtmOVQDK3AV0s-mJJdO9spG0AHInihNOnx2im0q-XDViqBMi2N-kz1y8IN1gv64uGqO0ASvtPMKNr3tqbZsHPY';
   var fcmMessaging = null;
@@ -1435,19 +1557,12 @@
     if (!u || u.isAnonymous) return Promise.resolve();
     return firebase.auth().signOut().then(function () { return firebase.auth().signInAnonymously(); }).catch(function () {});
   }
-  /* 저장된 로그인(기기에 남은 회원 세션·관리자 비밀번호)을 서버 토큰으로 맞춰 둠. 앱 열 때 1회 */
+  /* 관리자 잠금 뒤: 회원 세션이 있으면 회원 토큰으로, 아니면 손님으로 되돌리고 데이터 전환 */
   function syncServerAuth() {
-    try {
-      var savedAdmin = getAdminPin();
-      if (isAdminUnlocked && savedAdmin) {
-        if (authUid() !== 'admin') adminServerLogin(savedAdmin).catch(function (e) { try { console.warn('adminLogin', e && e.code); } catch (e2) {} });
-        return;
-      }
-      if (currentUser && currentUser.id && currentUser.pin && authUid() !== currentUser.id) {
-        memberServerLogin(currentUser.id, currentUser.pin).catch(function (e) { try { console.warn('memberLogin', e && e.code); } catch (e2) {} });
-      }
-    } catch (e) {}
+    var p = (currentUser && currentUser.id && currentUser.pin) ? memberServerLogin(currentUser.id, currentUser.pin).catch(function () {}) : Promise.resolve();
+    return p.then(switchDataForAuth).then(function () { paint(currentState); });
   }
+
 
   /* 회원 전화번호를 서버에 안전 저장(암호화). 실패해도 가입/수정 흐름은 막지 않음(best-effort) */
   function saveMyPhone(entryId, pin, phone) {
@@ -1948,6 +2063,40 @@
     ov.querySelector('#sc-cancel').addEventListener('click', function () { closeModal(ov); });
     ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(ov); });
     setTimeout(function () { try { numEl.focus(); } catch (e) {} }, 50);
+  }
+
+  /* ---- 개인정보 처리방침 (가입 동의 박스의 '처리방침 전문 보기') ---- */
+  var PRIVACY_LINK = ' <button type="button" data-action="privacy-policy" style="background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;cursor:pointer;font-size:inherit;font-family:inherit;">처리방침 전문 보기</button>';
+  var PRIVACY_EFFECTIVE = '2026-10-02';
+  function showPrivacyPolicy() {
+    var sec = function (t, body) { return '<h4 style="margin:14px 0 4px;font-size:0.92rem;">' + t + '</h4><div style="font-size:0.84rem;line-height:1.65;color:var(--ink);">' + body + '</div>'; };
+    var ov = openModal(
+      '<h3>🔒 개인정보 처리방침</h3>' +
+      '<p class="modal-msg" style="font-size:0.8rem;color:var(--muted);">베니브릿지는 지인 기반 소개 서비스를 위해 아래와 같이 개인정보를 처리합니다. (시행일 ' + PRIVACY_EFFECTIVE + ')</p>' +
+      sec('1. 수집 항목',
+        '· 필수: 닉네임, 실명, 휴대폰 번호, 성별, 출생연도, 키, 지역, 직장, 사진, 자기소개·이상형, PIN<br>' +
+        '· 선택: 알게 된 경로(추천인), 지인 필터용 연락처 — <b>번호 원본은 저장하지 않고</b> 비교용 값만 저장<br>' +
+        '· 자동: 접속 시각, 앱 안 활동 기록, 알림 수신용 기기 토큰<br>' +
+        '· PIN은 되돌릴 수 없는 형태(해시)로만 저장해요.') +
+      sec('2. 이용 목적', '회원 확인·가입 승인, 소개(매칭) 서비스 제공, 요청·대화 등 기능 운영, 관리자 안내 연락, 부정 이용 방지') +
+      sec('3. 공개 범위',
+        '· 프로필(닉네임·나이·지역·직장·소개 등)은 <b>승인된 회원</b>에게만 보여요. 비회원에게는 성별·나이대 등 일부만 가려서 보여요.<br>' +
+        '· 사진은 <b>서로 승인한 경우</b>에만 공개돼요.<br>' +
+        '· 실명·연락처는 <b>암호화</b>되어 관리자만 볼 수 있고, 다른 회원에게 제공하지 않아요.') +
+      sec('4. 보유 및 파기',
+        '· 삭제 요청이 승인되면 지체 없이 파기해요.<br>' +
+        '· 보관(휴면)을 고르면 다시 활동할 수 있도록 보관하며, 언제든 삭제를 요청할 수 있어요.<br>' +
+        '· 장애 복구용 백업은 최대 7일 뒤 자동으로 사라져요.') +
+      sec('5. 처리 위탁 및 저장 위치', 'Google(Firebase) — 데이터 저장·서버 기능·알림 발송. 저장 위치: 대한민국(서울 리전). 관리자 안내 문자는 관리자 휴대폰으로 직접 보내요.') +
+      sec('6. 제3자 제공', '법령에 따른 요청이 있는 경우를 제외하고 제3자에게 제공하지 않아요.') +
+      sec('7. 이용자의 권리', '내 정보 열람·정정(프로필 수정), 삭제·보관 요청, 처리 정지를 언제든 요청할 수 있어요. 앱의 💬 Q&A로 말씀해 주세요.') +
+      sec('8. 이용 연령', '만 19세 이상만 이용할 수 있어요.') +
+      sec('9. 개인정보 보호책임자', '베니브릿지 관리자 · 문의: 앱 상단 💬 Q&A') +
+      '<div class="modal-actions"><button type="button" class="card-btn primary" id="modal-ok">확인</button></div>'
+    );
+    ov.classList.add('wide-modal');
+    ov.querySelector('#modal-ok').addEventListener('click', function () { closeModal(ov); });
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(ov); });
   }
 
   /* ---- utils ---- */
@@ -2479,17 +2628,19 @@
     if (!mp || mp.id !== id) { modalNotice('안내', '취소할 신청서를 찾을 수 없어요.'); return; }
     modalConfirm('신청 취소', '정말 신청을 취소할까요? 제출한 신청서(프로필·사진 포함)가 삭제되고, 다시 신청하려면 처음부터 작성해야 해요.', '신청 취소', 'danger').then(function (ok) {
       if (!ok) return;
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var pend = (s.pendingEntries || []).filter(function (e) { return e.id !== id; });
-          tx.update(stateRef, { pendingEntries: pend });
-        });
-      }).then(function () {
-        appendLog('withdraw', mp.nickname || '신청자', '신청 취소(본인 철회)');
-        try { db.collection('photos').doc(id).delete(); } catch (e) {} /* 사진 정리(있으면) */
-        return refreshNow();
-      }).then(function () {
+      (dataMode === 'full'
+        ? db.runTransaction(function (tx) {
+            return tx.get(stateRef).then(function (doc) {
+              var s = doc.data();
+              var pend = (s.pendingEntries || []).filter(function (e) { return e.id !== id; });
+              tx.update(stateRef, { pendingEntries: pend });
+            });
+          }).then(function () {
+            appendLog('withdraw', mp.nickname || '신청자', '신청 취소(본인 철회)');
+            try { db.collection('photos').doc(id).delete(); } catch (e) {} /* 사진 정리(있으면) */
+          })
+        : callFn('applicantAction', { op: 'withdraw' }) /* 승인 대기 본인 → 서버가 신청서·사진 정리 */
+      ).then(function () {
         logoutUser();
         modalNotice('취소 완료', '신청이 취소됐어요. 이용해 주셔서 감사해요 🙏');
       }).catch(function (err) { modalNotice('오류', '취소 실패: ' + ((err && err.message) || err)); });
@@ -3085,7 +3236,8 @@
     listFilter = 'all';
     listFilterInitFor = null;
     saveSession();
-    dropToGuestAuth();
+    _pendingView = null;
+    dropToGuestAuth().then(switchDataForAuth).then(function () { paint(currentState); });
     if (activeTab === 'mine') activeTab = 'form';
     paint(currentState);
   }
@@ -3106,7 +3258,7 @@
     /* 후보 풀: 보관 계정은 로그인 불가로 제외 · 대리 프로필은 유효한 임시 PIN 있을 때만 포함 */
     var pool = sortedEntries.concat(state.pendingEntries || []).filter(function (e) {
       if (e.deactivated) return false; /* 🗄 보관 계정은 로그인 불가 */
-      if (e.managedBy && (!e.pinAuth || subPinExpired(e))) return false;
+      if (e.managedBy && (!(e.pinAuth || e.pinOn) || subPinExpired(e))) return false;
       return true;
     }).map(function (e) {
       var uid = formatUid(e);
@@ -3238,14 +3390,16 @@
       if (!entry) return modalNotice('오류', '해당 닉네임을 찾을 수 없어요.');
       /* 서버 로그인 우선(실패 횟수 잠금 포함). 서버가 확실히 거절하면 그 사유를 보여주고,
          네트워크·서버 오류일 때만 예전 방식(기기에서 PIN 확인)으로 넘어감 — 전환기 안전장치 */
-      memberServerLogin(entry.id, r.pin).then(function () { return true; }, function (e) {
-        if (isAuthRejection(e)) { modalNotice('로그인 실패', authErrMsg(e)); return null; }
-        try { console.warn('memberLogin fallback', e && e.code); } catch (e2) {}
-        return verifyPin(r.pin, entry);
+      /* 서버가 PIN 확인(실패 횟수 잠금 포함) → 신분 토큰 → 그 신분에 맞는 데이터로 전환 */
+      memberServerLogin(entry.id, r.pin).then(function () {
+        return switchDataForAuth().then(function () { return true; });
+      }, function (e) {
+        modalNotice('로그인 실패', isAuthRejection(e) ? authErrMsg(e) : '서버 연결이 불안정해요. 잠시 후 다시 시도해주세요.');
+        return null;
       }).then(function (ok) {
-        if (ok === null) return;
-        if (!ok) return modalNotice('오류', 'PIN이 올바르지 않아요.');
-        maybeUpgradePin(entry, r.pin);
+        if (!ok) return;
+        entry = (currentState.entries || []).concat(currentState.pendingEntries || []).find(function (e) { return e.id === r.id; }) || entry;
+        if (dataMode === 'full') maybeUpgradePin(entry, r.pin);
         currentUser = { id: entry.id, nickname: entry.nickname, pin: r.pin };
         actingAs = null; actingResolved = false;
         formRole = entry.isMatchmaker ? 'matchmaker' : 'self';
@@ -3344,6 +3498,7 @@
 
   /* ---- 즉시 새로고침 (쓰기 직후 화면 반영) ---- */
   function refreshNow() {
+    if (dataMode !== 'full') return currentUser ? refreshPendingView() : Promise.resolve();
     return stateRef.get({ source: 'server' }).then(function (doc) {
       if (!doc.exists) return;
       var s = doc.data();
@@ -3381,7 +3536,7 @@
     } else if ((!sv || verNewer(APP_VERSION, sv)) && !appVersionWritten) {
       /* 내 버전이 서버 기록보다 최신 → 서버 갱신 (다른 기기가 새로고침 배너를 받도록). 세션당 1회만. */
       appVersionWritten = true;
-      stateRef.update({ appVersion: APP_VERSION }).catch(function () {});
+      if (dataMode === 'full') stateRef.update({ appVersion: APP_VERSION }).catch(function () {});
     }
   }
   /* 현재 페이지를 캐시 우회로 다시 받아, 서버가 실제로 새 버전을 주는지 확인.
@@ -3433,6 +3588,7 @@
   var LOG_ARCHIVE_MAX = 8000;           /* app/logs(아카이브) 보관 상한 (1MiB 안전) */
   var logsRef = db.doc('app/logs');     /* 활동 기록 아카이브(별도 문서) */
   function appendLog(type, actor, detail) {
+    if (dataMode !== 'full') return; /* 손님·승인 대기 기록은 서버(applicantAction)가 남김 */
     var entry = { id: genId(), at: new Date().toISOString(), type: type, actor: actor || '', detail: detail || '' };
     stateRef.get().then(function (doc) {
       var s = doc.exists ? doc.data() : {};
@@ -3747,7 +3903,8 @@
     overlay.querySelector('#mc-send').addEventListener('click', function () {
       var t = overlay.querySelector('#mc-text').value.trim();
       if (!t) return;
-      sendMessageTo(currentUser.id, 'user', t).then(function () {
+      (dataMode === 'full' ? sendMessageTo(currentUser.id, 'user', t)
+        : callFn('applicantAction', { op: 'message', text: t }).then(function () { refreshPendingView(); })).then(function () {
         appendLog('message', currentUser.nickname, '관리자에게 메시지');
         close();
         modalNotice('보냈어요 ✅', '관리자에게 메시지를 전달했어요. 답장이 오면 알림으로 알려드릴게요.');
@@ -3788,7 +3945,8 @@
       var pubJwk = currentState && currentState.adminAuth && currentState.adminAuth.publicKeyJwk;
       var encP = pubJwk ? encryptForAdmin(pubJwk, phone) : Promise.resolve(null);
       encP.then(function (guestPhoneEnc) {
-        return sendMessageTo('guest-' + genId(), 'user', text, name, { guestPhoneEnc: guestPhoneEnc });
+        if (!guestPhoneEnc) throw new Error('지금은 보낼 수 없어요. 잠시 후 다시 시도해주세요.');
+        return callFn('applicantAction', { op: 'guestMessage', name: name, text: text, phoneEnc: guestPhoneEnc });
       }).then(function () {
         appendLog('message', name + ' (비로그인)', '관리자에게 문의');
         try { notifyAdmin('💬 비로그인 문의', name + ': ' + text.slice(0, 40)); } catch (e) {}
@@ -3809,6 +3967,7 @@
   function deleteMyThread() {
     var uid = currentUser && currentUser.id;
     if (!uid) return Promise.resolve();
+    if (dataMode !== 'full') return callFn('applicantAction', { op: 'hideMessages' }).then(function () { return refreshPendingView(); });
     return db.runTransaction(function (tx) {
       return tx.get(stateRef).then(function (doc) {
         var s = doc.data();
@@ -3824,6 +3983,7 @@
   function deleteMyMessage(id) {
     var uid = currentUser && currentUser.id;
     if (!uid) return Promise.resolve();
+    if (dataMode !== 'full') return callFn('applicantAction', { op: 'hideMessages', id: id }).then(function () { return refreshPendingView(); });
     return db.runTransaction(function (tx) {
       return tx.get(stateRef).then(function (doc) {
         var s = doc.data();
@@ -3905,6 +4065,7 @@
   /* 하루 경계를 한국시간(KST, UTC+9) 기준으로 계산 (UTC로 하면 KST 오전 9시 이전 접속이 전날로 잡혀 누락됨) */
   function kstDay(iso) { return new Date(new Date(iso).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
   function touchLastSeen(entryId, isSelfLogin) {
+    if (dataMode !== 'full') return;
     var now = new Date().toISOString();
     var today = kstDay(now); /* YYYY-MM-DD (KST 기준 하루) */
     db.runTransaction(function (tx) {
@@ -4407,7 +4568,7 @@
   }
 
   function renderList(state) {
-    var entries = (state.entries || []).filter(function (e) { return listMemberVisible(e); });
+    var entries = profileEntries(state).filter(function (e) { return listMemberVisible(e); });
     var maleCount = entries.filter(function (e) { return e.gender === 'male'; }).length;
     var femaleCount = entries.filter(function (e) { return e.gender === 'female'; }).length;
     var me = findMyEntry(state);
@@ -4417,7 +4578,7 @@
       listFilter = (me.gender === 'male') ? 'female' : 'male';
       listFilterInitFor = me.id;
     }
-    var teaser = !isAdminUnlocked && !myAuthEntry(state); /* 비로그인·관리자 아님·승인 대기(미승인) → 신원 가린 티저 뷰 */
+    var teaser = !!state._public || (!isAdminUnlocked && !myAuthEntry(state)); /* 비로그인·관리자 아님·승인 대기(미승인) → 신원 가린 티저 뷰 */
     var isPermFilter = (listFilter === 'photo' || listFilter === 'contact');
     var filtered = entries.filter(function (e) {
       if (myHiddenIds.indexOf(e.id) >= 0) return false; /* 지인 필터(마주치기 방지)로 숨김 */
@@ -4694,7 +4855,7 @@
             '<input type="text" inputmode="numeric" id="f-pin2" name="pin2" data-numeric pattern="[0-9]{4,10}" maxlength="10" placeholder="PIN 다시 입력" required autocomplete="off" style="-webkit-text-security:disc;text-security:disc;margin-top:6px;">' +
             '<span class="hint">확인을 위해 <b>두 번</b> 입력해요. 로그인할 때 필요해요.</span></div>' +
           '<div class="consent-box"><label class="consent-label"><input type="checkbox" id="f-consent"> <span>개인정보 수집 및 이용에 동의합니다.</span></label>' +
-            '<p class="consent-detail">수집 항목: 닉네임, 실명, 연락처, 알게 된 경로 · 목적: 주선자 관리·연락 · 동의 거부 시 등록 불가.</p></div>' +
+            '<p class="consent-detail">수집 항목: 닉네임, 실명, 연락처, 알게 된 경로 · 목적: 주선자 관리·연락 · 보유: 삭제 승인 시 파기 · 동의 거부 시 등록 불가.' + PRIVACY_LINK + '</p></div>' +
           '<div class="submit-row"><button type="submit" class="submit-btn" id="submit-btn">🤝 주선자 등록</button>' +
             '<button type="button" class="cancel-btn" id="mm-back">뒤로</button>' +
             '<span class="status-msg" id="status-msg"></span></div>' +
@@ -4745,12 +4906,15 @@
         contactEnc: r[0], pinAuth: r[1], contactSelfEnc: r[2], realNameEnc: r[3], referrerEnc: r[4],
         submittedAt: new Date().toISOString()
       };
-      if (/^qa_/i.test(nickname)) entry.testAccount = true; /* 닉네임 QA_로 시작 → 테스트 계정 자동 지정 */
-      return stateRef.update({ pendingEntries: firebase.firestore.FieldValue.arrayUnion(entry) });
+      return callFn('applicantAction', { op: 'submit', kind: 'mm', entry: entry }).then(function (res) {
+        var t = res && res.data && res.data.token;
+        return t ? firebase.auth().signInWithCustomToken(t) : null;
+      });
     }).then(function () {
       currentUser = { id: entryId, nickname: nickname, pin: pin };
       actingAs = null; actingResolved = false;
       saveSession();
+      switchDataForAuth().then(function () { paint(currentState); });
       formRole = 'matchmaker';
       appendLog('signup', nickname, '주선자 등록 신청');
       notifyAdmin('새 주선자 📝', nickname + '님이 주선자 등록을 신청했어요 (승인 대기).');
@@ -4817,6 +4981,14 @@
       (contact && selfPin) ? encryptForSelf(selfPin, contact) : Promise.resolve(null),
       referrerText ? encryptForAdmin(pubJwk, referrerText) : Promise.resolve(null)
     ]).then(function (r) {
+      if (dataMode !== 'full') { /* 승인 대기 주선자 → 서버 대행 */
+        var f = { nickname: nickname };
+        if (r[0]) f.realNameEnc = r[0];
+        if (r[1]) f.contactEnc = r[1];
+        if (r[2]) f.contactSelfEnc = r[2];
+        if (r[3]) f.referrerEnc = r[3];
+        return callFn('applicantAction', { op: 'edit', entry: f });
+      }
       return db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
@@ -5004,16 +5176,17 @@
                   ' <span><b>소개 대상 본인에게 등록 동의를 받았습니다.</b></span></label>' +
                 '<p class="consent-detail">주선자는 소개 대상 본인의 동의를 받아 대신 등록해요.<br>' +
                   '수집 항목: 닉네임, 실명, 연락처, 성별, 생년, 지역, 직장, 사진, 자기소개 등<br>' +
-                  '요청·승인은 주선자(나)가 대신 처리하고, 번호는 매칭 성사 시에만 공개돼요.<br>' +
-                  '동의 없이 타인의 정보를 등록하면 삭제될 수 있어요.</p>' +
+                  '요청·승인은 주선자(나)가 대신 처리해요. 실명·번호는 관리자만 볼 수 있고 다른 회원에게는 공개되지 않아요.<br>' +
+                  '동의 없이 타인의 정보를 등록하면 삭제될 수 있어요.' + PRIVACY_LINK + '</p>' +
               '</div>'
             : '<div class="consent-box">' +
                 '<label class="consent-label"><input type="checkbox" id="f-consent">' +
                   ' <span>개인정보 수집 및 이용에 동의합니다.</span></label>' +
                 '<p class="consent-detail">수집 항목: 닉네임, 실명, 연락처, 알게 된 경로, 성별, 생년, 지역, 직장, 사진, 자기소개 등<br>' +
-                  '수집 목적: 소개팅 매칭 및 관리자 연락<br>' +
-                  '보유 기간: 서비스 이용 종료 시 즉시 삭제<br>' +
-                  '동의를 거부할 권리가 있으며, 거부 시 신청이 불가합니다.</p>' +
+                  '수집 목적: 소개팅 매칭 및 관리자 연락 · <b>만 19세 이상</b>만 이용할 수 있어요<br>' +
+                  '보유 기간: 삭제 승인 시 지체 없이 파기 (보관(휴면)을 고르면 다시 활동할 수 있게 보관, 언제든 삭제 요청 가능)<br>' +
+                  '저장: Google Firebase(서울 리전) · 실명·번호는 암호화되어 관리자만 볼 수 있어요<br>' +
+                  '동의를 거부할 권리가 있으며, 거부 시 신청이 불가합니다.' + PRIVACY_LINK + '</p>' +
               '</div>' +
               '<div class="consent-box">' +
                 '<p class="consent-detail" style="margin:0;">&#128276; <b>알림을 켜면</b> 사진 요청·대화 신청과 승인 소식을 기기로 바로 받아볼 수 있어요. 신청 후 상단의 <b>&#128276; 알림</b> 버튼을 눌러주세요! (방법은 <b>&#128718; 가이드</b>)</p>' +
@@ -6639,7 +6812,7 @@
   }
 
   function renderApp(state) {
-    var entries = (state.entries || []).filter(function (e) { return listMemberVisible(e); });
+    var entries = profileEntries(state).filter(function (e) { return listMemberVisible(e); });
     var pendingCount = (state.pendingEntries || []).filter(function (e) { return !e.heldReason; }).length; /* 보류(heldReason)는 "대기"에서 제외 → 별도 "보류 중" 섹션 */
     var reqCount = (state.dateRequests || []).filter(function (r) {
       var st = reqStatus(r); return st !== 'approved' && st !== 'rejected';
@@ -6647,7 +6820,7 @@
     var deleteReqCount = (state.entries || []).filter(function (e) { return e.deleteRequested; }).length;
     var deacReqCount = (state.entries || []).filter(function (e) { return e.deactivateRequested; }).length + pinResetPending(state).length; /* + PIN 재설정 요청 */
     /* 이번 주 현황 배너 (로그인 전에도 노출) — 진짜 집계만: 새 멤버(최근 7일)·누적 연결(승인된 대화 연결)·함께하는 멤버 */
-    var liveMembers = (state.entries || []).filter(function (e) { return !e.isMatchmaker && !e.testAccount && !e.deactivated; });
+    var liveMembers = profileEntries(state).filter(function (e) { return !e.isMatchmaker && !e.testAccount && !e.deactivated; });
     var weekAgo = Date.now() - 7 * 86400000;
     var newThisWeek = liveMembers.filter(function (e) { return e.submittedAt && new Date(e.submittedAt).getTime() >= weekAgo; }).length;
     /* 누적 연결 = 연결 이력(connLog) 총 개수(해제됨 포함) → 배너와 이력이 항상 일치. 해제해도 유지, 요청함에서 대화 요청 완전삭제 시에만 감소. connLog 없으면 구식 폴백 */
@@ -7068,16 +7241,19 @@
     }
     modalPin('관리자 인증', '비밀번호를 입력하세요.', { password: true }).then(function (pin) {
       if (!pin) return;
-      unlockAdminKey(pin, state.adminAuth).then(function (key) {
-        adminPrivateKey = key;
-        isAdminUnlocked = true;
-        saveAdminPin(pin);
-        adminServerLogin(pin).catch(function (e) { try { console.warn('adminLogin', e && e.code); } catch (e2) {} });
-        return decryptAllAdminData(state);
-      }).then(function () {
-        paint(state);
-      }).catch(function () {
-        modalNotice('오류', '비밀번호가 올바르지 않아요.');
+      adminServerLogin(pin).then(function () {
+        return switchDataForAuth();
+      }, function (e) {
+        throw new Error(isAuthRejection(e) ? authErrMsg(e) : '서버 연결이 불안정해요. 잠시 후 다시 시도해주세요.');
+      }).then(function (full) {
+        return unlockAdminKey(pin, full.adminAuth).then(function (key) {
+          adminPrivateKey = key;
+          isAdminUnlocked = true;
+          saveAdminPin(pin);
+          return decryptAllAdminData(full);
+        }).then(function () { paint(currentState); });
+      }).catch(function (err) {
+        modalNotice('오류', (err && err.message) || '비밀번호가 올바르지 않아요.');
       });
     });
   }
@@ -7272,6 +7448,10 @@
       modalNotice('입력 오류', '생년은 1900~2100 사이로 입력해 주세요.');
       return;
     }
+    if (birthYear && new Date().getFullYear() - birthYear < 19) {
+      modalNotice('안내', '베니브릿지는 만 19세 이상만 이용할 수 있어요.');
+      return;
+    }
     if (proxy && !(currentUser && currentUser.id)) {
       modalNotice('로그인 필요', '친구 대신 소개하려면 먼저 로그인해주세요.');
       return;
@@ -7349,8 +7529,30 @@
             blurPhoto ? BLUR_THUMB_Q : THUMB_Q)
         : Promise.resolve(null)
     ];
+    var viaServer = dataMode !== 'full' && !managedCreate && (!isEdit || origIsPending);
     Promise.all(encPromises).then(function (results) {
       var thumb = results[5] || null;
+      if (viaServer) {
+        /* 손님 신규 가입 · 승인 대기 본인 수정 → 서버(applicantAction)가 검증 후 저장 */
+        var fields = { nickname: nickname, gender: gender, birthYear: birthYear, region: region, workplace: workplace,
+          photoThumb: thumb, photoCount: finalPhotos.length, blurPhoto: blurPhoto && finalPhotos.length > 0,
+          height: height, intro: intro, idealType: idealType, dealbreaker: dealbreaker, degreeChoice: degreeChoice };
+        if (results[0]) fields.realNameEnc = results[0];
+        if (results[1]) fields.contactEnc = results[1];
+        if (results[2]) fields.referrerEnc = results[2];
+        if (results[3]) fields.pinAuth = results[3];
+        if (results[4]) fields.contactSelfEnc = results[4];
+        if (isEdit) {
+          return callFn('applicantAction', { op: 'edit', entry: fields, photos: finalPhotos, resubmitMsg: wasHeld ? resubmitMsg : '' })
+            .then(function () { photoCache[entryId] = finalPhotos; });
+        }
+        fields.id = entryId;
+        return callFn('applicantAction', { op: 'submit', kind: 'self', entry: fields, photos: finalPhotos }).then(function (r) {
+          photoCache[entryId] = finalPhotos;
+          var t = r && r.data && r.data.token;
+          return t ? firebase.auth().signInWithCustomToken(t) : null;
+        });
+      }
       /* 원본 사진은 photos/{id} 별도 문서로 저장 (app/state는 썸네일만) */
       var photoWrite;
       if (finalPhotos.length) photoWrite = photosRef.doc(entryId).set({ photos: finalPhotos });
@@ -7472,7 +7674,8 @@
         if (origEntry && origEntry.nickname !== nickname) appendLog('edit', nickname, '닉네임 변경: ' + origEntry.nickname + ' → ' + nickname);
         else appendLog('edit', nickname, '프로필 수정');
         notifyAdmin(origIsPending ? '신청서 재제출' : '프로필 수정', nickname + '님이 ' + (origIsPending ? '신청서를 수정해 다시 제출했어요 (승인 대기).' : '프로필을 수정했어요.'));
-        if (wasHeld && resubmitMsg) { try { sendMessageTo(entryId, 'user', '[재신청] ' + resubmitMsg); } catch (e) {} } /* 보완 내용 → 관리자에게 메시지로 전달 */
+        if (wasHeld && resubmitMsg && !viaServer) { try { sendMessageTo(entryId, 'user', '[재신청] ' + resubmitMsg); } catch (e) {} } /* 보완 내용 → 관리자에게 메시지로 전달 (서버 대행이면 서버가 전달) */
+        if (viaServer) refreshPendingView();
         _resubmitMsgPending = null; /* 사용 후 초기화 */
         modalNotice('완료', origIsPending ? '수정해서 다시 제출했어요. 관리자 승인을 기다려 주세요.' : '프로필이 수정되었어요.');
         activeTab = currentUser ? 'mine' : 'list'; /* 회원이 메시지함에서 수정 → 저장 후 메시지함 복귀 */
@@ -7499,6 +7702,7 @@
         currentUser = { id: entryId, nickname: nickname, pin: pin };
         saveSession();
         appendLog('signup', nickname, '신청서 제출');
+        switchDataForAuth().then(function () { paint(currentState); }); /* 승인 대기 토큰 → 내 신청서 보기 */
         notifyAdmin('새 신청서 접수', nickname + '님이 신청서를 제출했어요! 승인 대기 중.');
         showStamp();
       }
@@ -9585,17 +9789,8 @@
       if (!pubJwk) return say('지금은 요청할 수 없어요. 관리자에게 문의해주세요.');
       var btn = ov.querySelector('#pr-send'); btn.disabled = true;
       encryptForAdmin(pubJwk, phone).then(function (phoneEnc) {
-        var req = { id: genId(), entryId: ent.id, nickname: ent.nickname || nick, phoneEnc: phoneEnc, at: new Date().toISOString(), status: 'pending' };
-        return db.runTransaction(function (tx) {
-          return tx.get(stateRef).then(function (doc) {
-            var s = doc.data() || {};
-            /* 같은 계정의 대기 요청은 새 것으로 바꾼다 · 최근 50건만 보관 */
-            var list = (s.pinResetReqs || []).filter(function (q) { return !(q.entryId === ent.id && q.status === 'pending'); });
-            list.push(req);
-            if (list.length > 50) list = list.slice(list.length - 50);
-            tx.update(stateRef, { pinResetReqs: list });
-          });
-        });
+        /* 서버가 닉네임으로 계정을 찾아 요청 등록 (같은 계정의 대기 요청은 새 것으로 교체 · 최근 50건) */
+        return callFn('applicantAction', { op: 'pinReset', nickname: ent.nickname || nick, phoneEnc: phoneEnc });
       }).then(function () {
         appendLog('message', nick + ' (비로그인)', 'PIN 재설정 요청');
         try { notifyAdmin('🔑 PIN 재설정 요청', nick + '님이 PIN 재설정을 요청했어요'); } catch (e) {}
@@ -9964,6 +10159,7 @@
       else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
       else if (action === 'contact-sms') { if (isAdminUnlocked) openSmsNative(id, null, actionBtn.getAttribute('data-kind')); }
       else if (action === 'contact-tpl') { openSmsTplEditor(); return; }
+      else if (action === 'privacy-policy') { e.preventDefault(); showPrivacyPolicy(); return; }
       else if (action === 'pinreset-temp') handleAdminPinTemp(id);
       else if (action === 'pinreset-dismiss') handleAdminPinDismiss(id);
       else if (action === 'stale-nudge') { showStaleNudge(); return; }
@@ -10216,28 +10412,30 @@
   });
 
   /* ---- init ---- */
+  function requestNotifPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }
   function init() {
-    var localState = readStateLocal();
-
-    stateRef.get().then(function (doc) {
-      if (doc.exists) {
-        return doc.data();
-      }
-      return stateRef.set(localState).then(function () { return localState; });
-    }).then(function (state) {
-      currentState = state;
-      if (!Array.isArray(state.entries)) state.entries = [];
-      if (!Array.isArray(state.pendingEntries)) state.pendingEntries = [];
-      if (!Array.isArray(state.dateRequests)) state.dateRequests = [];
-      if (!Array.isArray(state.approvedPairs)) state.approvedPairs = [];
-      if (!Array.isArray(state.logs)) state.logs = [];
-      if (!Array.isArray(state.messages)) state.messages = [];
-      /* 기존 회원 고유번호 백필 (한 번만, 결정적이라 클라이언트 간 동일) */
-      if (ensureSerials(state)) {
+    /* 1) 기기에 남은 로그인 → 서버 토큰  2) 토큰 신분에 맞는 데이터 구독(full/public)  3) 첫 화면 */
+    prepareSessionAuth().then(switchDataForAuth).then(function (state) {
+      var full = dataMode === 'full';
+      /* 기존 회원 고유번호 백필 (한 번만, 결정적이라 클라이언트 간 동일) — 쓰기 권한 있는 회원·관리자만 */
+      if (full && ensureSerials(state)) {
         stateRef.update({ entries: state.entries }).catch(function () {});
       }
-      checkVersion(state);
+      if (_sessionExpired) {
+        /* 보안 강화(서버 로그인) 이후 저장된 세션을 확인할 수 없음 → 한 번만 다시 로그인 */
+        _sessionExpired = false;
+        currentUser = null; saveSession();
+        setTimeout(function () { modalNotice('다시 로그인해 주세요 🔒', '보안 강화로 로그인 방식이 바뀌었어요. 번거로우시겠지만 한 번만 다시 로그인해 주세요.'); }, 900);
+      }
       restoreSession(state);
+      if (!full && currentUser && (state.entries || []).some(function (e) { return e.id === currentUser.id; })) {
+        /* 승인 회원인데 서버 토큰을 못 받음(일시적 연결 문제) → 회원 데이터 대신 공개 화면만 보임 */
+        setTimeout(function () { modalNotice('연결이 불안정해요', '회원 정보를 불러오지 못했어요. 잠시 후 새로고침해 주세요.'); }, 900);
+      }
       /* 주선자로 로그인 유지 중이면 신청 탭이 sub 추가 모드가 되도록 */
       if (currentUser && currentUser.id) {
         var meAny = (state.entries || []).concat(state.pendingEntries || []).find(function (e) { return e.id === currentUser.id; });
@@ -10247,7 +10445,7 @@
       var adminPromise = Promise.resolve();
       try {
         var savedPin = getAdminPin();
-        if (savedPin && state.adminAuth) {
+        if (savedPin && full && state.adminAuth && state.adminAuth.wrappedPrivateKey) {
           adminPromise = unlockAdminKey(savedPin, state.adminAuth).then(function (key) {
             adminPrivateKey = key;
             isAdminUnlocked = true; requestNotifPermission();
@@ -10260,11 +10458,10 @@
       return adminPromise.then(function () {
         return decryptAllAdminData(state);
       }).then(function () {
-        paint(state);
-        syncServerAuth();
+        paint(currentState);
         refreshNotifTokens();
         /* 로그인 유지 상태여도 앱 열 때 최근 방문 시간 갱신 (로그인 때만 갱신되던 문제) */
-        if (currentUser && currentUser.id) {
+        if (full && currentUser && currentUser.id) {
           var meNow = (state.entries || []).find(function (e) { return e.id === currentUser.id; });
           var last = meNow && meNow.lastSeenAt ? new Date(meNow.lastSeenAt).getTime() : 0;
           if (Date.now() - last > 5 * 60 * 1000) touchLastSeen(currentUser.id); /* 5분 이상 지났을 때만 */
@@ -10275,48 +10472,11 @@
       document.getElementById('app').innerHTML =
         '<div style="text-align:center;padding:60px 20px;color:var(--muted);">' +
         '<p>데이터를 불러오는 중 오류가 발생했어요.</p>' +
-        '<p style="font-size:0.8rem;">' + escapeHtml(err.message || err) + '</p>' +
+        '<p style="font-size:0.8rem;">' + escapeHtml((err && err.message) || err) + '</p>' +
         '</div>';
     });
-
-    var prevPendingCount = -1;
-    var prevRequestCount = -1;
-
-    function requestNotifPermission() {
-      if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-      }
-    }
-
-    function showNotification(title, body) {
-      if (!('Notification' in window)) return;
-      if (Notification.permission === 'granted') {
-        var n = new Notification(title, { body: body });
-        n.onclick = function () { window.focus(); n.close(); };
-      }
-    }
-
-    stateRef.onSnapshot(function (doc) {
-      if (!doc.exists) return;
-      var state = doc.data();
-      if (!Array.isArray(state.pendingEntries)) state.pendingEntries = [];
-      if (!Array.isArray(state.dateRequests)) state.dateRequests = [];
-      if (!Array.isArray(state.approvedPairs)) state.approvedPairs = [];
-      if (!Array.isArray(state.logs)) state.logs = [];
-      if (!currentUser) restoreSession(state);
-      checkVersion(state);
-
-      /* [제거] 예전엔 여기서 pendingEntries/dateRequests 길이가 늘면 로컬 알림을 띄웠는데,
-         이는 "받는 사람"과 무관하게 앱을 켜 둔 모든 회원에게 브로드캐스트돼서
-         (누가·누구에게 요청하든) 관계없는 사람에게 "새로운 사진 요청·대화 신청이 도착했어요" 팬텀 알림이 갔다.
-         → 열어봐도 메시지함엔 아무것도 없는 문제. 개인별 알림은 FCM 푸시(onStateChange→notifyRecipient, 받는 사람만)
-         와 인앱 '새 소식' 팝업(collectNews, 본인 것만)이 이미 정확히 담당하므로 이 브로드캐스트는 삭제. */
-
-      currentState = state;
-      /* 전체 리페인트는 코얼레싱(잦은 스냅샷에 아이폰 렉·사진 리셋 방지). currentState는 위에서 즉시 갱신됨. */
-      schedulePaint();
-    });
   }
+
 
   /* 주간 예약 팝업(만족도·공유) 설정 — 관리자가 전체공지 허브에서 문구·요일·시각 수정. 기본값 fallback */
   var CHECKIN_DEFAULT_TITLE = '베니브릿지, 요즘 어떠세요? 😊';
