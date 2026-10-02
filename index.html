@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-399';
+  var APP_VERSION = '2026-10-02-400';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -10047,6 +10047,13 @@
     rows += '<div class="detail-row"><div class="detail-label">고유번호</div><div class="detail-value">' + escapeHtml(formatUid(entry) || '—') + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">닉네임</div><div class="detail-value">' + escapeHtml(entry.nickname || '') + '</div></div>';
     if (isMM) rows += '<div class="detail-row"><div class="detail-label">구분</div><div class="detail-value">🤝 주선자(매니저) — 명단 비노출</div></div>';
+    /* 대리 등록·주선자 본인 프로필: 주선자 이름(누르면 주선자 상세) + 주선자 실명·번호 */
+    var mmOfEntry = (entry.managedBy && isProxyEntry(entry)) ? (state.entries || []).find(function (x) { return x.id === entry.managedBy; }) : null;
+    if (mmOfEntry) {
+      rows += '<div class="detail-row"><div class="detail-label">등록 형태</div><div class="detail-value">' + (entry.ownerSelf ? '🙋 주선자 본인 프로필' : '🤝 대리 등록' + (entry.proxyConsentAt ? ' · 본인 동의 확인' : '')) +
+        ' (주선자: <button type="button" data-action="detail" data-id="' + escapeHtml(mmOfEntry.id) + '" style="background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;cursor:pointer;font:inherit;">' + escapeHtml(mmOfEntry.nickname || '주선자') + '</button>)</div></div>';
+      rows += '<div class="detail-row"><div class="detail-label">주선자 연락</div><div class="detail-value" id="detail-mm-contact">복호화 중...</div></div>';
+    }
     rows += '<div class="detail-row"><div class="detail-label">실명</div><div class="detail-value" id="detail-realname">' + (entry.realNameEnc ? '복호화 중...' : '-') + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">연락처</div><div class="detail-value" id="detail-contact">' + (entry.contactEnc ? '복호화 중...' : (decryptedContacts[entry.id] ? escapeHtml(decryptedContacts[entry.id]) : '-')) + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">알게 된 경로</div><div class="detail-value" id="detail-referrer">' + (entry.referrerEnc ? '복호화 중...' : '-') + '</div></div>';
@@ -10068,6 +10075,12 @@
     overlay.querySelector('#modal-ok').addEventListener('click', function () { closeModal(overlay); });
     overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(overlay); });
     var q = function (sel) { return overlay.querySelector(sel); };
+    if (mmOfEntry) {
+      Promise.all([
+        (isAdminUnlocked && adminPrivateKey && mmOfEntry.realNameEnc) ? decryptWithAdmin(adminPrivateKey, mmOfEntry.realNameEnc).catch(function () { return ''; }) : Promise.resolve(''),
+        (isAdminUnlocked && adminPrivateKey && mmOfEntry.contactEnc) ? decryptWithAdmin(adminPrivateKey, mmOfEntry.contactEnc).catch(function () { return ''; }) : Promise.resolve('')
+      ]).then(function (r) { var el = q('#detail-mm-contact'); if (el) el.textContent = [r[0], r[1]].filter(Boolean).join(' · ') || '(등록된 정보 없음)'; });
+    }
     if (isAdminUnlocked && adminPrivateKey && entry.realNameEnc) {
       decryptWithAdmin(adminPrivateKey, entry.realNameEnc).then(function (name) { var el = q('#detail-realname'); if (el) el.textContent = name; }).catch(function () { var el = q('#detail-realname'); if (el) el.textContent = '(복호화 실패)'; });
     } else if (!entry.realNameEnc) { var rn = q('#detail-realname'); if (rn) rn.textContent = '(없음)'; }
