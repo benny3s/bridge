@@ -9,10 +9,20 @@ service cloud.firestore {
     function isMember() { return signedIn() && request.auth.token.m == 1; }
     function isSelf(id) { return signedIn() && request.auth.uid == id; }
 
-    // 앱 상태(회원·요청·채팅·메시지 등) — 승인 회원·관리자만.
+    // 앱 상태(회원·요청·메시지 등) — 승인 회원·관리자만.
+    // 회원은 회원 기능이 쓰는 항목만 바꿀 수 있음. 관리자 키(adminAuth)·공지·팝업·주간 인사·관리자 설정·
+    // 문자 기록·삭제 이력·PIN 재설정 요청 등은 관리자만 (예: 회원이 관리자 공개키를 바꿔치기해 새 가입자 실명·번호를 가로채는 것 차단).
     // 손님·승인 대기의 쓰기는 서버 함수(applicantAction)가 대행
+    function memberStateKeysOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'entries', 'pendingEntries', 'dateRequests', 'messages', 'logs', 'joinRequests',
+        'connLog', 'connEver', 'coupleReports', 'appVersion', 'dm'
+      ]);
+    }
     match /app/state {
-      allow read, write: if isMember() || isAdmin();
+      allow read: if isMember() || isAdmin();
+      allow update: if isAdmin() || (isMember() && memberStateKeysOnly());
+      allow create, delete: if isAdmin();
     }
 
     // 활동 기록 아카이브 — 승인 회원·관리자만
