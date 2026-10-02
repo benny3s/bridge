@@ -422,6 +422,7 @@ exports.onStateChange = functions
     jobs.push(sweepSecrets(before, after).catch((e) => console.error('sweepSecrets', e)));
     jobs.push(migrateDmToChats(after).catch((e) => console.error('migrateDmToChats', e)));
     jobs.push(refreshChatViewers(before, after).catch((e) => console.error('refreshChatViewers', e)));
+    jobs.push(syncPhotoAcl(after, false).catch((e) => console.error('syncPhotoAcl', e)));
     (after.dateRequests || []).forEach((r) => {
       const prev = beforeMap[r.id];
       const type = (r.type || 'contact') === 'photo' ? '사진' : '대화'; /* 앱 용어(대화 신청)와 통일 */
@@ -565,7 +566,11 @@ exports.remindPending = functions
       await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
     }
     await purgeDeletedSecrets().catch((e) => console.error('purgeDeletedSecrets', e));
-    if (new Date().getUTCHours() === 19) await purgeOldChats().catch((e) => console.error('purgeOldChats', e)); /* 매일 KST 04시 */
+    if (new Date().getUTCHours() === 19) {
+      await purgeOldChats().catch((e) => console.error('purgeOldChats', e)); /* 매일 KST 04시 */
+      const st = (await db.doc('app/state').get()).data() || {};
+      await syncPhotoAcl(st, true).catch((e) => console.error('syncPhotoAcl(force)', e)); /* 사진 열람 목록 하루 한 번 전체 재기록 */
+    }
     return null;
   });
 
@@ -805,7 +810,7 @@ exports.applicantAction = functions
           logs: (s.logs || []).concat([logItem('signup', entry.nickname, kind === 'mm' ? '주선자 등록 신청' : '신청서 제출')])
         });
       });
-      if (photos && photos.length) await db.collection('photos').doc(id).set({ photos });
+      if (photos && photos.length) await db.collection('photos').doc(id).set({ photos }, { merge: true });
       const token = await admin.auth().createCustomToken(id, { p: 1 });
       return { ok: true, token };
     }
@@ -884,8 +889,7 @@ exports.applicantAction = functions
         tx.update(stateRef, upd);
       });
       if (photos !== undefined) {
-        if (photos && photos.length) await db.collection('photos').doc(uid).set({ photos });
-        else await db.collection('photos').doc(uid).delete().catch(() => {});
+        await db.collection('photos').doc(uid).set({ photos: photos || [] }, { merge: true });
       }
       return { ok: true };
     }
@@ -1240,3 +1244,49 @@ async function purgeOldChats(nowMs) {
   return removed;
 }
 if (process.env.BRIDGE_LOCAL_TEST) exports._purgeOldChatsForTest = purgeOldChats; /* 로컬 시험 전용 (배포 시 내보내지 않음) */
+
+/* ══ 3단계-③: 사진 원본 열람 권한 ══
+   photos/{id} 에 서버가 viewers(볼 수 있는 uid)·owners(고칠 수 있는 uid)를 유지 → 규칙이 이 목록으로 판단.
+   앱의 canViewPhotoOf 와 같은 기준: 승인된 사진 요청은 서로 공개, '내 사진 공개'(fromRevealed)는 요청 받은 사람에게 공개.
+   본인·주선자(대리 프로필)는 항상 포함, 보는 사람이 대리 프로필이면 그 주선자도 포함(주선자가 친구로 전환해 봄). 관리자는 규칙에서 허용.
+   매 변경마다 전체를 다시 계산하되, 서버 전용 캐시(acl/photos)와 비교해 바뀐 문서만 씀. 하루 한 번은 전부 다시 씀. */
+function photoAclFor(state) {
+  const entries = (state.entries || []).concat(state.pendingEntries || []);
+  const byId = {}; entries.forEach((e) => { byId[e.id] = e; });
+  const acl = {};
+  const slot = (id) => (acl[id] = acl[id] || { viewers: {}, owners: {} });
+  entries.forEach((e) => {
+    const a = slot(e.id);
+    a.owners[e.id] = 1; a.viewers[e.id] = 1;
+    if (e.managedBy) { a.owners[e.managedBy] = 1; a.viewers[e.managedBy] = 1; }
+  });
+  const grant = (targetId, viewerId) => {
+    if (!byId[targetId] || !viewerId) return;
+    const a = slot(targetId);
+    a.viewers[viewerId] = 1;
+    const v = byId[viewerId];
+    if (v && v.managedBy) a.viewers[v.managedBy] = 1;
+  };
+  (state.dateRequests || []).forEach((r) => {
+    if ((r.type || 'contact') !== 'photo') return;
+    if (r.approved) { grant(r.toId, r.fromId); grant(r.fromId, r.toId); }
+    if (r.fromRevealed) grant(r.fromId, r.toId);
+  });
+  const out = {};
+  Object.keys(acl).forEach((id) => { out[id] = { viewers: Object.keys(acl[id].viewers).sort(), owners: Object.keys(acl[id].owners).sort() }; });
+  return out;
+}
+async function syncPhotoAcl(state, force) {
+  const acl = photoAclFor(state);
+  const cacheRef = db.doc('acl/photos');
+  const prev = force ? {} : (((await cacheRef.get()).data() || {}).map || {});
+  const changed = Object.keys(acl).filter((id) => stableJson(acl[id]) !== stableJson(prev[id]));
+  if (!changed.length) return 0;
+  for (let i = 0; i < changed.length; i += 400) {
+    const batch = db.batch();
+    changed.slice(i, i + 400).forEach((id) => batch.set(db.collection('photos').doc(id), acl[id], { merge: true }));
+    await batch.commit();
+  }
+  await cacheRef.set({ map: acl, at: new Date().toISOString() });
+  return changed.length;
+}

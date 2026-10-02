@@ -922,7 +922,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-391';
+  var APP_VERSION = '2026-10-02-392';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -7789,8 +7789,9 @@
       }
       /* 원본 사진은 photos/{id} 별도 문서로 저장 (app/state는 썸네일만) */
       var photoWrite;
-      if (finalPhotos.length) photoWrite = photosRef.doc(entryId).set({ photos: finalPhotos });
-      else if (isEdit) photoWrite = photosRef.doc(entryId).delete().catch(function () {});
+      /* merge: 서버가 붙인 열람 목록(viewers/owners)은 유지하고 사진만 바꿈. 사진을 다 지워도 문서는 남김 */
+      if (finalPhotos.length) photoWrite = photosRef.doc(entryId).set({ photos: finalPhotos }, { merge: true });
+      else if (isEdit) photoWrite = photosRef.doc(entryId).set({ photos: [] }, { merge: true }).catch(function () {});
       else photoWrite = Promise.resolve();
       return photoWrite.then(function () {
         photoCache[entryId] = finalPhotos;
