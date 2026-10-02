@@ -1154,6 +1154,8 @@ exports.chatAction = functions
   .runWith({ timeoutSeconds: 20, memory: '256MB' })
   .https.onCall(async (data, context) => {
     data = data || {};
+    /* 미리 깨우기: 앱이 열릴 때 한 번 호출해 콜드 스타트(약 5초)를 미리 치름 — 데이터는 읽지 않음 */
+    if (data.op === 'ping') return { ok: true };
     const c = claimsOf(context);
     const op = String(data.op || '');
     const state = (await db.doc('app/state').get()).data() || {};

@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-397';
+  var APP_VERSION = '2026-10-02-398';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1223,6 +1223,7 @@
   /* 명단·현황 배너용 프로필 목록 (공개 모드면 티저) */
   function profileEntries(state) { return (state && state.teaser) || (state && state.entries) || []; }
   var _openAdminChatRedraw = null;
+  var _chatWarmed = false;
   var _lastDataAt = 0;
   function onDataArrived(state, first) {
     _lastDataAt = Date.now();
@@ -1268,6 +1269,8 @@
       if (mode === 'public') _pendingView = null;
       _authIsAdmin = c.admin === 1;
       startChats(c);
+      /* 회원이면 채팅 서버 함수를 뒤에서 미리 깨워 둠(첫 메시지 전송이 콜드 스타트로 5초 걸리던 문제) */
+      if (c.m === 1 && !_chatWarmed) { _chatWarmed = true; setTimeout(function () { callFn('chatAction', { op: 'ping' }).catch(function () {}); }, 2500); }
       var privReady = _authIsAdmin ? startAdminPriv() : (stopAdminPriv(), Promise.resolve());
       return privReady.then(function () { return subscribeData(mode); }).then(function (s) {
         if (mode === 'public' && c.p === 1) return refreshPendingView().then(function () { return currentState; });
