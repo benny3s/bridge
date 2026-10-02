@@ -1155,7 +1155,7 @@ exports.chatAction = functions
   .https.onCall(async (data, context) => {
     data = data || {};
     /* 미리 깨우기: 앱이 열릴 때 한 번 호출해 콜드 스타트(약 5초)를 미리 치름 — 데이터는 읽지 않음 */
-    if (data.op === 'ping') return { ok: true };
+    if (data.op === 'ping') { await db.collection('loginIp').doc('_warmup').get().catch(() => {}); return { ok: true }; } /* DB 연결까지 미리 열어 둠(첫 DB 접속 약 3초) */
     const c = claimsOf(context);
     const op = String(data.op || '');
     const state = (await db.doc('app/state').get()).data() || {};
