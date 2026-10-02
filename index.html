@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-401';
+  var APP_VERSION = '2026-10-02-402';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -10832,8 +10832,15 @@
     prepareSessionAuth().then(switchDataForAuth).then(function (state) {
       var full = dataMode === 'full';
       /* 기존 회원 고유번호 백필 (한 번만, 결정적이라 클라이언트 간 동일) — 쓰기 권한 있는 회원·관리자만 */
-      if (full && ensureSerials(state)) {
-        stateRef.update({ entries: state.entries }).catch(function () {});
+      /* 고유번호 백필: 예전엔 앱을 연 모든 회원이 자기 화면의 회원 목록 전체로 덮어써서, 그 사이 다른 사람의 변경을 지울 수 있었음
+         → 관리자만, 트랜잭션으로 서버의 최신 목록에 채움 */
+      if (full && _authIsAdmin && (state.entries || []).some(function (e) { return e.serial == null; })) {
+        db.runTransaction(function (tx) {
+          return tx.get(stateRef).then(function (doc) {
+            var s = doc.data() || {};
+            if (ensureSerials(s)) tx.update(stateRef, { entries: s.entries });
+          });
+        }).catch(function () {});
       }
       if (_sessionExpired) {
         /* 보안 강화(서버 로그인) 이후 저장된 세션을 확인할 수 없음 → 한 번만 다시 로그인 */
