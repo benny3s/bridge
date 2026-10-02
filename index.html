@@ -911,7 +911,6 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check-compat.js"></script>
 <!-- messaging SDK는 정적 로드하지 않음 — 아래 loadMessagingSdk()가 '푸시 가능한 기기'에서만 동적 로드.
      (정적 로드하면 iOS 사파리 탭에서 Functions 호출 시 SDK가 내부적으로 FCM 토큰을 붙이려다
       루트 경로 서비스워커 등록 실패로 함수 호출 자체가 거부됨 → 지인 필터 오류) -->
@@ -922,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-395';
+  var APP_VERSION = '2026-10-02-396';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1068,7 +1067,8 @@
   firebase.initializeApp(firebaseConfig);
   /* App Check (reCAPTCHA v3) — 봇/DoS 차단. 콘솔에서 '강제(enforce)'는 검증 후에 켜세요 */
   var RECAPTCHA_SITE_KEY = '6LcXXaktAAAAAAEVQHqK7mqctPxxj-OaD_Gf8svA';
-  try { firebase.appCheck().activate(RECAPTCHA_SITE_KEY, true); } catch (e) { try { console.warn('appCheck', e); } catch (e2) {} }
+  /* App Check(reCAPTCHA)는 끔: 서버에서 강제하지 않아 보안 효과가 없고, 아이폰 사파리에서 토큰 실패·재시도가
+     모든 요청(로그인·데이터·사진)을 늦췄음. 다시 켜려면 reCAPTCHA 도메인 설정을 고친 뒤 서버 강제와 함께 */
   var db = firebase.firestore();
   var stateRef = db.collection('app').doc('state');
   /* ── 쓰기 서명: app/state 에 쓰는 모든 앱 쓰기에 쓴 사람(_w = 내 토큰 uid)과 새 난수(_wn)를 붙임.
@@ -1650,7 +1650,8 @@
      '토큰 있는 회원/관리자'만 데이터 접근을 허용하는 기반. 손님은 익명 토큰. */
   function authUid() { var u = firebase.auth().currentUser; return (u && !u.isAnonymous) ? u.uid : ''; }
   function serverSignIn(fnName, payload) {
-    return callFn(fnName, payload).then(function (r) {
+    var direct = fns ? fns.httpsCallable(fnName)(payload).catch(function (e) { if (isSwMsgError(e)) return callFn(fnName, payload); throw e; }) : callFn(fnName, payload);
+    return direct.then(function (r) {
       var t = r && r.data && r.data.token;
       if (!t) throw new Error('토큰을 받지 못했어요.');
       return firebase.auth().signInWithCustomToken(t);
@@ -9863,8 +9864,23 @@
     var state = currentState;
     var entry = state.entries.find(function (e) { return e.id === id; });
     if (!entry) return;
+    if (photoCache[id]) { if (photoCache[id].length) openGallery(photoCache[id], 0, viewer); return; }
+    /* 원본을 받는 동안 바로 창을 띄움(흐린 썸네일 + 불러오는 중) — 예전엔 다 받은 뒤에야 열려 반응이 없어 보였음 */
+    var ov = document.createElement('div');
+    ov.className = 'gallery-overlay';
+    var th = cardThumb(entry);
+    ov.innerHTML = (th ? '<img class="gallery-img" src="' + th + '" alt="" style="filter:blur(14px);opacity:.6;">' : '') +
+      '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:0.95rem;text-shadow:0 1px 4px rgba(0,0,0,.6);">사진 불러오는 중…</div>' +
+      '<button class="gallery-close" id="gal-close">&times;</button>';
+    var cancelled = false;
+    function closeTemp() { cancelled = true; if (ov.parentNode) ov.remove(); popOverlay(ov); }
+    ov.addEventListener('click', function (e) { if (e.target.id === 'gal-close' || e.target === ov) closeTemp(); });
+    document.body.appendChild(ov);
+    pushOverlay(ov, closeTemp);
     loadPhotos(entry).then(function (photos) {
-      if (!photos.length) return;
+      if (cancelled) return;
+      if (ov.parentNode) ov.remove(); popOverlay(ov);
+      if (!photos.length) { modalNotice('안내', '사진을 불러오지 못했어요. 잠시 후 다시 눌러주세요.'); return; }
       openGallery(photos, 0, viewer);
     });
   }
