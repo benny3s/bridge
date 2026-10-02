@@ -922,7 +922,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-390';
+  var APP_VERSION = '2026-10-02-391';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -3948,13 +3948,23 @@
       var ta = overlay.querySelector('#dm-text'); var t = ta.value.trim();
       if (!t) return;
       var btn = overlay.querySelector('#dm-send'); btn.disabled = true;
+      /* 서버 저장(첫 호출은 몇 초 걸릴 수 있음) 전에 '보내는 중' 말풍선을 바로 띄움 */
+      ta.value = '';
+      var body = overlay.querySelector('#dm-body');
+      var pending = document.createElement('div');
+      pending.style.opacity = '0.55';
+      pending.innerHTML = dmLineHtml({ fromId: me.id, toId: otherId, text: t, at: new Date().toISOString() }, me.id).replace(/<div style="font-size:0.66rem;opacity:0.75;margin-top:3px;text-align:right;">[^<]*<\/div>/, '<div style="font-size:0.66rem;opacity:0.75;margin-top:3px;text-align:right;">보내는 중…</div>');
+      if (body.querySelector('.modal-msg')) body.innerHTML = '';
+      body.appendChild(pending); body.scrollTop = body.scrollHeight;
       sendDm(me.id, otherId, t).then(function () {
-        ta.value = '';
-      }).then(function () {
         draw(); markDmSeen(me.id, otherId);
         lastCount = dmThread(currentState, me.id, otherId).length;
         btn.disabled = false;
-      }).catch(function (err) { btn.disabled = false; modalNotice('오류', '전송 실패: ' + (err.message || err)); });
+      }).catch(function (err) {
+        if (pending.parentNode) pending.parentNode.removeChild(pending);
+        ta.value = t; btn.disabled = false;
+        modalNotice('오류', '전송 실패: ' + (err.message || err));
+      });
     });
   }
   /* 관리자: 신고된 대화 읽기 전용 보기 (열람 기록은 서버가 남김) */
