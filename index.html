@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-396';
+  var APP_VERSION = '2026-10-02-397';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1222,12 +1222,16 @@
   }
   /* 명단·현황 배너용 프로필 목록 (공개 모드면 티저) */
   function profileEntries(state) { return (state && state.teaser) || (state && state.entries) || []; }
+  var _openAdminChatRedraw = null;
+  var _lastDataAt = 0;
   function onDataArrived(state, first) {
+    _lastDataAt = Date.now();
     overlayAdminPriv(state);
     if (!currentUser) restoreSession(state);
     checkVersion(state);
     currentState = state;
     if (!first) schedulePaint();
+    if (_openAdminChatRedraw) { try { _openAdminChatRedraw(); } catch (e) {} }
   }
   function subscribeData(mode) {
     if (_dataUnsub) { try { _dataUnsub(); } catch (e) {} _dataUnsub = null; }
@@ -1637,7 +1641,11 @@
   function callFn(name, payload) {
     if (!fns) return Promise.reject(new Error('서버에 연결할 수 없어요.'));
     function invoke() { return fns.httpsCallable(name)(payload); }
-    return messagingSettled().then(invoke).catch(function (e) {
+    /* 먼저 바로 호출 (예전엔 매번 푸시 서비스워커 준비를 기다려 첫 호출이 수 초 늦었음) → 그 오류가 날 때만 준비 후 재시도 */
+    return invoke().catch(function (e0) {
+      if (!isSwMsgError(e0)) throw e0;
+      return messagingSettled().then(invoke);
+    }).catch(function (e) {
       if (isSwMsgError(e)) { /* 경쟁 조건 등으로 실패 시: prime 강제 후 1회 재시도 */
         _primePromise = null;
         return primeMessagingSw().then(invoke);
@@ -3719,11 +3727,15 @@
   /* 자체 버전 체크: 배포된 파일을 직접 받아 실행 중 버전과 비교 → 더 최신이면 배너.
      (서버 appVersion 기록/다른 기기에 의존하지 않아, 혼자 써도 새 버전 배포 시 알림이 뜸) */
   var selfCheckBusy = false;
+  var _lastSelfCheckAt = 0;
   function selfVersionCheck() {
     if (selfCheckBusy || document.getElementById('update-bar')) return;
+    if (Date.now() - _lastSelfCheckAt < 10 * 60000) return;
+    _lastSelfCheckAt = Date.now();
     selfCheckBusy = true;
     var url = location.pathname + '?vchk=' + Date.now();
-    fetch(url, { cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (html) {
+    /* APP_VERSION 은 파일 앞쪽(약 47KB 지점)에 있어 앞부분 64KB만 받음 (전체는 약 0.8MB) */
+    fetch(url, { cache: 'no-store', headers: { Range: 'bytes=0-65535' } }).then(function (r) { return r.text(); }).then(function (html) {
       var m = html.match(/var APP_VERSION\s*=\s*'([^']+)'/);
       var fetched = m ? m[1] : '';
       if (fetched && verNewer(fetched, APP_VERSION)) showReloadBanner(fetched);
@@ -4122,16 +4134,13 @@
     }
     draw(); markAdminUserRead(entryId);
     var lastCount = threadFor(currentState, entryId, 'admin').length;
-    /* 열려 있는 동안 폴링: 회원이 보낸 새 메시지를 채팅창에만 반영 (앱 전체 리페인트 없이) */
-    var poll = setInterval(function () {
-      stateRef.get({ source: 'server' }).then(function (doc) {
-        if (!doc.exists) return;
-        currentState = doc.data();
-        var th = threadFor(currentState, entryId, 'admin');
-        if (th.length !== lastCount) { lastCount = th.length; draw(); markAdminUserRead(entryId); }
-      }).catch(function () {});
-    }, 3500);
-    function close() { clearInterval(poll); closeModal(overlay); paint(currentState); }
+    /* 새 메시지는 실시간 구독(onSnapshot)으로 이미 들어오므로 그때 채팅창만 다시 그림
+       (예전: 열려 있는 동안 3.5초마다 메인 문서 전체(약 0.5MB)를 다시 받던 폴링) */
+    _openAdminChatRedraw = function () {
+      var th = threadFor(currentState, entryId, 'admin');
+      if (th.length !== lastCount) { lastCount = th.length; draw(); markAdminUserRead(entryId); }
+    };
+    function close() { _openAdminChatRedraw = null; closeModal(overlay); paint(currentState); }
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
     overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
     overlay.querySelector('#ac-send').addEventListener('click', function () {
@@ -7410,6 +7419,7 @@
   }
   var _pinForceAsked = false;
   function paint(state) {
+    overlayAdminPriv(state); /* 서버에서 새로 받은 state 로 그릴 때도 관리자 전용 값 유지 */
     currentState = state;
     /* 저장된 로그인으로 들어왔는데 임시 PIN 상태면 한 번 새 PIN 정하기를 권한다 */
     if (!_pinForceAsked && currentUser && !isAdminUnlocked) {
@@ -11490,13 +11500,21 @@
   }
   try { attachFcmOnMessage(); } catch (e) {} /* 이미 로드돼 있으면 즉시 등록 */
   /* 앱이 백그라운드→포그라운드로 돌아오면 최신 상태로 새로고침 (모바일 PWA에서 실시간 갱신이 멈추는 문제 방지) */
+  var _lastResumeAt = 0, _hiddenAt = 0;
   function refreshOnResume() {
     if (!appStarted) return;
-    try { if (!isEditingForm()) refreshNow(); } catch (e) {}
-    try { selfVersionCheck(); } catch (e) {} /* 포그라운드 복귀 시 새 버전 배포됐는지 확인 */
+    var now = Date.now();
+    if (now - _lastResumeAt < 60000) return; /* focus·visibilitychange 동시 발생·잦은 전환 → 1분에 한 번 */
+    _lastResumeAt = now;
+    var awayMs = _hiddenAt ? now - _hiddenAt : 0;
+    if (awayMs > 5 * 60000 || now - _lastDataAt > 30 * 60000) {
+      try { if (!isEditingForm()) refreshNow(); } catch (e) {} /* 오래 떠나 있었을 때만 전체 새로 받기 */
+    }
+    try { selfVersionCheck(); } catch (e) {} /* 포그라운드 복귀 시 새 버전 배포됐는지 확인 (10분 간격 제한) */
   }
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible') refreshOnResume();
+    else _hiddenAt = Date.now();
   });
   window.addEventListener('focus', refreshOnResume);
   /* 로드 직후 한 번 + 30분마다 새 버전 배포 확인 */
