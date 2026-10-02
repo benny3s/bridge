@@ -408,7 +408,7 @@ async function sendToAdmin(title, body) {
 
 exports.onStateChange = functions
   .region('asia-northeast3')
-  .runWith({ maxInstances: 10, timeoutSeconds: 30, memory: '256MB' })
+  .runWith({ maxInstances: 10, timeoutSeconds: 120, memory: '256MB' })
   .firestore.document('app/state')
   .onUpdate(async (change) => {
     const before = change.before.data() || {};
@@ -939,6 +939,12 @@ const SECRET_KEYS = ['pinAuth', 'pinHash', 'pinEnc', 'contactSelfEnc'];
 const PRIV_KEYS = ['realNameEnc', 'contactEnc', 'referrerEnc'];
 const SECRET_PURGE_MS = 7 * 86400000; /* state 에서 사라진 계정의 금고는 7일 뒤 삭제 (실수로 지워졌다 복구될 때 대비) */
 function allOf(s) { return ((s && s.entries) || []).concat((s && s.pendingEntries) || []); }
+function stableJson(v) {
+  if (v === undefined) return 'undefined';
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
+  return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
+}
 function hasPinInline(e) { return !!(e && (e.pinAuth || e.pinHash)); }
 async function sweepSecrets(before, after) {
   const FV = admin.firestore.FieldValue;
@@ -991,7 +997,8 @@ async function sweepSecrets(before, after) {
 
   /* 2) state 에서 지우기 — 옮긴 값과 똑같을 때만 (그사이 새 값이 들어왔으면 다음 차례에 다시 옮김) */
   const doneMap = {}; done.forEach((d) => { doneMap[d.id] = d; });
-  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  /* 값 비교는 키 순서 무관하게 (트리거로 받은 값과 트랜잭션에서 읽은 값은 맵 키 순서가 다를 수 있음) */
+  const same = (a, b) => stableJson(a) === stableJson(b);
   const ref = db.doc('app/state');
   await db.runTransaction(async (tx) => {
     const s = (await tx.get(ref)).data() || {};
