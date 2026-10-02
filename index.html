@@ -922,7 +922,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-394';
+  var APP_VERSION = '2026-10-02-395';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6973,7 +6973,7 @@
     /* 🛡 보안 경고: 회원이 남의 데이터를 바꿈(되돌리기 가능)·로그인 잠금·IP 차단 */
     var SEC_TYPE = { tamper: '🚨 이상 변경', 'login-lock': '🔒 회원 로그인 잠김', 'admin-lock': '🚨 관리자 로그인 잠김', 'ip-block': '🛡 IP 차단' };
     var secOpen = _secAlerts.filter(function (a) { return !a.resolved; });
-    var securitySection = adminFold('🛡 보안 경고' + (secOpen.length ? ' <span class="blink-soft" style="background:#c5221f;color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">확인 필요 ' + secOpen.length + '</span>' : ''), secOpen.length,
+    var securitySection = adminFold('🛡 보안 경고' + (secOpen.length ? ' <span class="blink-soft" style="background:#c5221f;color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">확인 필요 ' + secOpen.length + '</span>' : ''), null,
       '<p class="sub">회원 계정으로 <b>다른 회원 데이터가 바뀌면</b>(개발자 도구 조작 의심) 바뀌기 전 내용과 함께 기록돼요. [되돌리기]로 원래대로 돌릴 수 있어요. 로그인 잠금·IP 차단도 여기 표시돼요. (7일 이내면 전체 시점 복구도 가능)</p>' +
       (_secAlerts.length ? _secAlerts.map(function (a) {
         var head = '<b>' + (SEC_TYPE[a.type] || a.type) + '</b> · ' + fmtDate(a.at);
@@ -7212,7 +7212,9 @@
       adminTab = '<button type="button" class="tab-btn" data-tab="admin" role="tab" aria-selected="' + (activeTab === 'admin') + '">관리자' +
         '<span class="count' + (approvalCount >= 1 ? ' blink' : '') + '" title="승인 대기 (가입·삭제·보관)">대기 ' + approvalCount + '</span>' +
         '<span class="count" title="요청">요청 ' + reqCount + '</span>' +
-        '<span class="count' + (msgUnread >= 1 ? ' blink' : '') + '" title="안 읽은 Q&A">Q&A ' + msgUnread + '</span></button>';
+        '<span class="count' + (msgUnread >= 1 ? ' blink' : '') + '" title="안 읽은 Q&A">Q&A ' + msgUnread + '</span>' +
+        (function () { var n = _secAlerts.filter(function (a) { return !a.resolved; }).length; return n ? '<span class="count blink" title="보안 경고 (관리자 탭 → 🛡 보안 경고)" style="background:#c5221f;color:#fff;">🛡 ' + n + '</span>' : ''; })() +
+        '</button>';
     }
     /* 주선자 프로필 전환 바: 주선자 계정이거나 대리 프로필이 1개 이상일 때 표시 (주선자는 sub 없어도 항상 보임).
        구조 = 주선자 계정(위) → 그 아래 본인/친구 목록(트리). 로그인 직후 기본 활동 프로필은 resolveDefaultActing으로 정함. */

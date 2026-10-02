@@ -16,13 +16,25 @@ service cloud.firestore {
     function memberStateKeysOnly() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         'entries', 'pendingEntries', 'dateRequests', 'messages', 'logs', 'joinRequests',
-        'connLog', 'connEver', 'coupleReports', 'appVersion', 'dm'
+        'connLog', 'connEver', 'coupleReports', 'appVersion', 'dm', '_w', '_wn'
       ]);
+    }
+    // 쓰기 서명: 모든 앱 쓰기는 쓴 사람(_w = 내 토큰 uid)과 새 난수(_wn)를 붙여야 함 → 서버가 '누가 무엇을 바꿨는지' 감시
+    function signedWrite() {
+      return request.resource.data.get('_w', '') == request.auth.uid
+          && request.resource.data.get('_wn', '') != resource.data.get('_wn', '');
     }
     match /app/state {
       allow read: if isMember() || isAdmin();
-      allow update: if isAdmin() || (isMember() && memberStateKeysOnly());
+      allow update: if signedWrite() && (isAdmin() || (isMember() && memberStateKeysOnly()));
       allow create, delete: if isAdmin();
+    }
+
+    // 보안 경고(서버가 기록) — 관리자만 읽고 '확인함·되돌림' 표시만 바꿈
+    match /securityAlerts/{alertId} {
+      allow read: if isAdmin();
+      allow update: if isAdmin()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['resolved', 'resolvedAt', 'restoredAt']);
     }
 
     // 활동 기록 아카이브 — 승인 회원·관리자만
