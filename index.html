@@ -922,7 +922,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-388';
+  var APP_VERSION = '2026-10-02-389';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -7042,9 +7042,9 @@
     var connNow = (state.dateRequests || []).filter(function (r) { return (r.type || 'contact') === 'contact' && r.approved; }).length;
     var connCount = Array.isArray(state.connLog) ? state.connLog.length : Math.max((typeof state.connEver === 'number' ? state.connEver : 0), connNow);
     var coupleCount = (state.coupleReports || []).filter(function (r) { return r.confirmed; }).length; /* 관리자 확인된 커플만 */
-    /* 누적 가입 = 승인된 회원(보관 포함, 주선자·테스트 제외). 공개 모드는 서버가 계산한 값 */
+    /* 누적 가입 = 승인된 계정(주선자·보관 포함, 테스트 제외). 주선자의 본인 프로필(ownerSelf)은 같은 사람이라 중복 제외. 공개 모드는 서버 계산값 */
     var memberTotal = (typeof state.memberTotal === 'number') ? state.memberTotal
-      : (state.entries || []).filter(function (e) { return !e.isMatchmaker && !e.testAccount; }).length;
+      : (state.entries || []).filter(function (e) { return !e.testAccount && !(e.managedBy && e.ownerSelf); }).length;
     var liveBits = [];
     if (newThisWeek > 0) liveBits.push('이번 주 새 멤버 <b>' + newThisWeek + '</b>명');
     if (connCount > 0) liveBits.push('누적 연결 <b>' + connCount + '</b>쌍');

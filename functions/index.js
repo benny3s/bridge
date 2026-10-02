@@ -674,7 +674,8 @@ function buildPublicView(state) {
     teaser, loginDir, reviews,
     connCount: Array.isArray(state.connLog) ? state.connLog.length : Math.max(typeof state.connEver === 'number' ? state.connEver : 0, connNow),
     coupleCount: reports.filter((r) => r.confirmed).length,
-    memberTotal: entries.filter((e) => !e.isMatchmaker && !e.testAccount).length
+    /* 누적 가입 = 승인된 계정(주선자·보관 포함, 테스트 제외). 주선자의 본인 프로필(ownerSelf)은 같은 사람이라 중복 제외 */
+    memberTotal: entries.filter((e) => !e.testAccount && !(e.managedBy && e.ownerSelf)).length
   };
 }
 async function syncPublicView(state) {
