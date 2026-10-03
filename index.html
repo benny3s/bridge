@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-02-404';
+  var APP_VERSION = '2026-10-03-405';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4734,16 +4734,46 @@
     return (entry && entry.photoThumb) || inlinePhotos(entry)[0] || null;
   }
   /* 원본 사진 로드: photos/{id} 우선, 없으면 inline(마이그레이션 전) 폴백 */
+  /* 아이폰 사파리는 app/state 실시간 연결(큰 문서)이 밀리거나 화면 복귀 후 끊긴 걸 늦게 알아채면
+     doc.get() 이 그 연결 뒤에 줄 서서 10초 넘게 걸림 (2026-10-03 관리자 아이폰 실측 신고).
+     → 같은 권한(로그인 토큰·보안 규칙 그대로)으로 Firestore REST 를 따로 불러 SDK 와 경주, 먼저 온 쪽을 씀. */
+  function fetchPhotosRest(id) {
+    var u = firebase.auth().currentUser;
+    if (!u || !window.fetch) return Promise.reject(new Error('no-rest'));
+    var pid = firebase.app().options.projectId;
+    return u.getIdToken().then(function (tok) {
+      return fetch('https://firestore.googleapis.com/v1/projects/' + pid + '/databases/(default)/documents/photos/' + encodeURIComponent(id) + '?mask.fieldPaths=photos',
+        { headers: { Authorization: 'Bearer ' + tok }, cache: 'no-store' });
+    }).then(function (r) {
+      if (r.status === 404) return [];
+      if (!r.ok) throw new Error('rest ' + r.status);
+      return r.json().then(function (j) {
+        var v = j && j.fields && j.fields.photos && j.fields.photos.arrayValue && j.fields.photos.arrayValue.values;
+        return (v || []).map(function (x) { return x.stringValue; }).filter(Boolean);
+      });
+    });
+  }
+  var photoLoading = {};               /* entryId -> 진행 중 Promise (미리 받기·클릭이 같은 요청 공유) */
   function loadPhotos(entry) {
     var id = entry.id;
     if (photoCache[id]) return Promise.resolve(photoCache[id]);
-    return photosRef.doc(id).get().then(function (doc) {
-      var arr;
-      if (doc.exists && doc.data() && doc.data().photos && doc.data().photos.length) arr = doc.data().photos;
-      else arr = inlinePhotos(entry);
-      photoCache[id] = arr;
-      return arr;
-    }).catch(function () { return inlinePhotos(entry); });
+    if (photoLoading[id]) return photoLoading[id];
+    var p = new Promise(function (resolve) {
+      var left = 2, done = false;
+      function finish(arr) {
+        if (done) return;
+        if (arr && arr.length) { done = true; photoCache[id] = arr; resolve(arr); return; }
+        if (--left <= 0) { done = true; var inl = inlinePhotos(entry); if (inl.length) photoCache[id] = inl; resolve(inl); }
+      }
+      photosRef.doc(id).get().then(function (doc) {
+        var d = doc.exists && doc.data();
+        finish(d && d.photos && d.photos.length ? d.photos : null);
+      }).catch(function () { finish(null); });
+      fetchPhotosRest(id).then(finish).catch(function () { finish(null); });
+    });
+    photoLoading[id] = p;
+    p.then(function () { delete photoLoading[id]; });
+    return p;
   }
   /* 기존 dataURL을 원하는 크기로 다시 인코딩 (썸네일/재압축용) */
   function resizeDataUrl(dataUrl, maxW, maxH, quality) {
@@ -5067,6 +5097,7 @@
     var state = currentState;
     var entry = (state.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
+    try { if (photoCountOf(entry) && (isAdminUnlocked || (function () { var v = currentUser ? findMyEntry(state) : null; return !!(v && canViewPhotoOf(state, v.id, id)); })())) loadPhotos(entry); } catch (e) {}
     /* 주선자 계정은 소개팅 프로필이 없어 회원 카드로 열면 빈 칸뿐 → 관리자에겐 주선자 상세(실명·번호)로 바로 */
     if (isAdminUnlocked && entry.isMatchmaker) { handleDetail(id); return; }
     var idx = (state.entries || []).indexOf(entry);
