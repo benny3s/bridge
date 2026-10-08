@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-08-406';
+  var APP_VERSION = '2026-10-08-407';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1253,8 +1253,8 @@
     var ov = openModal(
       '<h3>☕ 후원자 추가</h3>' +
       '<p class="modal-msg" style="font-size:0.82rem;">회원·주선자·휴면·승인 대기·삭제된 회원 모두에서 찾을 수 있어요.</p>' +
-      '<input type="text" class="modal-input" id="sup-q" placeholder="🔍 닉네임 또는 고유번호" autocomplete="off">' +
-      '<div id="sup-res" style="display:flex;flex-wrap:wrap;gap:5px;margin:8px 0;max-height:30vh;overflow-y:auto;"></div>' +
+      '<input type="text" class="modal-input" id="sup-q" placeholder="🔍 닉네임 · 고유번호 · 실명으로 좁히기" autocomplete="off">' +
+      '<div id="sup-res" style="margin:8px 0;max-height:34vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;"></div>' +
       '<div id="sup-pick" class="modal-msg" style="font-size:0.86rem;margin:4px 0;">선택: <span style="color:var(--muted);">없음</span></div>' +
       '<input type="text" class="modal-input" id="sup-amt" inputmode="numeric" placeholder="금액 (원, 관리자만 봐요)">' +
       '<input type="text" class="modal-input" id="sup-memo" placeholder="메모 (선택, 관리자만)" maxlength="60" style="margin-top:6px;">' +
@@ -1263,17 +1263,26 @@
     );
     var cands = supCandidates(currentState);
     var q = ov.querySelector('#sup-q'), res = ov.querySelector('#sup-res'), pk = ov.querySelector('#sup-pick');
+    /* 처음부터 전체 목록(회원 → 주선자 → 휴면 → 승인 대기 → 삭제), 검색은 목록 좁히기. 카카오페이엔 실명이 찍히니 실명으로도 찾음(관리자 복호화 캐시) */
+    var TAG_ORDER = { '회원': 0, '주선자': 1, '휴면': 2, '승인 대기': 3, '테스트': 4, '삭제': 5 };
+    cands.forEach(function (c) { c.real = (c.entryId && decryptedNames[c.entryId]) || ''; });
+    cands.sort(function (a, b) { return (TAG_ORDER[a.tag] - TAG_ORDER[b.tag]) || (a.uid || '').localeCompare(b.uid || ''); });
     function draw() {
       var t = (q.value || '').trim().toLowerCase();
-      var hits = !t ? [] : cands.filter(function (c) { return (c.nick + ' ' + c.uid).toLowerCase().indexOf(t) >= 0; }).slice(0, 30);
-      res.innerHTML = hits.map(function (c, i) {
-        return '<button type="button" class="card-btn" data-i="' + cands.indexOf(c) + '" style="flex:none;padding:3px 9px;font-size:0.8rem;">' + escapeHtml(c.uid ? c.uid + ' ' : '') + escapeHtml(c.nick || '(이름 없음)') + ' · ' + c.tag + '</button>';
-      }).join('') || (t ? '<span class="sub">찾는 사람이 없어요.</span>' : '');
+      var hits = cands.filter(function (c) { return !t || (c.nick + ' ' + c.uid + ' ' + c.real).toLowerCase().indexOf(t) >= 0; });
+      res.innerHTML = hits.map(function (c) {
+        var on = picked === c;
+        return '<button type="button" data-i="' + cands.indexOf(c) + '" style="display:flex;justify-content:space-between;gap:8px;width:100%;text-align:left;padding:6px 10px;border:0;border-bottom:1px solid var(--line);background:' + (on ? 'var(--gold-soft)' : 'transparent') + ';cursor:pointer;font:inherit;font-size:0.84rem;color:var(--ink);">' +
+          '<span>' + escapeHtml(c.uid ? c.uid + ' ' : '') + '<b>' + escapeHtml(c.nick || '(이름 없음)') + '</b>' + (c.real ? ' <span style="color:var(--muted);">' + escapeHtml(c.real) + '</span>' : '') + '</span>' +
+          '<span style="color:var(--muted);white-space:nowrap;">' + (on ? '✔ ' : '') + c.tag + '</span></button>';
+      }).join('') || '<p class="sub" style="padding:8px;">찾는 사람이 없어요.</p>';
     }
     q.addEventListener('input', draw);
+    draw();
     res.addEventListener('click', function (e) {
       var b = e.target.closest('[data-i]'); if (!b) return;
       picked = cands[parseInt(b.getAttribute('data-i'), 10)];
+      draw();
       pk.innerHTML = '선택: <b>' + escapeHtml((picked.uid ? picked.uid + ' ' : '') + (picked.nick || '(이름 없음)')) + '</b> · ' + picked.tag + (picked.tag === '삭제' ? ' <span style="color:var(--muted);">(회원에겐 익명으로 보여요)</span>' : '');
     });
     var amt = ov.querySelector('#sup-amt');
