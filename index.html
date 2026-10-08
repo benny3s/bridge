@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-08-409';
+  var APP_VERSION = '2026-10-08-411';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1203,8 +1203,8 @@
   function supKey(s) { return s.key || s.pk || s.entryId || s.id; }
   function supTier(total) { var t = Number(total) || 0; return t <= 10000 ? 1 : (t <= 50000 ? 2 : 3); }
   function supIsRecent(s) { return !!(s && s.at && Date.now() - new Date(s.at).getTime() < SUP_FLOAT_DAYS * 86400000); }
-  function kstDay() { return new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10); }
-  function supDateIso(v) { return (!v || v === kstDay()) ? new Date().toISOString() : new Date(v + 'T12:00:00+09:00').toISOString(); }
+  function supToday() { return new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10); }  /* 오늘(KST). ※ kstDay(iso) 는 다른 곳에 이미 있음 */
+  function supDateIso(v) { return (!v || v === supToday()) ? new Date().toISOString() : new Date(v + 'T12:00:00+09:00').toISOString(); }
   function supporterName(state, s) {
     if (!s || s.anon || !s.entryId) return '익명의 후원자';
     var e = ((state && state.entries) || []).concat((state && state.pendingEntries) || []).find(function (x) { return x.id === s.entryId; });
@@ -1272,7 +1272,9 @@
       '<p class="sub">금액은 <b>관리자만</b> 봐요. 회원에겐 이름만, <b>사람당 한 번</b> 보여요 (☕ 응원하기 팝업 명단 + 화면 아래 지나가는 감사 인사, 기기당 하루 최대 1번). ' +
         '후원 날짜가 최근 ' + SUP_FLOAT_DAYS + '일이면 그 사람을 바로, 아니면 <b>하루 1/3 확률</b>로 한 명을 뽑아요. 뽑힐 확률은 <b>누적 금액</b>으로 1만 원 이하 ×1 · 5만 원 이하 ×2 · 그 이상 ×3 (×3이면 ×1보다 3배 자주). ' +
         '<b>옛날 후원은 실제 날짜로</b> 넣으면 한꺼번에 몰리지 않아요. 같은 사람이 또 후원하면 한 번 더 추가하면 합쳐져요.</p>' +
-      '<div style="margin:0 0 10px;display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="card-btn primary" data-action="sup-add" style="flex:none;">➕ 후원 추가</button>' + (list.length ? '<button type="button" class="card-btn" data-action="sup-preview" style="flex:none;">👀 회원 화면 미리보기</button>' : '') + '</div>' +
+      '<div style="margin:0 0 10px;display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="card-btn primary" data-action="sup-add" style="flex:none;">➕ 후원 추가</button>' + (list.length ? '<button type="button" class="card-btn" data-action="sup-preview" style="flex:none;">👀 회원 화면 미리보기</button>' : '') +
+        '<button type="button" class="card-btn" data-action="sup-float-toggle" style="flex:none;' + (state.supFloatOn === true ? 'background:var(--gold-soft);border-color:var(--gold);color:var(--gold);font-weight:700;' : '') + '">' + (state.supFloatOn === true ? '🎈 떠다니는 인사: 켜짐' : '🎈 떠다니는 인사: 꺼짐') + '</button></div>' +
+      '<p class="sub" style="margin:-4px 0 10px;">떠다니는 인사는 켜야 회원에게 보여요 (꺼져 있어도 ☕ 응원하기 팝업 명단은 보이고, 미리보기는 관리자에게만 떠요).</p>' +
       (list.length
         ? '<div class="admin-table-wrap"><table class="seen-table"><thead><tr><th>후원자</th><th>금액</th><th>날짜</th><th>공개</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
           '<p class="sub" style="margin-top:6px;">합계 <b>' + total.toLocaleString('ko-KR') + '원</b> · ' + people + '명 · ' + list.length + '건</p>'
@@ -1284,7 +1286,7 @@
     if (!rec) return;
     var ov = openModal('<h3>📅 후원 날짜</h3>' +
       '<p class="modal-msg" style="font-size:0.82rem;">최근 ' + SUP_FLOAT_DAYS + '일 안이면 신규로 바로 감사 인사가 뜨고, 그 전이면 순환으로만 나와요.</p>' +
-      '<input type="date" class="modal-input" id="sup-d2" value="' + new Date(new Date(rec.at || Date.now()).getTime() + 9 * 3600000).toISOString().slice(0, 10) + '" max="' + kstDay() + '">' +
+      '<input type="date" class="modal-input" id="sup-d2" value="' + new Date(new Date(rec.at || Date.now()).getTime() + 9 * 3600000).toISOString().slice(0, 10) + '" max="' + supToday() + '">' +
       '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button><button type="button" class="card-btn primary" id="sup-d2-save">저장</button></div>');
     ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
     ov.querySelector('#sup-d2-save').addEventListener('click', function () {
@@ -1306,7 +1308,7 @@
       '<div id="sup-pick" class="modal-msg" style="font-size:0.86rem;margin:4px 0;">선택: <span style="color:var(--muted);">없음</span></div>' +
       '<input type="text" class="modal-input" id="sup-amt" inputmode="numeric" placeholder="금액 (원, 관리자만 봐요)">' +
       '<label style="display:block;font-size:0.8rem;color:var(--muted);margin:8px 0 2px;">후원 날짜 — 옛날 후원은 실제 날짜로 넣으면 한꺼번에 뜨지 않고 순환으로만 나와요</label>' +
-      '<input type="date" class="modal-input" id="sup-date" value="' + kstDay() + '" max="' + kstDay() + '">' +
+      '<input type="date" class="modal-input" id="sup-date" value="' + supToday() + '" max="' + supToday() + '">' +
       '<input type="text" class="modal-input" id="sup-memo" placeholder="메모 (선택, 관리자만)" maxlength="60" style="margin-top:6px;">' +
       '<label style="display:flex;align-items:center;gap:6px;margin:8px 0;font-size:0.86rem;"><input type="checkbox" id="sup-anon"> 회원에게 \'익명의 후원자\'로 보이기</label>' +
       '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button><button type="button" class="card-btn primary" id="sup-save">추가</button></div>'
@@ -1371,10 +1373,11 @@
   }
   function maybeFloatThanks(state) {
     if (_thxChecked || dataMode !== 'full' || !state) return;
+    if (state.supFloatOn !== true) return;  /* 관리자 스위치 (기본 꺼짐 — 2026-10-08 Benny: 테스트 기간) */
     _thxChecked = true;
     try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return; } catch (e) {}
     if (!publicSupporters(state).length) return;
-    var day = kstDay(), key = 'bb-thx-day';
+    var day = supToday(), key = 'bb-thx-day';
     try { if (localStorage.getItem(key) === day) return; localStorage.setItem(key, day); } catch (e) {}  /* 확률에서 떨어져도 오늘은 끝 — 다시 열어 재추첨 방지 */
     var pick = supTodayPick(state, false); if (!pick) return;
     try { localStorage.setItem('bb-thx-last', pick[0].pk); } catch (e) {}
@@ -10936,6 +10939,13 @@
       else if (action === 'sup-add') { openSupporterAdd(); return; }
       else if (action === 'sup-preview') { previewSupporters(); return; }
       else if (action === 'sup-date') { if (isAdminUnlocked) openSupporterDate(id); return; }
+      else if (action === 'sup-float-toggle') {
+        if (!isAdminUnlocked) return;
+        var _on = currentState.supFloatOn !== true;
+        stateRef.update({ supFloatOn: _on }).then(function () { return refreshNow(); }).then(function () { appendLog('admin', '관리자', '후원자 떠다니는 인사 ' + (_on ? '켜기' : '끄기')); })
+          .catch(function (e) { modalNotice('저장 실패', (e && e.message) || String(e)); });
+        return;
+      }
       else if (action === 'sup-anon' || action === 'sup-del') {
         if (!isAdminUnlocked) return;
         var _sl = adminSupporters(), _sr = _sl.find(function (s) { return s.id === id; });
