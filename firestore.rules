@@ -85,6 +85,16 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // 포털(benny3s.github.io 메인) 목록 — 누구나 읽기, 관리자만 쓰기 (2026-10-08)
+    // 포털이 adminLogin 토큰으로 숨김/공개·문구를 저장. 숨김은 단순 숨김(읽기는 공개)
+    match /portal/config {
+      allow read: if true;
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(['json', 'updatedAt'])
+        && request.resource.data.json is string
+        && request.resource.data.json.size() < 50000;
+    }
+
     // 그 외 전부 차단 (secrets(PIN 해시)·loginGuard·rateLimit·sendContacts 등은 서버 전용)
     match /{document=**} {
       allow read, write: if false;
