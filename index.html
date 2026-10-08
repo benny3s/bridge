@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-08-407';
+  var APP_VERSION = '2026-10-08-408';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1240,7 +1240,7 @@
     }).join('');
     return adminFold('☕ 후원자', list.length,
       '<p class="sub">금액은 <b>관리자만</b> 봐요. 회원에겐 이름만 보여요 — <b>☕ 개발자 응원하기</b> 팝업 안 명단, 그리고 등록 후 ' + SUP_FLOAT_DAYS + '일 동안 하루 한 번 화면 아래를 지나가는 감사 인사. 회원 id로 저장해서 닉네임이 바뀌어도 따라가고, 삭제된 회원·익명은 \'익명의 후원자\'로 보여요.</p>' +
-      '<div style="margin:0 0 10px;"><button type="button" class="card-btn primary" data-action="sup-add" style="flex:none;">➕ 후원자 추가</button></div>' +
+      '<div style="margin:0 0 10px;display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="card-btn primary" data-action="sup-add" style="flex:none;">➕ 후원자 추가</button>' + (list.length ? '<button type="button" class="card-btn" data-action="sup-preview" style="flex:none;">👀 회원 화면 미리보기</button>' : '') + '</div>' +
       (list.length
         ? '<div class="admin-table-wrap"><table class="seen-table"><thead><tr><th>후원자</th><th>금액</th><th>날짜</th><th>공개</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
           '<p class="sub" style="margin-top:6px;">합계 <b>' + total.toLocaleString('ko-KR') + '원</b> · ' + list.length + '건</p>'
@@ -1310,20 +1310,32 @@
     if (!recent.length) return;
     var day = new Date().toISOString().slice(0, 10), key = 'bb-thx-day';
     try { if (localStorage.getItem(key) === day) return; localStorage.setItem(key, day); } catch (e) {}
-    var names = recent.slice(0, 3).map(function (s) { return supporterName(state, s); });
+    setTimeout(function () { showThanksFloat(thanksText(state, recent)); }, 4000);
+  }
+  function thanksText(state, list) {
+    var names = list.slice(0, 3).map(function (s) { return supporterName(state, s); });
     var uniq = names.filter(function (n, i) { return names.indexOf(n) === i; });
-    var text = '🙏 ' + uniq.join('·') + '님, 응원해 주셔서 감사해요';
-    setTimeout(function () {
-      if (!document.getElementById('thx-style')) {
-        var st = document.createElement('style'); st.id = 'thx-style';
-        st.textContent = '@keyframes thxDrift{0%{transform:translateX(-100%);opacity:0}6%{opacity:.95}92%{opacity:.95}100%{transform:translateX(100vw);opacity:0}}' +
-          '.thx-float{position:fixed;left:0;bottom:88px;z-index:40;pointer-events:none;white-space:nowrap;font-size:0.8rem;color:var(--gold);background:var(--gold-soft);border:1px solid var(--gold);border-radius:999px;padding:4px 12px;transform:translateX(-100%);animation:thxDrift 16s linear 1 forwards;}';
-        document.head.appendChild(st);
-      }
-      var el = document.createElement('div'); el.className = 'thx-float'; el.textContent = text;
-      el.addEventListener('animationend', function () { if (el.parentNode) el.remove(); });
-      document.body.appendChild(el);
-    }, 4000);
+    return '🙏 ' + uniq.join('·') + '님, 응원해 주셔서 감사해요';
+  }
+  function showThanksFloat(text, onTop) {
+    if (!document.getElementById('thx-style')) {
+      var st = document.createElement('style'); st.id = 'thx-style';
+      st.textContent = '@keyframes thxDrift{0%{transform:translateX(-100%);opacity:0}6%{opacity:.95}92%{opacity:.95}100%{transform:translateX(100vw);opacity:0}}' +
+        '.thx-float{position:fixed;left:0;bottom:88px;z-index:40;pointer-events:none;white-space:nowrap;font-size:0.8rem;color:var(--gold);background:var(--gold-soft);border:1px solid var(--gold);border-radius:999px;padding:4px 12px;transform:translateX(-100%);animation:thxDrift 16s linear 1 forwards;}';
+      document.head.appendChild(st);
+    }
+    var el = document.createElement('div'); el.className = 'thx-float'; el.textContent = text;
+    if (onTop) el.style.zIndex = '100000';
+    el.addEventListener('animationend', function () { if (el.parentNode) el.remove(); });
+    document.body.appendChild(el);
+  }
+  /* 관리자 미리보기: 회원이 보게 될 두 가지(응원하기 팝업 명단 + 떠다니는 인사)를 바로 띄움 — 하루 한 번 제한·저장 없음 */
+  function previewSupporters() {
+    var all = publicSupporters(currentState);
+    if (!all.length) { modalNotice('안내', '등록된 후원자가 없어요.'); return; }
+    var recent = all.filter(function (s) { return s.at && Date.now() - new Date(s.at).getTime() < SUP_FLOAT_DAYS * 86400000; });
+    handleBuyCoffee();
+    showThanksFloat(thanksText(currentState, recent.length ? recent : all), true);
   }
   var _secAlerts = [];
   var _contactFilter = 'all';
@@ -10853,6 +10865,7 @@
       else if (action === 'dm-chat') openDmChat(id);
       else if (action === 'report-view') { if (isAdminUnlocked) openReportedChat(id); }
       else if (action === 'sup-add') { openSupporterAdd(); return; }
+      else if (action === 'sup-preview') { previewSupporters(); return; }
       else if (action === 'sup-anon' || action === 'sup-del') {
         if (!isAdminUnlocked) return;
         var _sl = adminSupporters(), _sr = _sl.find(function (s) { return s.id === id; });
