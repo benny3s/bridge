@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-03-405';
+  var APP_VERSION = '2026-10-08-406';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -942,8 +942,8 @@
   var openMsgFolds = {}; /* 관리자 메시지: 펼쳐둔 회원 대화 (리페인트 후 유지용) */
   var _mmFoldOpen = {};  /* 주선자 탭: 카드별 접힘 상태 (리페인트 후 유지용, 기본 열림) */
   var adminEditMode = false; /* 관리자 섹션 편집(순서·기본 열림) 모드 */
-  var DEFAULT_SEC_ORDER = ['security', 'usage', 'connlog', 'couple', 'pending', 'pinreset', 'reports', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
-  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', reports: '🚨 신고된 대화', security: '🛡 보안 경고', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
+  var DEFAULT_SEC_ORDER = ['security', 'usage', 'connlog', 'couple', 'pending', 'pinreset', 'reports', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'supporters', 'cap', 'seen', 'log'];
+  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', reports: '🚨 신고된 대화', security: '🛡 보안 경고', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', supporters: '☕ 후원자', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
   /* 섹션 열림 상태는 "세션 메모리에만" 저장 → 리페인트(버튼 클릭 등) 동안엔 유지되지만,
      새로고침하면 초기화되어 모두 접힌 상태로 시작 (이전에 열었던 걸 기억하지 않음) */
   var _adminSecOpen = {}, _adminSecOrder = null;
@@ -1188,9 +1188,138 @@
     }
     return state;
   }
+  /* ── ☕ 후원자 (2026-10-08 Benny: '후원해주신 분들 감사 인사 — 거슬리지 않게, 금액은 내가 입력') ──
+     원본(금액 포함)은 adminOnly/_supporters (관리자만 읽기), 회원에게 보이는 건 state.supporters (금액 없이 id·날짜·익명 여부).
+     id 로 저장하므로 닉네임이 바뀌면 화면도 따라감. 삭제된 회원·익명은 '익명의 후원자'.
+     보이는 곳: '개발자 응원하기' 팝업 안 명단 + 등록 후 3일 동안 하루 한 번 화면 아래를 지나가는 감사 인사. */
+  var SUP_DOC = '_supporters';
+  var SUP_FLOAT_DAYS = 3;
+  function adminSupporters() { var d = _adminPriv[SUP_DOC]; return (d && Array.isArray(d.list)) ? d.list : []; }
+  function supporterName(state, s) {
+    if (!s || s.anon || !s.entryId) return '익명의 후원자';
+    var e = ((state && state.entries) || []).concat((state && state.pendingEntries) || []).find(function (x) { return x.id === s.entryId; });
+    return (e && e.nickname) || '익명의 후원자';
+  }
+  function publicSupporters(state) {
+    return ((state && state.supporters) || []).slice().sort(function (a, b) { return (b.at || '').localeCompare(a.at || ''); });
+  }
+  function saveSupporters(list) {
+    var pub = list.map(function (s) { return { id: s.id, entryId: s.entryId || null, at: s.at, anon: !!s.anon }; });
+    return adminOnlyRef.doc(SUP_DOC).set({ list: list, at: new Date().toISOString() })
+      .then(function () { return stateRef.update({ supporters: pub }); })
+      .then(function () { return refreshNow(); });
+  }
+  /* 후원자로 고를 수 있는 사람: 회원·주선자·휴면·승인 대기·삭제된 회원(삭제 이력) 전부 */
+  function supCandidates(state) {
+    var out = [];
+    (state.entries || []).forEach(function (e) {
+      out.push({ key: e.id, entryId: e.id, uid: formatUid(e), nick: e.nickname || '', tag: e.isMatchmaker ? '주선자' : (e.deactivated ? '휴면' : (e.testAccount ? '테스트' : '회원')) });
+    });
+    (state.pendingEntries || []).forEach(function (e) { out.push({ key: e.id, entryId: e.id, uid: formatUid(e), nick: e.nickname || '', tag: '승인 대기' }); });
+    (state.deletedLog || []).forEach(function (t) { out.push({ key: 'del:' + t.id, entryId: null, uid: t.uid || '', nick: t.nickname || '', tag: '삭제' }); });
+    return out;
+  }
+  function supCurrentLabel(state, s) {
+    var e = s.entryId ? ((state.entries || []).concat(state.pendingEntries || [])).find(function (x) { return x.id === s.entryId; }) : null;
+    if (e) return { uid: formatUid(e), nick: e.nickname || '', tag: e.isMatchmaker ? '주선자' : (e.deactivated ? '휴면' : '회원') };
+    return { uid: s.uid || '', nick: s.nick || '', tag: '삭제' };
+  }
+  function supportersSectionHtml(state, adminFold) {
+    var list = adminSupporters().slice().sort(function (a, b) { return (b.at || '').localeCompare(a.at || ''); });
+    var total = list.reduce(function (n, s) { return n + (Number(s.amount) || 0); }, 0);
+    var rows = list.map(function (s) {
+      var c = supCurrentLabel(state, s);
+      return '<tr>' +
+        '<td>' + escapeHtml(c.uid) + ' <b>' + escapeHtml(c.nick || '(이름 없음)') + '</b> <span class="chip" style="font-size:0.7rem;">' + c.tag + '</span>' + (s.memo ? '<div class="sub" style="margin:2px 0 0;">' + escapeHtml(s.memo) + '</div>' : '') + '</td>' +
+        '<td style="text-align:right;white-space:nowrap;">' + (Number(s.amount) || 0).toLocaleString('ko-KR') + '원</td>' +
+        '<td style="white-space:nowrap;">' + escapeHtml(fmtDate(s.at)) + '</td>' +
+        '<td style="white-space:nowrap;">' + (c.tag === '삭제' ? '<span class="sub">익명(삭제)</span>'
+          : '<button type="button" class="card-btn" data-action="sup-anon" data-id="' + escapeHtml(s.id) + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">' + (s.anon ? '🙈 익명' : '👤 이름') + '</button>') + '</td>' +
+        '<td><button type="button" class="card-btn danger" data-action="sup-del" data-id="' + escapeHtml(s.id) + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">삭제</button></td>' +
+      '</tr>';
+    }).join('');
+    return adminFold('☕ 후원자', list.length,
+      '<p class="sub">금액은 <b>관리자만</b> 봐요. 회원에겐 이름만 보여요 — <b>☕ 개발자 응원하기</b> 팝업 안 명단, 그리고 등록 후 ' + SUP_FLOAT_DAYS + '일 동안 하루 한 번 화면 아래를 지나가는 감사 인사. 회원 id로 저장해서 닉네임이 바뀌어도 따라가고, 삭제된 회원·익명은 \'익명의 후원자\'로 보여요.</p>' +
+      '<div style="margin:0 0 10px;"><button type="button" class="card-btn primary" data-action="sup-add" style="flex:none;">➕ 후원자 추가</button></div>' +
+      (list.length
+        ? '<div class="admin-table-wrap"><table class="seen-table"><thead><tr><th>후원자</th><th>금액</th><th>날짜</th><th>공개</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+          '<p class="sub" style="margin-top:6px;">합계 <b>' + total.toLocaleString('ko-KR') + '원</b> · ' + list.length + '건</p>'
+        : '<p class="sub">아직 등록된 후원자가 없어요.</p>'), false, 'supporters');
+  }
+  /* 후원자 추가 창 (화면 갱신에 입력이 안 지워지게 별도 창) */
+  function openSupporterAdd() {
+    if (!isAdminUnlocked) return;
+    var picked = null;
+    var ov = openModal(
+      '<h3>☕ 후원자 추가</h3>' +
+      '<p class="modal-msg" style="font-size:0.82rem;">회원·주선자·휴면·승인 대기·삭제된 회원 모두에서 찾을 수 있어요.</p>' +
+      '<input type="text" class="modal-input" id="sup-q" placeholder="🔍 닉네임 또는 고유번호" autocomplete="off">' +
+      '<div id="sup-res" style="display:flex;flex-wrap:wrap;gap:5px;margin:8px 0;max-height:30vh;overflow-y:auto;"></div>' +
+      '<div id="sup-pick" class="modal-msg" style="font-size:0.86rem;margin:4px 0;">선택: <span style="color:var(--muted);">없음</span></div>' +
+      '<input type="text" class="modal-input" id="sup-amt" inputmode="numeric" placeholder="금액 (원, 관리자만 봐요)">' +
+      '<input type="text" class="modal-input" id="sup-memo" placeholder="메모 (선택, 관리자만)" maxlength="60" style="margin-top:6px;">' +
+      '<label style="display:flex;align-items:center;gap:6px;margin:8px 0;font-size:0.86rem;"><input type="checkbox" id="sup-anon"> 회원에게 \'익명의 후원자\'로 보이기</label>' +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button><button type="button" class="card-btn primary" id="sup-save">추가</button></div>'
+    );
+    var cands = supCandidates(currentState);
+    var q = ov.querySelector('#sup-q'), res = ov.querySelector('#sup-res'), pk = ov.querySelector('#sup-pick');
+    function draw() {
+      var t = (q.value || '').trim().toLowerCase();
+      var hits = !t ? [] : cands.filter(function (c) { return (c.nick + ' ' + c.uid).toLowerCase().indexOf(t) >= 0; }).slice(0, 30);
+      res.innerHTML = hits.map(function (c, i) {
+        return '<button type="button" class="card-btn" data-i="' + cands.indexOf(c) + '" style="flex:none;padding:3px 9px;font-size:0.8rem;">' + escapeHtml(c.uid ? c.uid + ' ' : '') + escapeHtml(c.nick || '(이름 없음)') + ' · ' + c.tag + '</button>';
+      }).join('') || (t ? '<span class="sub">찾는 사람이 없어요.</span>' : '');
+    }
+    q.addEventListener('input', draw);
+    res.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-i]'); if (!b) return;
+      picked = cands[parseInt(b.getAttribute('data-i'), 10)];
+      pk.innerHTML = '선택: <b>' + escapeHtml((picked.uid ? picked.uid + ' ' : '') + (picked.nick || '(이름 없음)')) + '</b> · ' + picked.tag + (picked.tag === '삭제' ? ' <span style="color:var(--muted);">(회원에겐 익명으로 보여요)</span>' : '');
+    });
+    var amt = ov.querySelector('#sup-amt');
+    amt.addEventListener('input', function () { var v = amt.value.replace(/[^0-9]/g, ''); amt.value = v ? Number(v).toLocaleString('ko-KR') : ''; });
+    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+    ov.querySelector('#sup-save').addEventListener('click', function () {
+      if (!picked) { modalNotice('안내', '후원자를 먼저 골라주세요.'); return; }
+      var amount = parseInt((amt.value || '').replace(/[^0-9]/g, ''), 10) || 0;
+      if (!amount) { modalNotice('안내', '금액을 입력해주세요.'); return; }
+      var rec = { id: genId(), key: picked.key, entryId: picked.entryId || null, uid: picked.uid || '', nick: picked.nick || '', amount: amount,
+        memo: (ov.querySelector('#sup-memo').value || '').trim(), anon: !!ov.querySelector('#sup-anon').checked, at: new Date().toISOString() };
+      var btn = ov.querySelector('#sup-save'); btn.disabled = true;
+      saveSupporters(adminSupporters().concat([rec])).then(function () { closeModal(ov); appendLog('admin', '관리자', '후원자 등록 · ' + (rec.nick || '익명')); })
+        .catch(function (e) { btn.disabled = false; modalNotice('저장 실패', (e && e.message) || String(e)); });
+    });
+    setTimeout(function () { try { q.focus(); } catch (e) {} }, 50);
+  }
+  /* 감사 인사: 등록 후 SUP_FLOAT_DAYS 일 동안, 기기당 하루 한 번 화면 아래를 천천히 지나감 (움직임 줄이기 설정이면 생략) */
+  var _thxChecked = false;
+  function maybeFloatThanks(state) {
+    if (_thxChecked || dataMode !== 'full' || !state) return;
+    _thxChecked = true;
+    try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return; } catch (e) {}
+    var recent = publicSupporters(state).filter(function (s) { return s.at && Date.now() - new Date(s.at).getTime() < SUP_FLOAT_DAYS * 86400000; });
+    if (!recent.length) return;
+    var day = new Date().toISOString().slice(0, 10), key = 'bb-thx-day';
+    try { if (localStorage.getItem(key) === day) return; localStorage.setItem(key, day); } catch (e) {}
+    var names = recent.slice(0, 3).map(function (s) { return supporterName(state, s); });
+    var uniq = names.filter(function (n, i) { return names.indexOf(n) === i; });
+    var text = '🙏 ' + uniq.join('·') + '님, 응원해 주셔서 감사해요';
+    setTimeout(function () {
+      if (!document.getElementById('thx-style')) {
+        var st = document.createElement('style'); st.id = 'thx-style';
+        st.textContent = '@keyframes thxDrift{0%{transform:translateX(-100%);opacity:0}6%{opacity:.95}92%{opacity:.95}100%{transform:translateX(100vw);opacity:0}}' +
+          '.thx-float{position:fixed;left:0;bottom:88px;z-index:40;pointer-events:none;white-space:nowrap;font-size:0.8rem;color:var(--gold);background:var(--gold-soft);border:1px solid var(--gold);border-radius:999px;padding:4px 12px;transform:translateX(-100%);animation:thxDrift 16s linear 1 forwards;}';
+        document.head.appendChild(st);
+      }
+      var el = document.createElement('div'); el.className = 'thx-float'; el.textContent = text;
+      el.addEventListener('animationend', function () { if (el.parentNode) el.remove(); });
+      document.body.appendChild(el);
+    }, 4000);
+  }
   var _secAlerts = [];
   var _contactFilter = 'all';
-  var _amFilter = 'talk';   /* 💬 관리자 메시지 필터: talk | auto | all */   /* 📞 연락 필요 필터: all | noreply | unseen | dormant | nosms */
+  /* 📞 연락 필요 필터: all | noreply | unseen | dormant | nosms */
+  var _amFilter = 'talk';   /* 💬 관리자 메시지 필터: talk | auto | all */
   function applyContactFilter() {
     var rows = document.querySelectorAll('.contact-table tbody tr[data-cf]');
     for (var i = 0; i < rows.length; i++) {
@@ -7108,7 +7237,7 @@
       reports: reportsSection,
       usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), pending: pendingSection, pinreset: pinResetSectionHtml(state, adminFold), held: heldSection, stale: staleSection, editrev: editRevSection,
       deaclist: deacListSection, dellog: delLogSection,
-      active: activeReqSection, adminmsg: adminMsgSection,
+      active: activeReqSection, adminmsg: adminMsgSection, supporters: supportersSectionHtml(state, adminFold),
       cap: capSection, seen: seenSection, log: logSection
     };
     var order = adminSecOrder();
@@ -7551,6 +7680,7 @@
     try { applyLogFilter(); } catch (e) {} /* 활동기록 필터 재적용 */
     try { adjustSwitcherClip(); } catch (e) {} /* 전환창 친구 2줄 초과 시 접기 */
     try { updateCharCounts(); } catch (e) {} /* 자기소개 등 글자수 카운터 */
+    try { maybeFloatThanks(state); } catch (e) {} /* ☕ 최근 후원자 감사 인사 (하루 한 번) */
     maybeRestoreDraft();
   }
 
@@ -10713,6 +10843,17 @@
       else if (action === 'reveal-mine') handleRevealMine(id);
       else if (action === 'dm-chat') openDmChat(id);
       else if (action === 'report-view') { if (isAdminUnlocked) openReportedChat(id); }
+      else if (action === 'sup-add') { openSupporterAdd(); return; }
+      else if (action === 'sup-anon' || action === 'sup-del') {
+        if (!isAdminUnlocked) return;
+        var _sl = adminSupporters(), _sr = _sl.find(function (s) { return s.id === id; });
+        if (!_sr) return;
+        if (action === 'sup-anon') { saveSupporters(_sl.map(function (s) { return s.id === id ? Object.assign({}, s, { anon: !s.anon }) : s; })); return; }
+        modalConfirm('후원 기록 삭제', (_sr.nick || '후원자') + ' · ' + (Number(_sr.amount) || 0).toLocaleString('ko-KR') + '원 기록을 지울까요?').then(function (ok) {
+          if (ok) saveSupporters(_sl.filter(function (s) { return s.id !== id; }));
+        });
+        return;
+      }
       else if (action === 'am-filter') { _amFilter = id || 'talk'; paint(currentState); var _md = document.querySelector('[data-sec="adminmsg"]'); if (_md) _md.open = true; return; }
       else if (action === 'am-clean-auto') {
         if (!isAdminUnlocked) return;
@@ -11468,6 +11609,16 @@
       '<h3>&#9749; 개발자 응원하기</h3>' +
       '<p class="modal-msg" style="text-align:center;">서버 운영과 기능 개선에 큰 힘이 돼요. 감사합니다! 🙏</p>' +
       '<div style="text-align:center;margin:6px 0 10px;"><img src="coffee-qr.png" alt="카카오페이 후원 QR" style="width:230px;max-width:80%;border-radius:12px;"></div>' +
+      (function () {
+        var sp = publicSupporters(currentState); if (!sp.length) return '';
+        var shown = sp.slice(0, 30), more = sp.length - shown.length;
+        return '<div style="margin:4px 0 12px;text-align:center;">' +
+          '<div style="font-size:0.8rem;color:var(--muted);margin-bottom:6px;">🙏 함께 응원해 주신 분들</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:center;">' +
+            shown.map(function (s) { return '<span style="font-size:0.78rem;padding:2px 9px;border-radius:999px;background:var(--gold-soft);color:var(--gold);border:1px solid var(--gold);">' + escapeHtml(supporterName(currentState, s)) + '</span>'; }).join('') +
+            (more > 0 ? '<span style="font-size:0.78rem;color:var(--muted);">외 ' + more + '분</span>' : '') +
+          '</div></div>';
+      })() +
       '<p class="modal-msg" style="text-align:center;font-size:0.84rem;">' + (isMobile ? '아래 <b>카카오페이 열기</b>를 누르거나, 휴대폰으로 <b>QR을 스캔</b>해 후원할 수 있어요.' : '휴대폰 카메라로 <b>QR을 스캔</b>하면 카카오페이로 후원할 수 있어요.') + '</p>' +
       '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
         (isMobile ? '<button type="button" class="card-btn" id="coffee-open" style="' + goldBtn + '">☕ 카카오페이 열기</button>' : '') +
