@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-08-412';
+  var APP_VERSION = '2026-10-08-413';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1222,6 +1222,14 @@
   }
   /* 관리자 원본(기록별·금액) → 회원용(사람별: 최근 날짜·횟수·익명·가중치만, 금액 없음) */
   function saveSupporters(list) {
+    var pub = supPublicOf(list);
+    /* 회원용(state)과 관리자 원본(adminOnly)을 한 배치로 — 예전엔 차례로 저장해서, 두 번째가 안 되면(앱을 바로 닫는 등) 둘이 어긋났음 (2026-10-08) */
+    var b = db.batch();
+    b.update(stateRef, { supporters: pub });
+    b.set(adminOnlyRef.doc(SUP_DOC), { list: list, at: new Date().toISOString() });
+    return b.commit().then(function () { return refreshNow(); });
+  }
+  function supPublicOf(list) {
     var by = {};
     list.forEach(function (s) {
       var k = supKey(s), o = by[k] || (by[k] = { pk: k, entryId: s.entryId || null, at: '', n: 0, anon: false, total: 0 });
@@ -1229,11 +1237,15 @@
       if ((s.at || '') > o.at) o.at = s.at || '';
       if (s.anon) o.anon = true;
     });
-    var pub = Object.keys(by).map(function (k) { var o = by[k]; return { pk: o.pk, entryId: o.entryId, at: o.at, n: o.n, anon: o.anon, w: supTier(o.total) }; });
-    return adminOnlyRef.doc(SUP_DOC).set({ list: list, at: new Date().toISOString() })
-      .then(function () { return stateRef.update({ supporters: pub }); })
-      .then(function () { return refreshNow(); });
+    return Object.keys(by).map(function (k) { var o = by[k]; return { pk: o.pk, entryId: o.entryId, at: o.at, n: o.n, anon: o.anon, w: supTier(o.total) }; });
   }
+  /* 회원용 목록이 관리자 원본과 같은지 (어긋나면 관리자 화면에 '다시 맞추기') */
+  function supInSync(state) {
+    if (!_adminPriv[SUP_DOC]) return true;  /* 원본을 아직 못 받았으면 판단 안 함 */
+    var norm = function (arr) { return (arr || []).map(function (x) { return [x.pk || x.entryId || x.id, x.n || 1, !!x.anon, x.w || 1, x.at || ''].join('|'); }).sort().join('/'); };
+    return norm(supPublicOf(adminSupporters())) === norm(state.supporters);
+  }
+  function supErr(e) { modalNotice('저장 실패', ((e && e.message) || String(e)) + ' — 잠시 후 다시 해주세요.'); }
   /* 후원자로 고를 수 있는 사람: 회원·주선자·휴면·승인 대기·삭제된 회원(삭제 이력) 전부 */
   function supCandidates(state) {
     var out = [];
@@ -1274,7 +1286,8 @@
         '<b>옛날 후원은 실제 날짜로</b> 넣으면 한꺼번에 몰리지 않아요. 같은 사람이 또 후원하면 한 번 더 추가하면 합쳐져요.</p>' +
       '<div style="margin:0 0 10px;display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="card-btn primary" data-action="sup-add" style="flex:none;">➕ 후원 추가</button>' + (list.length ? '<button type="button" class="card-btn" data-action="sup-preview" style="flex:none;">👀 회원 화면 미리보기</button>' : '') +
         '<button type="button" class="card-btn" data-action="sup-float-toggle" style="flex:none;' + (state.supFloatOn === true ? 'background:var(--gold-soft);border-color:var(--gold);color:var(--gold);font-weight:700;' : '') + '">' + (state.supFloatOn === true ? '🎈 떠다니는 인사: 켜짐' : '🎈 떠다니는 인사: 꺼짐') + '</button></div>' +
-      '<p class="sub" style="margin:-4px 0 10px;">떠다니는 인사는 켜야 회원에게 보여요 (꺼져 있어도 ☕ 응원하기 팝업 명단은 보이고, 미리보기는 관리자에게만 떠요).</p>' +
+      (supInSync(state) ? '' : '<p class="sub" style="margin:0 0 10px;color:var(--accent);">⚠️ 회원에게 보이는 명단이 이 목록과 달라요 (저장이 중간에 끊긴 듯). <button type="button" class="card-btn" data-action="sup-resync" style="flex:none;padding:2px 10px;">🔄 다시 맞추기</button></p>') +
+      '<p class="sub" style="margin:-4px 0 10px;">떠다니는 인사는 켜야 회원에게 보여요 (<b>이름 공개한 분만</b> 지나가요, 익명은 팝업에 \'익명 N분\'으로)  — 꺼져 있어도 ☕ 응원하기 팝업 명단은 보이고, 미리보기는 관리자에게만 떠요.</p>' +
       (list.length
         ? '<div class="admin-table-wrap"><table class="seen-table"><thead><tr><th>후원자</th><th>금액</th><th>날짜</th><th>공개</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
           '<p class="sub" style="margin-top:6px;">합계 <b>' + total.toLocaleString('ko-KR') + '원</b> · ' + people + '명 · ' + list.length + '건</p>'
@@ -1365,8 +1378,10 @@
     return pool[pool.length - 1];
   }
   /* 오늘 띄울 사람: 최근 후원자(최대 3명) 또는 확률 순환 1명. force=true(미리보기)면 확률 무시 */
+  function supNamed(state, s) { return !s.anon && !!s.entryId && supporterName(state, s) !== '익명의 후원자'; }
   function supTodayPick(state, force) {
-    var all = publicSupporters(state); if (!all.length) return null;
+    /* 이름 공개한 사람만 — '익명의 후원자님' 이 지나가는 건 의미 없음 (2026-10-08 Benny) */
+    var all = publicSupporters(state).filter(function (x) { return supNamed(state, x); }); if (!all.length) return null;
     var recent = all.filter(supIsRecent);
     if (recent.length) return recent.slice(0, 3);
     if (!force && Math.random() >= SUP_ROTATE_P) return null;
@@ -1406,10 +1421,10 @@
   }
   /* 관리자 미리보기: 회원이 보게 될 두 가지(응원하기 팝업 명단 + 떠다니는 인사)를 바로 띄움 — 하루 제한·확률 무시, 저장 없음 */
   function previewSupporters() {
+    if (!publicSupporters(currentState).length) { modalNotice('안내', '등록된 후원자가 없어요.'); return; }
     var pick = supTodayPick(currentState, true);
-    if (!pick) { modalNotice('안내', '등록된 후원자가 없어요.'); return; }
     handleBuyCoffee();
-    showThanksFloat(thanksText(currentState, pick), true);
+    if (pick) showThanksFloat(thanksText(currentState, pick), true);  /* 다 익명이면 떠다니는 인사 없음 */
   }
   var _secAlerts = [];
   var _contactFilter = 'all';
@@ -10940,6 +10955,7 @@
       else if (action === 'report-view') { if (isAdminUnlocked) openReportedChat(id); }
       else if (action === 'sup-add') { openSupporterAdd(); return; }
       else if (action === 'sup-preview') { previewSupporters(); return; }
+      else if (action === 'sup-resync') { if (isAdminUnlocked) saveSupporters(adminSupporters()).catch(supErr); return; }
       else if (action === 'sup-date' || action === 'sup-edit') { if (isAdminUnlocked) openSupporterAdd(id); return; }
       else if (action === 'sup-float-toggle') {
         if (!isAdminUnlocked) return;
@@ -10952,9 +10968,9 @@
         if (!isAdminUnlocked) return;
         var _sl = adminSupporters(), _sr = _sl.find(function (s) { return s.id === id; });
         if (!_sr) return;
-        if (action === 'sup-anon') { var _k = supKey(_sr), _to = !_sr.anon; saveSupporters(_sl.map(function (s) { return supKey(s) === _k ? Object.assign({}, s, { anon: _to }) : s; })); return; }  /* 익명은 사람 단위 */
+        if (action === 'sup-anon') { var _k = supKey(_sr), _to = !_sr.anon; saveSupporters(_sl.map(function (s) { return supKey(s) === _k ? Object.assign({}, s, { anon: _to }) : s; })).catch(supErr); return; }  /* 익명은 사람 단위 */
         modalConfirm('후원 기록 삭제', (_sr.nick || '후원자') + ' · ' + (Number(_sr.amount) || 0).toLocaleString('ko-KR') + '원 기록을 지울까요?').then(function (ok) {
-          if (ok) saveSupporters(_sl.filter(function (s) { return s.id !== id; }));
+          if (ok) saveSupporters(_sl.filter(function (s) { return s.id !== id; })).then(function () { appendLog('admin', '관리자', '후원 기록 삭제 · ' + (_sr.nick || '익명')); }).catch(supErr);
         });
         return;
       }
@@ -11714,13 +11730,15 @@
       '<p class="modal-msg" style="text-align:center;">서버 운영과 기능 개선에 큰 힘이 돼요. 감사합니다! 🙏</p>' +
       '<div style="text-align:center;margin:6px 0 10px;"><img src="coffee-qr.png" alt="카카오페이 후원 QR" style="width:230px;max-width:80%;border-radius:12px;"></div>' +
       (function () {
-        var sp = publicSupporters(currentState); if (!sp.length) return '';
+        var spAll = publicSupporters(currentState); if (!spAll.length) return '';
+        var sp = spAll.filter(function (x) { return supNamed(currentState, x); }), anonN = spAll.length - sp.length;
         var shown = sp.slice(0, 30), more = sp.length - shown.length;
         return '<div style="margin:4px 0 12px;text-align:center;">' +
           '<div style="font-size:0.8rem;color:var(--muted);margin-bottom:6px;">🙏 함께 응원해 주신 분들</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:center;">' +
             shown.map(function (s) { return '<span style="font-size:0.78rem;padding:2px 9px;border-radius:999px;background:var(--gold-soft);color:var(--gold);border:1px solid var(--gold);">' + escapeHtml(supporterName(currentState, s)) + '</span>'; }).join('') +
             (more > 0 ? '<span style="font-size:0.78rem;color:var(--muted);">외 ' + more + '분</span>' : '') +
+            (anonN > 0 ? '<span style="font-size:0.78rem;padding:2px 9px;border-radius:999px;background:var(--gold-soft);color:var(--gold);border:1px dashed var(--gold);">익명 ' + anonN + '분</span>' : '') +
           '</div></div>';
       })() +
       '<p class="modal-msg" style="text-align:center;font-size:0.84rem;">' + (isMobile ? '아래 <b>카카오페이 열기</b>를 누르거나, 휴대폰으로 <b>QR을 스캔</b>해 후원할 수 있어요.' : '휴대폰 카메라로 <b>QR을 스캔</b>하면 카카오페이로 후원할 수 있어요.') + '</p>' +
