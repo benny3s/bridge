@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-08-413';
+  var APP_VERSION = '2026-10-08-414';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1258,7 +1258,7 @@
   }
   function supCurrentLabel(state, s) {
     var e = s.entryId ? ((state.entries || []).concat(state.pendingEntries || [])).find(function (x) { return x.id === s.entryId; }) : null;
-    if (e) return { uid: formatUid(e), nick: e.nickname || '', tag: e.isMatchmaker ? '주선자' : (e.deactivated ? '휴면' : '회원') };
+    if (e) return { uid: formatUid(e), nick: e.nickname || '', tag: e.isMatchmaker ? '주선자' : (e.deactivated ? '휴면' : (e.testAccount ? '테스트' : ((currentState.pendingEntries || []).indexOf(e) >= 0 ? '승인 대기' : '회원'))) };
     return { uid: s.uid || '', nick: s.nick || '', tag: '삭제' };
   }
   function supportersSectionHtml(state, adminFold) {
