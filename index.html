@@ -921,7 +921,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-08-411';
+  var APP_VERSION = '2026-10-08-412';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1264,7 +1264,7 @@
         '<td style="white-space:nowrap;"><button type="button" class="card-btn" data-action="sup-date" data-id="' + escapeHtml(s.id) + '" title="후원 날짜 바꾸기" style="flex:none;padding:2px 8px;font-size:0.76rem;">📅 ' + escapeHtml(new Date(new Date(s.at || 0).getTime() + 9 * 3600000).toISOString().slice(2, 10).replace(/-/g, '.')) + '</button></td>' +
         '<td style="white-space:nowrap;">' + (c.tag === '삭제' ? '<span class="sub">익명(삭제)</span>'
           : '<button type="button" class="card-btn" data-action="sup-anon" data-id="' + escapeHtml(s.id) + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">' + (s.anon ? '🙈 익명' : '👤 이름') + '</button>') + '</td>' +
-        '<td><button type="button" class="card-btn danger" data-action="sup-del" data-id="' + escapeHtml(s.id) + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">삭제</button></td>' +
+        '<td style="white-space:nowrap;"><button type="button" class="card-btn" data-action="sup-edit" data-id="' + escapeHtml(s.id) + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">✏️ 편집</button> <button type="button" class="card-btn danger" data-action="sup-del" data-id="' + escapeHtml(s.id) + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">삭제</button></td>' +
       '</tr>';
     }).join('');
     var people = Object.keys(per).length;
@@ -1280,38 +1280,25 @@
           '<p class="sub" style="margin-top:6px;">합계 <b>' + total.toLocaleString('ko-KR') + '원</b> · ' + people + '명 · ' + list.length + '건</p>'
         : '<p class="sub">아직 등록된 후원자가 없어요.</p>'), false, 'supporters');
   }
-  /* 후원 날짜 바꾸기 (옛날 후원을 오늘로 잘못 넣었을 때) */
-  function openSupporterDate(id) {
-    var list = adminSupporters(), rec = list.find(function (x) { return x.id === id; });
-    if (!rec) return;
-    var ov = openModal('<h3>📅 후원 날짜</h3>' +
-      '<p class="modal-msg" style="font-size:0.82rem;">최근 ' + SUP_FLOAT_DAYS + '일 안이면 신규로 바로 감사 인사가 뜨고, 그 전이면 순환으로만 나와요.</p>' +
-      '<input type="date" class="modal-input" id="sup-d2" value="' + new Date(new Date(rec.at || Date.now()).getTime() + 9 * 3600000).toISOString().slice(0, 10) + '" max="' + supToday() + '">' +
-      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button><button type="button" class="card-btn primary" id="sup-d2-save">저장</button></div>');
-    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
-    ov.querySelector('#sup-d2-save').addEventListener('click', function () {
-      var v = ov.querySelector('#sup-d2').value; if (!v) return;
-      var at = supDateIso(v);
-      saveSupporters(list.map(function (x) { return x.id === id ? Object.assign({}, x, { at: at }) : x; })).then(function () { closeModal(ov); })
-        .catch(function (e) { modalNotice('저장 실패', (e && e.message) || String(e)); });
-    });
-  }
-  /* 후원자 추가 창 (화면 갱신에 입력이 안 지워지게 별도 창) */
-  function openSupporterAdd() {
+  /* 후원 추가·편집 창 (화면 갱신에 입력이 안 지워지게 별도 창). editId 가 있으면 그 기록을 고침(사람·금액·날짜·메모·익명) */
+  function supKstDate(iso) { return new Date(new Date(iso || Date.now()).getTime() + 9 * 3600000).toISOString().slice(0, 10); }
+  function openSupporterAdd(editId) {
     if (!isAdminUnlocked) return;
     var picked = null;
+    var editRec = editId ? adminSupporters().find(function (x) { return x.id === editId; }) : null;
+    if (editId && !editRec) return;
     var ov = openModal(
-      '<h3>☕ 후원 추가</h3>' +
+      '<h3>' + (editRec ? '✏️ 후원 기록 편집' : '☕ 후원 추가') + '</h3>' +
       '<p class="modal-msg" style="font-size:0.82rem;">회원·주선자·휴면·승인 대기·삭제된 회원 모두에서 찾을 수 있어요.</p>' +
       '<input type="text" class="modal-input" id="sup-q" placeholder="🔍 닉네임 · 고유번호 · 실명으로 좁히기" autocomplete="off">' +
       '<div id="sup-res" style="margin:8px 0;max-height:34vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;"></div>' +
       '<div id="sup-pick" class="modal-msg" style="font-size:0.86rem;margin:4px 0;">선택: <span style="color:var(--muted);">없음</span></div>' +
-      '<input type="text" class="modal-input" id="sup-amt" inputmode="numeric" placeholder="금액 (원, 관리자만 봐요)">' +
+      '<input type="text" class="modal-input" id="sup-amt" inputmode="numeric" placeholder="금액 (원, 관리자만 봐요)" value="' + (editRec ? (Number(editRec.amount) || 0).toLocaleString('ko-KR') : '') + '">' +
       '<label style="display:block;font-size:0.8rem;color:var(--muted);margin:8px 0 2px;">후원 날짜 — 옛날 후원은 실제 날짜로 넣으면 한꺼번에 뜨지 않고 순환으로만 나와요</label>' +
-      '<input type="date" class="modal-input" id="sup-date" value="' + supToday() + '" max="' + supToday() + '">' +
-      '<input type="text" class="modal-input" id="sup-memo" placeholder="메모 (선택, 관리자만)" maxlength="60" style="margin-top:6px;">' +
+      '<input type="date" class="modal-input" id="sup-date" value="' + (editRec ? supKstDate(editRec.at) : supToday()) + '" max="' + supToday() + '">' +
+      '<input type="text" class="modal-input" id="sup-memo" placeholder="메모 (선택, 관리자만)" maxlength="60" style="margin-top:6px;" value="' + escapeHtml((editRec && editRec.memo) || '') + '">' +
       '<label style="display:flex;align-items:center;gap:6px;margin:8px 0;font-size:0.86rem;"><input type="checkbox" id="sup-anon"> 회원에게 \'익명의 후원자\'로 보이기</label>' +
-      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button><button type="button" class="card-btn primary" id="sup-save">추가</button></div>'
+      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button><button type="button" class="card-btn primary" id="sup-save">' + (editRec ? '저장' : '추가') + '</button></div>'
     );
     var cands = supCandidates(currentState);
     var q = ov.querySelector('#sup-q'), res = ov.querySelector('#sup-res'), pk = ov.querySelector('#sup-pick');
@@ -1331,14 +1318,25 @@
     }
     q.addEventListener('input', draw);
     draw();
+    function choose(c, keepAnon) {
+      picked = c;
+      draw();
+      var prev = adminSupporters().filter(function (x) { return supKey(x) === picked.key && (!editRec || x.id !== editRec.id); });
+      if (!keepAnon) ov.querySelector('#sup-anon').checked = prev.some(function (x) { return x.anon; });
+      pk.innerHTML = (prev.length ? '<span style="color:var(--gold);">' + (editRec ? '이 기록 말고도 ' : '이미 ') + prev.length + '번 후원 (' + prev.reduce(function (n, x) { return n + (Number(x.amount) || 0); }, 0).toLocaleString('ko-KR') + '원)' + (editRec ? '' : ' — 한 번 더 추가돼요') + '</span><br>' : '') + '선택: <b>' + escapeHtml((picked.uid ? picked.uid + ' ' : '') + (picked.nick || '(이름 없음)')) + '</b> · ' + picked.tag + (picked.tag === '삭제' ? ' <span style="color:var(--muted);">(회원에겐 익명으로 보여요)</span>' : '');
+    }
     res.addEventListener('click', function (e) {
       var b = e.target.closest('[data-i]'); if (!b) return;
-      picked = cands[parseInt(b.getAttribute('data-i'), 10)];
-      draw();
-      var prev = adminSupporters().filter(function (x) { return supKey(x) === picked.key; });
-      ov.querySelector('#sup-anon').checked = prev.some(function (x) { return x.anon; });
-      pk.innerHTML = (prev.length ? '<span style="color:var(--gold);">이미 ' + prev.length + '번 후원 (' + prev.reduce(function (n, x) { return n + (Number(x.amount) || 0); }, 0).toLocaleString('ko-KR') + '원) — 한 번 더 추가돼요</span><br>' : '') + '선택: <b>' + escapeHtml((picked.uid ? picked.uid + ' ' : '') + (picked.nick || '(이름 없음)')) + '</b> · ' + picked.tag + (picked.tag === '삭제' ? ' <span style="color:var(--muted);">(회원에겐 익명으로 보여요)</span>' : '');
+      choose(cands[parseInt(b.getAttribute('data-i'), 10)]);
     });
+    if (editRec) {
+      /* 편집: 원래 사람을 미리 골라 둠 (목록에 없으면 — 삭제 이력에서도 지워진 경우 — 기록에 남은 이름으로) */
+      var ek = supKey(editRec);
+      var found = cands.find(function (c) { return c.key === ek; });
+      if (!found) { found = { key: ek, entryId: editRec.entryId || null, uid: editRec.uid || '', nick: editRec.nick || '', tag: '삭제', real: '' }; cands.push(found); }
+      ov.querySelector('#sup-anon').checked = !!editRec.anon;
+      choose(found, true);
+    }
     var amt = ov.querySelector('#sup-amt');
     amt.addEventListener('input', function () { var v = amt.value.replace(/[^0-9]/g, ''); amt.value = v ? Number(v).toLocaleString('ko-KR') : ''; });
     ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
@@ -1346,10 +1344,14 @@
       if (!picked) { modalNotice('안내', '후원자를 먼저 골라주세요.'); return; }
       var amount = parseInt((amt.value || '').replace(/[^0-9]/g, ''), 10) || 0;
       if (!amount) { modalNotice('안내', '금액을 입력해주세요.'); return; }
-      var rec = { id: genId(), key: picked.key, entryId: picked.entryId || null, uid: picked.uid || '', nick: picked.nick || '', amount: amount,
-        memo: (ov.querySelector('#sup-memo').value || '').trim(), anon: !!ov.querySelector('#sup-anon').checked, at: supDateIso(ov.querySelector('#sup-date').value) };
+      var dv = ov.querySelector('#sup-date').value;
+      var rec = { id: editRec ? editRec.id : genId(), key: picked.key, entryId: picked.entryId || null, uid: picked.uid || '', nick: picked.nick || '', amount: amount,
+        memo: (ov.querySelector('#sup-memo').value || '').trim(), anon: !!ov.querySelector('#sup-anon').checked,
+        at: (editRec && dv === supKstDate(editRec.at)) ? editRec.at : supDateIso(dv) };  /* 편집에서 날짜를 안 바꿨으면 원래 시각 유지 */
       var btn = ov.querySelector('#sup-save'); btn.disabled = true;
-      saveSupporters(adminSupporters().concat([rec])).then(function () { closeModal(ov); appendLog('admin', '관리자', '후원자 등록 · ' + (rec.nick || '익명')); })
+      var next = editRec ? adminSupporters().map(function (x) { return x.id === editRec.id ? rec : x; }) : adminSupporters().concat([rec]);
+      next = next.map(function (x) { return (supKey(x) === rec.key && !!x.anon !== rec.anon) ? Object.assign({}, x, { anon: rec.anon }) : x; });  /* 익명은 사람 단위로 맞춤 */
+      saveSupporters(next).then(function () { closeModal(ov); appendLog('admin', '관리자', (editRec ? '후원 기록 편집 · ' : '후원자 등록 · ') + (rec.nick || '익명')); })
         .catch(function (e) { btn.disabled = false; modalNotice('저장 실패', (e && e.message) || String(e)); });
     });
     setTimeout(function () { try { q.focus(); } catch (e) {} }, 50);
@@ -10938,7 +10940,7 @@
       else if (action === 'report-view') { if (isAdminUnlocked) openReportedChat(id); }
       else if (action === 'sup-add') { openSupporterAdd(); return; }
       else if (action === 'sup-preview') { previewSupporters(); return; }
-      else if (action === 'sup-date') { if (isAdminUnlocked) openSupporterDate(id); return; }
+      else if (action === 'sup-date' || action === 'sup-edit') { if (isAdminUnlocked) openSupporterAdd(id); return; }
       else if (action === 'sup-float-toggle') {
         if (!isAdminUnlocked) return;
         var _on = currentState.supFloatOn !== true;
