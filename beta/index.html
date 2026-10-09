@@ -12244,6 +12244,81 @@
         });
       });
     }
+    /* 운영 '모양' 그대로 심기 (2026-10-09 Benny: '기존 데이터랑 똑같이') — 템플릿은 운영 관리자 화면에서 만든 익명화 데이터
+       (닉네임·사진·소개·직장·실명·번호는 가짜, 성별·나이·키·사는 지역·주선자 관계·휴면·시각·요청 관계는 그대로).
+       같은 주소(benny3s.github.io)라 운영 탭에서 localStorage 'beta:seedTemplate' 에 넣어 두면 여기서 읽힘. */
+    var NICK_A = ['가람', '나래', '다온', '라온', '마루', '보라', '새봄', '아라', '여울', '자람', '초롱', '하람', '한결', '해솔', '윤슬', '미르', '누리', '온새', '단비', '로운'];
+    function smallPhoto(label, i) {
+      var c = document.createElement('canvas'); c.width = 300; c.height = 400;
+      var g = c.getContext('2d');
+      g.fillStyle = COLORS[i % COLORS.length]; g.fillRect(0, 0, 300, 400);
+      g.fillStyle = 'rgba(255,255,255,.85)'; g.font = 'bold 96px sans-serif'; g.textAlign = 'center';
+      g.fillText(label.slice(0, 1), 150, 225); g.font = 'bold 22px sans-serif'; g.fillText('BETA · ' + label, 150, 300);
+      return c.toDataURL('image/jpeg', 0.6);
+    }
+    function buildSeedFromTemplate(tpl) {
+      return setupAdminPin(BETA_ADMIN_PW).then(function (auth) {
+        var pub = auth.publicKeyJwk, idOf = {}, photos = {};
+        var all = (tpl.entries || []).map(function (t) { t._pending = false; return t; }).concat((tpl.pending || []).map(function (t) { t._pending = true; return t; }));
+        all.forEach(function (t) { idOf[t.k] = genId(); });
+        return Promise.all(all.map(function (t, n) {
+          var id = idOf[t.k], nick = NICK_A[n % NICK_A.length] + String(n + 1).padStart(3, '0');
+          var contact = '010-0000-' + String(1000 + n).slice(-4);
+          var ph = (!t.isMM && t.photoCount) ? [smallPhoto(nick, n)] : [];
+          if (ph.length) photos[id] = ph;
+          return Promise.all([
+            encryptForAdmin(pub, contact), makePinAuth(BETA_PIN), encryptForSelf(BETA_PIN, contact),
+            encryptForAdmin(pub, '시험' + (n + 1)), encryptForAdmin(pub, '베타 시드(운영 모양)'),
+            ph.length ? resizeDataUrl(ph[0], t.blurPhoto ? BLUR_THUMB_MAX : THUMB_MAX, t.blurPhoto ? BLUR_THUMB_MAX : THUMB_MAX, t.blurPhoto ? BLUR_THUMB_Q : THUMB_Q) : Promise.resolve(null)
+          ]).then(function (r) {
+            var e = { id: id, nickname: nick, submittedAt: t.submittedAt, pinSet: true, contactEnc: r[0], pinAuth: r[1], contactSelfEnc: r[2], realNameEnc: r[3], referrerEnc: r[4] };
+            ['serial', 'lastSeenAt', 'mineSeenAt', 'deactivated', 'deactivatedAt', 'deactivatedVia', 'ownerSelf', 'isProxy', 'proxyConsentAt', 'heldAt'].forEach(function (f) { if (t[f] != null) e[f] = t[f]; });
+            if (t.deactivated) e.deactivatedReason = '잠시 쉬어갈게요';
+            if (t.heldReason) e.heldReason = '사진을 다시 올려주세요';
+            if (t.managedBy && idOf[t.managedBy]) e.managedBy = idOf[t.managedBy];
+            if (t.isMM) { e.isMatchmaker = true; return e; }
+            Object.assign(e, { gender: t.gender, birthYear: t.birthYear, height: t.height, region: t.region || '', workplace: JOBS[n % JOBS.length],
+              degreeChoice: t.degree || '', intro: '베타 시험용 프로필(운영 모양 복제)이에요. ' + nick + '입니다.', idealType: '대화가 잘 통하는 사람', dealbreaker: '거짓말',
+              blurPhoto: !!t.blurPhoto && ph.length > 0, photoCount: ph.length, photoThumb: r[5] });
+            return e;
+          });
+        })).then(function (es) {
+          var entries = es.filter(function (e, i) { return !all[i]._pending; });
+          var pendingEntries = es.filter(function (e, i) { return all[i]._pending; });
+          var reqs = (tpl.requests || []).filter(function (q) { return idOf[q.from] && idOf[q.to]; }).map(function (q) {
+            var r = { id: genId(), fromId: idOf[q.from], toId: idOf[q.to], type: q.type, note: '베타 시험 요청', submittedAt: q.submittedAt };
+            ['decidedAt', 'approved', 'rejected', 'held', 'userApproved', 'viaMm', 'decidedViaMm', 'remind1Sent', 'remind2Sent', 'remind3Sent', 'reappliedAt', 'fromRevealed'].forEach(function (f) { if (q[f] != null) r[f] = q[f]; });
+            if (q.rejected) { r.rejectedBy = r.toId; r.rejectMessage = '좋은 인연 만나세요'; }
+            if (q.approved) r.approveMessage = '반가워요!';
+            if (q.held) { r.holdMessage = '조금만 기다려 주세요'; r.heldBy = r.toId; }
+            if (q.hiddenBy) r.hiddenBy = q.hiddenBy.map(function (k) { return idOf[k]; }).filter(Boolean);
+            return r;
+          });
+          var conn = (tpl.conn || []).filter(function (c) { return idOf[c.a] && idOf[c.b]; }).map(function (c) { return { id: genId(), a: idOf[c.a], b: idOf[c.b], at: c.at }; });
+          var sms = (tpl.sms || []).filter(function (s) { return idOf[s.k]; }).map(function (s) { return { id: genId(), entryId: idOf[s.k], at: s.at, kind: s.kind, ok: true }; });
+          var state = {
+            adminAuth: auth, entries: entries, pendingEntries: pendingEntries, dateRequests: reqs,
+            messages: [], logs: [], connLog: conn, connEver: [], coupleReports: [], joinRequests: [], smsLog: sms, deletedLog: [],
+            supporters: [], supFloatOn: false, appVersion: APP_VERSION
+          };
+          return { state: state, photos: photos };
+        });
+      });
+    }
+    function seedFromTemplate() {
+      var tpl = null;
+      try { tpl = JSON.parse(localStorage.getItem('seedTemplate') || 'null'); } catch (e) {}
+      if (!tpl || !tpl.entries) { modalNotice('안내', '운영 모양 템플릿이 없어요. (운영 관리자 화면에서 만들어야 해요)'); return Promise.resolve(); }
+      var hide = showBusy('운영 모양 데이터 만드는 중… (1분쯤)');
+      return buildSeedFromTemplate(tpl).then(function (payload) {
+        return fns.httpsCallable('betaSeed')(payload);
+      }).then(function (r) {
+        hide();
+        clearAdminPin(); currentUser = null; saveSession();
+        modalNotice('완료', '운영 모양으로 심었어요 (회원 ' + (r.data && r.data.entries) + '명, 사진 ' + (r.data && r.data.photos) + '명).');
+        return toGuest();
+      }).catch(function (e) { hide(); modalNotice('실패', (e && e.message) || String(e)); });
+    }
     function seed() {
       var hide = showBusy('시험 데이터 만드는 중… (20초쯤)');
       return buildSeed().then(function (payload) {
@@ -12311,7 +12386,8 @@
         '<div style="display:flex;gap:4px;margin-bottom:6px;"><select id="bp-mem" style="flex:1;min-width:0;">' +
           (_known.length ? _known.map(function (k) { return '<option value="' + escapeHtml(k.id) + '">' + escapeHtml(k.nick) + (k.tag ? ' (' + k.tag + ')' : '') + '</option>'; }).join('') : '<option value="">(관리자로 한 번 들어가면 목록이 생겨요)</option>') +
         '</select><button type="button" id="bp-mem-go">회원으로</button></div>' +
-        '<button type="button" id="bp-seed" style="width:100%;">🌱 시험 데이터 다시 심기</button>' +
+        '<button type="button" id="bp-seed" style="width:100%;">🌱 시험 데이터 다시 심기 (작게)</button>' +
+        '<button type="button" id="bp-seed-tpl" style="width:100%;margin-top:4px;">🧬 운영 모양으로 심기</button>' +
         '</div>';
     }
     box.addEventListener('click', function (ev) {
@@ -12321,12 +12397,13 @@
       else if (id === 'bp-admin') asAdmin();
       else if (id === 'bp-guest') toGuest();
       else if (id === 'bp-mem-go') { var v = box.querySelector('#bp-mem').value; if (v) asMember(v); }
+      else if (id === 'bp-seed-tpl') modalConfirm('운영 모양으로 심기', '베타 데이터를 모두 지우고, 운영과 같은 모양(인원·관계·시각)의 가짜 데이터로 바꿔요. 계속할까요?').then(function (ok) { if (ok) seedFromTemplate(); });
       else if (id === 'bp-seed') modalConfirm('시험 데이터 다시 심기', '베타 서버의 데이터를 모두 지우고 가짜 회원 28명을 새로 만들어요. 계속할까요?').then(function (ok) { if (ok) seed(); });
     });
     document.body.appendChild(box);
     draw();
     setInterval(function () { if (!open) draw(); }, 3000);
-    window.__beta = { seed: seed, asAdmin: asAdmin, asMember: asMember, toGuest: toGuest, known: function () { remember(); return _known; } };
+    window.__beta = { seed: seed, seedFromTemplate: seedFromTemplate, asAdmin: asAdmin, asMember: asMember, toGuest: toGuest, known: function () { remember(); return _known; } };
   })();
 
 })();
