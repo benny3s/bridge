@@ -1221,6 +1221,12 @@ exports.chatAction = functions
       return { ok: true, msg: m };
     }
 
+    if (op === 'read') {   /* 읽음 기록 (2026-10-10) — 상대 화면의 '1' 지우기·내 다른 기기 안 읽음 정리 */
+      const now = new Date().toISOString();
+      await ref.update(new admin.firestore.FieldPath('readAt', asId), now).catch(() => {});   /* 방이 있을 때만 (없으면 만들지 않음) */
+      return { ok: true, at: now };
+    }
+
     if (op === 'clear') {
       let deleted = false;
       await db.runTransaction(async (tx) => {
@@ -1479,4 +1485,46 @@ exports.betaSeed = functions
     await db.doc('app/state').set(st);
     await syncPublicView(st);   /* 손님 화면용 공개 요약도 바로 (state 첫 생성은 onStateChange(onUpdate) 가 안 잡음) */
     return { ok: true, entries: st.entries.length, photos: ids.length, wiped };
+  });
+
+/* ══ 관리자: 인앱 채팅 사용 통계 (2026-10-10) — 개수·시각만 집계, 대화 내용은 읽어 돌려주지 않음 ══ */
+exports.chatStats = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 60, memory: '512MB' })
+  .https.onCall(async (data, context) => {
+    if (!(context.auth && context.auth.token && context.auth.token.admin === 1)) throw new HttpsError('permission-denied', '관리자만 볼 수 있어요.');
+    const now = Date.now(), D = 86400000;
+    const qs = await db.collection('chats').get();
+    const st = (await db.doc('app/state').get()).data() || {};
+    const conn = (st.dateRequests || []).filter((r) => (r.type || 'contact') === 'contact' && r.approved).length;
+    let rooms = 0, withMsgs = 0, total = 0, m7 = 0, m30 = 0, act7 = 0, act30 = 0, viaMm = 0, cleared = 0, reported = 0, bothSides = 0, oneSided = 0;
+    const sizes = [], daily = {}, hours = new Array(24).fill(0), gaps = [];
+    qs.forEach((d) => {
+      const r = d.data(); rooms++;
+      const msgs = r.msgs || [];
+      if (r.reportedAt) reported++;
+      if (r.clearedAt && Object.keys(r.clearedAt).length) cleared++;
+      if (!msgs.length) return;
+      withMsgs++; total += msgs.length; sizes.push(msgs.length);
+      const senders = new Set(msgs.map((m) => m.fromId));
+      if (senders.size >= 2) bothSides++; else oneSided++;
+      let last = 0, a7 = false, a30 = false;
+      msgs.forEach((m) => {
+        const t = new Date(m.at).getTime(); if (!t) return;
+        if (m.viaMm) viaMm++;
+        if (now - t < 7 * D) { m7++; a7 = true; }
+        if (now - t < 30 * D) { m30++; a30 = true; }
+        if (now - t < 14 * D) { const k = new Date(t + 9 * 3600000).toISOString().slice(5, 10); daily[k] = (daily[k] || 0) + 1; }
+        hours[new Date(t + 9 * 3600000).getUTCHours()]++;
+      });
+      for (let i = 1; i < msgs.length; i++) {   /* 답장 간격(상대가 바뀔 때) */
+        if (msgs[i].fromId !== msgs[i - 1].fromId) { const g = new Date(msgs[i].at) - new Date(msgs[i - 1].at); if (g > 0) gaps.push(g); }
+      }
+      if (a7) act7++; if (a30) act30++;
+    });
+    sizes.sort((x, y) => x - y); gaps.sort((x, y) => x - y);
+    const med = (a) => (a.length ? a[Math.floor(a.length / 2)] : 0);
+    return { rooms, connections: conn, withMsgs, bothSides, oneSided, total, m7, m30, act7, act30, viaMm, cleared, reported,
+      medianMsgs: med(sizes), maxMsgs: sizes[sizes.length - 1] || 0, buckets: { '1-5': sizes.filter((x) => x <= 5).length, '6-20': sizes.filter((x) => x > 5 && x <= 20).length, '21-50': sizes.filter((x) => x > 20 && x <= 50).length, '51+': sizes.filter((x) => x > 50).length },
+      medianReplyMin: Math.round(med(gaps) / 60000), daily, hours };
   });
