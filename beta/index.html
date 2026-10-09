@@ -106,6 +106,8 @@
   /* 채널 창: 위 = 지금 보는 채널, 구분선, 아래 = 내 프로필 설정 (버튼 모양은 둥근 선택 버튼으로 통일) */
   .zone-sec-title { font-size: 0.8rem; color: var(--muted); font-weight: 700; margin: 4px 0 8px; }
   .zone-divider { border-top: 1px dashed var(--line); margin: 16px 0 12px; }
+  .zone-opt { font: inherit; font-size: 0.9rem; padding: 7px 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; }
+  .zone-opt.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
   .zone-check { position: relative; }
   .zone-check input { position: absolute; opacity: 0; width: 1px; height: 1px; }
   .zone-check:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
@@ -979,7 +981,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-423';
+  var APP_VERSION = '2026-10-10-424';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
