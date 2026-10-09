@@ -983,7 +983,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-425';
+  var APP_VERSION = '2026-10-10-426';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1016,19 +1016,19 @@
       entries = entries || profileEntries(state).filter(function (e) { return listMemberVisible(e); });
       var opp = me.gender === 'male' ? 'female' : (me.gender === 'female' ? 'male' : null);
       mineOpp = entries.filter(function (e) { return e.id !== me.id && (!opp || e.gender === opp) && zonesOverlap(zonesOf(e), myZones); }).length;
-      mode = zoneView === 'auto' ? (mineOpp >= ZONE_MIN_OPPOSITE ? 'mine' : 'all') : zoneView;
-      if (ZONE_LABEL[mode] && myZones.indexOf(mode) < 0) mode = 'mine';   /* 고른 지역에서 빠진 채널이면 */
+      var sel = Array.isArray(zoneView) ? zoneView.filter(function (k) { return myZones.indexOf(k) >= 0; }) : [];
+      if (sel.length && sel.length < myZones.length) mode = 'sel';   /* 채널에서 일부 지역만 켬 */
+      else mode = mineOpp >= ZONE_MIN_OPPOSITE ? 'mine' : 'all';   /* 다 켬(기본): 내 지역 이성이 적으면 전체를 같이(내 지역 먼저) */
     }
-    return { myZones: myZones, mode: mode, mineOpp: mineOpp };
+    return { myZones: myZones, mode: mode, mineOpp: mineOpp, sel: mode === 'sel' ? sel : null };
   }
   /* 지역 채널 이름: 회원은 지금 채널, 관리자는 관리자 지역 필터 */
   function zoneChannelLabel(state) {
     var me = currentUser ? findMyEntry(state) : null;
     if (me) {
       var zm = zoneModeFor(state, me, false);
-      if (zm.mode === 'all') return zoneView === 'all' ? '전체 지역' : zonesText(zm.myZones);   /* 내 지역이 아직 적어 전체를 같이 보여줄 땐 채널 이름은 내 지역 */
-      if (ZONE_LABEL[zm.mode]) return ZONE_LABEL[zm.mode];
-      return zonesText(zm.myZones);
+      if (zm.mode === 'sel') return zonesText(zm.sel);
+      return zonesText(zm.myZones);   /* 내 지역이 아직 적어 전체를 같이 보여줄 때도 채널 이름은 내 지역 */
     }
     return adminZone === 'all' ? '전체 지역' : ZONE_LABEL[adminZone];
   }
@@ -1044,11 +1044,11 @@
     if (me && me.isMatchmaker) me = null;
     var mz = me ? zonesOf(me) : null;
     var opt = function (key, label, on) { return '<button type="button" class="zone-opt' + (on ? ' on' : '') + '" data-zch="' + key + '">' + escapeHtml(label) + '</button>'; };
-    var cur = mz ? (zoneView === 'auto' ? 'mine' : zoneModeFor(currentState, me, false).mode) : adminZone;
+    var cur = mz ? zoneModeFor(currentState, me, false) : adminZone;
     var chHtml;
     if (mz) {
-      /* '전체' 버튼 없음 (2026-10-10 Benny: 세 곳 다 고르면 그게 전체) — 두 곳 이상 고른 사람만 채널 고르기 */
-      chHtml = mz.length > 1 ? opt('mine', '모두', cur === 'mine' || cur === 'all') + mz.map(function (k) { return opt(k, ZONE_LABEL[k], cur === k); }).join('') : '';
+      /* '전체'·'모두' 버튼 없음 (2026-10-10 Benny) — 두 곳 이상 고른 사람만, 지역 버튼을 켜고 끄기(다 켜면 모두) */
+      chHtml = mz.length > 1 ? mz.map(function (k) { return opt(k, ZONE_LABEL[k], cur.mode !== 'sel' || cur.sel.indexOf(k) >= 0); }).join('') : '';
     } else {
       chHtml = opt('all', '전체', cur === 'all') + ZONES.map(function (z) { return opt(z[0], z[1], cur === z[0]); }).join('');
     }
@@ -1057,7 +1057,7 @@
       (chHtml ? '<div class="zone-sec-title">👀 지금 보는 채널</div><div class="zone-opts" id="zch-opts">' + chHtml + '</div>' : '') +
       (mz ? (chHtml ? '<div class="zone-divider"></div>' : '') +
           '<div class="zone-sec-title">⚙️ ' + (me.managedBy && !me.ownerSelf ? escapeHtml(me.nickname) + '님 프로필 설정' : '내 프로필 설정') + ' · 만나고 싶은 지역</div>' +
-          '<div style="font-size:0.76rem;color:var(--muted);margin:-4px 0 8px;">여러 곳 고를 수 있어요<br>수도권은 충청·강원도 포함이에요</div>' +
+          '<div style="font-size:0.76rem;color:var(--muted);margin:-4px 0 8px;">여러 곳 고를 수 있어요<br>(수도권은 충청·강원도 포함이에요)</div>' +
           '<div class="zone-opts" id="zmy-opts">' + ZONES.map(function (z) { return '<button type="button" class="zone-opt' + (mz.indexOf(z[0]) >= 0 ? ' on' : '') + '" data-zmy="' + z[0] + '">' + z[1] + '</button>'; }).join('') + '</div>' : '') +
       '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button>' + (mz ? '<button type="button" class="card-btn primary" id="zmy-save" style="display:none;">지역 저장</button>' : '') + '</div>'
     );
@@ -1065,7 +1065,17 @@
     if (ov.querySelector('#zch-opts')) ov.querySelector('#zch-opts').addEventListener('click', function (e) {
       var b = e.target.closest('[data-zch]'); if (!b) return;
       var k = b.getAttribute('data-zch');
-      if (mz) zoneView = (mz.length === 1 && k === mz[0]) ? 'mine' : k; else adminZone = k;
+      if (mz) {   /* 켜고 끄기 — 적어도 한 곳은 켜 둠, 바로 명단에 반영하고 창은 그대로 */
+        var on = Array.prototype.filter.call(ov.querySelectorAll('#zch-opts [data-zch].on'), function (x) { return true; }).map(function (x) { return x.getAttribute('data-zch'); });
+        var i = on.indexOf(k);
+        if (i >= 0) { if (on.length === 1) return; on.splice(i, 1); } else on.push(k);
+        b.classList.toggle('on', on.indexOf(k) >= 0);
+        zoneView = on.length === mz.length ? 'auto' : on;
+        if (activeTab !== 'list') activeTab = 'list';
+        paint(currentState);
+        return;
+      }
+      adminZone = k;
       closeModal(ov);
       if (activeTab !== 'list') activeTab = 'list';
       paint(currentState);
@@ -4430,6 +4440,7 @@
      · 보내면 바로 화면에(전송 중 표시) · 아래 보고 있을 땐 새 메시지로 자동 스크롤, 위를 보고 있으면 '새 메시지 ↓'
      · PC 는 Enter 보내기(Shift+Enter 줄바꿈), 폰은 보내기 버튼 */
   var _openChatWith = null;
+  var SHOW_READ_MARK = false;   /* 읽음 '1' 표시 (2026-10-10: 소개팅이라 '읽고 답 안 함' 부담 → 끔. 켜려면 true) */
   function chatTime(iso) {
     var d = new Date(iso); if (isNaN(d)) return '';
     var h = d.getHours(), m = String(d.getMinutes()).padStart(2, '0');
@@ -4469,7 +4480,7 @@
       var sameMin = function (x, y) { return x && y && x.fromId === y.fromId && chatTime(x.at) === chatTime(y.at) && chatDay(x.at) === chatDay(y.at); };
       var first = !sameMin(prev, m), last = !sameMin(m, next);
       var lbl = dmSenderLabel(currentState, m);
-      var meta = '<div class="chat-meta">' + (mine && !m._pending && otherReadAt < (m.at || '') ? '<span class="chat-unread1">1</span>' : '') +
+      var meta = '<div class="chat-meta">' + (SHOW_READ_MARK && mine && !m._pending && otherReadAt < (m.at || '') ? '<span class="chat-unread1">1</span>' : '') +
         (last ? (m._pending ? '<span>전송 중…</span>' : '<span>' + chatTime(m.at) + '</span>') : '') + '</div>';
       var bubble = '<div class="chat-bubble' + (mine ? ' mine' : '') + (m._pending ? ' pending' : '') + '">' + escapeHtml(m.text) + '</div>';
       if (mine) {
@@ -4579,7 +4590,7 @@
           '<button type="button" class="card-btn" id="cm-clear">🗑 대화 지우기 (내 화면에서만)</button>' +
           '<button type="button" class="card-btn" id="cm-report" style="color:#c5221f;">🚨 신고</button>' +
         '</div>' +
-        '<p class="modal-msg" style="margin:10px 0 0;font-size:0.76rem;color:var(--muted);">🔒 대화는 두 사람만 볼 수 있어요. 관리자는 신고가 접수된 대화만 확인해요.</p>' +
+        '<p class="modal-msg" style="margin:10px 0 0;font-size:0.76rem;color:var(--muted);">🔒 대화는 두 사람만 볼 수 있고, 신고·분쟁에 대비해 서버에 안전하게 보관돼요.</p>' +
         '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>');
       ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
       /* 회수 버튼은 앱 공통 동작(확인 창)으로 넘기고 이 메뉴는 닫음 */
@@ -4588,14 +4599,7 @@
       if (pf) pf.addEventListener('click', function () { closeModal(ov); handleCardDetail(otherId); });
       ov.querySelector('#cm-clear').addEventListener('click', function () {
         closeModal(ov);
-        modalConfirm('대화 지우기', '내 화면에서 지금까지의 대화를 지울까요? 상대방 화면에서는 지워지지 않아요. (신고·분쟁 대응을 위해 서버에는 일정 기간 보관돼요)', '지우기', 'danger').then(function (ok) {
-          if (!ok) return;
-          callFn('chatAction', { op: 'clear', as: me.id, other: otherId }).then(function () {
-            var room = _chats[dmPairKey(me.id, otherId)];
-            if (room) { room.clearedAt = Object.assign({}, room.clearedAt || {}); room.clearedAt[me.id] = new Date().toISOString(); }
-            lastCount = -1; draw(true);
-          }).catch(function (err) { modalNotice('오류', '지우지 못했어요: ' + ((err && err.message) || err)); });
-        });
+        clearChatRoom(me.id, otherId).then(function (done) { if (done) { lastCount = -1; draw(true); } });
       });
       ov.querySelector('#cm-report').addEventListener('click', function () {
         closeModal(ov);
@@ -5544,7 +5548,7 @@
     var filtered = entries.filter(function (e) {
       if (myHiddenIds.indexOf(e.id) >= 0) return false; /* 지인 필터(마주치기 방지)로 숨김 */
       if (zoneMode === 'mine' && e.id !== me.id && !zonesOverlap(zonesOf(e), myZones)) return false;
-      if (ZONE_LABEL[zoneMode] && e.id !== me.id && zonesOf(e).indexOf(zoneMode) < 0) return false;
+      if (zoneMode === 'sel' && e.id !== me.id && !zonesOverlap(zonesOf(e), _zm.sel)) return false;
       if (!myZones && isAdminUnlocked && adminZone !== 'all' && zonesOf(e).indexOf(adminZone) < 0) return false;
       if (isAdminUnlocked && accessFilter !== 'all' && accessBucket(e) !== accessFilter) return false; /* 관리자 접속 필터 */
       if (listFilter === 'male' || listFilter === 'female') return e.gender === listFilter;
@@ -5601,7 +5605,7 @@
     var teaserCta = teaser
       ? '<div class="readonly-note" style="background:var(--gold-soft);border-color:var(--gold);text-align:center;">🔒 회원 정보는 <b>로그인 후</b> 볼 수 있어요. 현재 <b>' + entries.length + '명</b>이 함께하고 있어요.<br>📍 ' + zoneLine + '<br><b>안전한 지인 기반 소개</b> — 가입하고 만나보세요!</div>'
       : '';
-    var zoneNote = (myZones && zoneView === 'auto' && zoneMode === 'all' && !(myZones.length === 1 && myZones[0] === 'capital'))
+    var zoneNote = (myZones && zoneMode === 'all' && !(myZones.length === 1 && myZones[0] === 'capital'))
       ? '<div class="readonly-note" style="background:#EEF5EA;border-color:#97C459;">📍 <b>' + escapeHtml(zonesText(myZones)) + '</b>에서 만날 수 있는 회원이 아직 ' + mineOpp + '명이라 <b>전체 지역</b>을 함께 보여드려요. 다른 지역 회원 카드엔 📍 표시가 있어요. 주변 친구를 초대해 주세요 🙌</div>'
       : '';
     var guide = '';
@@ -6433,6 +6437,53 @@
   /* 메시지함 연결 리스트: 사진/대화 권한이 있는 상대를 한 줄씩, 상태를 버튼 4개로 표시.
      📤 내 사진만(상대가 내 사진만 봄) · 📥 상대 사진만(내가 상대 사진만 봄) · 📷 서로 사진 · 💬 대화 */
   /* 대화방 목록: 마지막 메시지 순 · 미리보기 · 시간 · 안 읽음 빨간 숫자 (대화 연결됐지만 아직 말 없는 방은 아래) */
+  function clearChatRoom(meId, otherId) {
+    return modalConfirm('대화 지우기', '내 화면에서 지금까지의 대화를 지울까요? 상대방 화면에서는 지워지지 않아요. (지워도 신고·분쟁에 대비해 서버에는 안전하게 보관돼요)', '지우기', 'danger').then(function (ok) {
+      if (!ok) return false;
+      return callFn('chatAction', { op: 'clear', as: meId, other: otherId }).then(function () {
+        var room = _chats[dmPairKey(meId, otherId)];
+        if (room) { room.clearedAt = Object.assign({}, room.clearedAt || {}); room.clearedAt[meId] = new Date().toISOString(); }
+        paint(currentState);
+        return true;
+      }).catch(function (err) { modalNotice('오류', '지우지 못했어요: ' + ((err && err.message) || err)); return false; });
+    });
+  }
+  function chatItemMenu(otherId) {
+    var me = findMyEntry(currentState); if (!me) return;
+    var nick = nickForEntry(currentState, otherId);
+    var alive = (currentState.entries || []).some(function (e) { return e.id === otherId; });
+    var ov = openModal('<h3>💬 ' + escapeHtml(nick) + '</h3>' +
+      '<div style="display:flex;flex-direction:column;gap:8px;">' +
+        (alive ? '<button type="button" class="card-btn" id="ci-profile">👤 프로필 보기</button>' : '') +
+        '<button type="button" class="card-btn" id="ci-clear">🗑 대화 지우기 (내 화면에서만)</button>' +
+      '</div>' +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>');
+    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+    var pf = ov.querySelector('#ci-profile');
+    if (pf) pf.addEventListener('click', function () { closeModal(ov); handleCardDetail(otherId); });
+    ov.querySelector('#ci-clear').addEventListener('click', function () { closeModal(ov); clearChatRoom(me.id, otherId); });
+  }
+  /* 꾹 누르기 / 오른쪽 클릭 (대화방 목록 줄) */
+  (function bindChatItemPress() {
+    var timer = null, fired = false, sx = 0, sy = 0;
+    document.addEventListener('contextmenu', function (e) {
+      var it = e.target.closest && e.target.closest('.chat-item'); if (!it) return;
+      e.preventDefault(); chatItemMenu(it.getAttribute('data-id'));
+    });
+    document.addEventListener('touchstart', function (e) {
+      var it = e.target.closest && e.target.closest('.chat-item'); if (!it) return;
+      fired = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      timer = setTimeout(function () { fired = true; if (navigator.vibrate) { try { navigator.vibrate(15); } catch (x) {} } chatItemMenu(it.getAttribute('data-id')); }, 550);
+    }, { passive: true });
+    document.addEventListener('touchmove', function (e) {
+      if (!timer) return;
+      var t = e.touches[0]; if (Math.abs(t.clientX - sx) > 8 || Math.abs(t.clientY - sy) > 8) { clearTimeout(timer); timer = null; }
+    }, { passive: true });
+    document.addEventListener('touchend', function () { if (timer) { clearTimeout(timer); timer = null; } }, { passive: true });
+    document.addEventListener('click', function (e) {   /* 꾹 눌러 메뉴가 떴으면 이어지는 클릭(채팅 열기)은 무시 */
+      if (fired && e.target.closest && e.target.closest('.chat-item')) { e.stopPropagation(); e.preventDefault(); fired = false; }
+    }, true);
+  })();
   function chatRoomsHtml(state, me) {
     if (!me) return '';
     var ids = {};
@@ -6448,6 +6499,7 @@
     var total = rows.reduce(function (n, x) { return n + x.un; }, 0);
     return '<div class="mine-section">' +
       '<h3>💬 채팅' + (total ? '<span class="count blink">' + total + '</span>' : '<span class="count">' + rows.length + '</span>') + '</h3>' +
+      '<p class="sub" style="margin:-4px 0 4px;font-size:0.76rem;">길게 누르거나(폰) 오른쪽 클릭(PC)하면 대화 지우기</p>' +
       '<div class="chat-list">' + rows.map(function (x) {
         var nick = x.alive ? nickForEntry(state, x.o) : '(탈퇴한 회원)';
         var prev = x.last ? ((x.last.fromId === me.id ? '나: ' : '') + x.last.text) : '대화가 연결됐어요. 먼저 인사해 보세요 👋';
@@ -9701,7 +9753,7 @@
         '<h3>' + icon + ' ' + escapeHtml(target.nickname) + '님에게 ' + actionText + '</h3>' +
         (isViaMm ? '<p class="modal-msg" style="background:var(--gold-soft);border:1px solid var(--gold);border-radius:8px;color:var(--gold);padding:7px 10px;margin:0 0 8px;">🤝 <b>' + escapeHtml(fromEntry.nickname) + '</b>님을 대신해 주선자로 요청하는 중이에요. 받는 분께 <b>주선자가 대신</b>임이 안내돼요.</p>' : '') +
         '<p class="modal-msg">' + (isPhoto ? '수락하면 <b>서로 사진이 공개</b>돼요. ' : '수락하면 <b>앱 안에서 채팅</b>으로 대화할 수 있어요 (대화 후 번호/카톡 교환 추천해요). ') + '간단한 인사·요청 이유를 꼭 남겨주세요 <b>(최소 10자)</b>.</p>' +
-        (isPhoto ? '' : '<p class="modal-msg" style="font-size:0.82rem;color:var(--muted);margin:-2px 0 6px;">대화 내용은 안전·분쟁 대비를 위해 서버에 보관되지만, 관리자 화면에는 공개되지 않아요.</p>') +
+        (isPhoto ? '' : '<p class="modal-msg" style="font-size:0.82rem;color:var(--muted);margin:-2px 0 6px;">대화는 두 사람만 볼 수 있고, 신고·분쟁에 대비해 서버에 안전하게 보관돼요.</p>') +
         '<p class="modal-msg" style="color:var(--gold);font-size:0.82rem;margin:-2px 0 6px;">오늘 ' + actionText + ' 남은 횟수: <b>' + remainToday + '/' + typeLimit + '</b></p>' +
         '<textarea class="modal-input" id="modal-note" rows="3" maxlength="200" placeholder="' + noteEx + '"></textarea>' +
         '<p id="modal-note-warn" class="modal-msg" style="color:var(--accent);margin:4px 0 0;font-size:0.82rem;" hidden>최소 10자 이상 남겨주세요.</p>' +
