@@ -923,7 +923,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-09-415';
+  var APP_VERSION = '2026-10-09-416';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -5253,6 +5253,11 @@
         if (tb !== ta) return tb - ta;
         return (b.serial || 0) - (a.serial || 0);
       });
+    }
+    /* 전체 지역을 보여줄 때도 내 지역과 겹치는 사람을 먼저 (그 안의 순서는 그대로) */
+    if (myZones && zoneMode === 'all') {
+      ordered = ordered.filter(function (e) { return zonesOverlap(zonesOf(e), myZones); })
+        .concat(ordered.filter(function (e) { return !zonesOverlap(zonesOf(e), myZones); }));
     }
     if (!ordered.length && !isPermFilter && listFilter === 'all') {
       return '<div class="empty-state"><div class="big">' + ICON_HEART + '</div><p>아직 등록된 사람이 없어요.<br>첫 번째로 신청해 보세요!</p></div>';
