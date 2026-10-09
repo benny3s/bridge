@@ -866,14 +866,14 @@
   .chat-unread1 { color: var(--accent); font-weight: 700; font-size: 0.7rem; }
   .chat-newbar { position: absolute; left: 50%; bottom: 74px; transform: translateX(-50%); border: 0; border-radius: 999px; background: var(--accent); color: #fff; padding: 7px 16px; font-size: 0.82rem; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.18); }
   .chat-input { display: flex; align-items: flex-end; gap: 8px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: var(--card); border-top: 1px solid var(--line); }
-  .chat-input textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 18px; outline: none; font: inherit; font-size: 0.96rem; line-height: 1.4; padding: 8px 14px; max-height: 110px; background: var(--paper); color: var(--ink); }
+  .chat-input textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 18px; outline: none; font: inherit; font-size: 16px; line-height: 1.4; padding: 8px 14px; max-height: 110px; background: var(--paper); color: var(--ink); }
   .chat-send { border: 0; border-radius: 999px; background: var(--accent); color: #fff; font-weight: 700; padding: 9px 16px; cursor: pointer; flex: none; font: inherit; font-weight: 700; }
   .chat-send:disabled { opacity: 0.4; }
   .chat-banner { position: fixed; left: 50%; top: 10px; transform: translate(-50%, -140%); z-index: 80; width: min(94vw, 420px); display: flex; gap: 10px; align-items: center; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 14px; padding: 10px 12px; box-shadow: 0 6px 24px rgba(0,0,0,0.18); cursor: pointer; transition: transform 0.3s ease; }
   .chat-banner.show { transform: translate(-50%, 0); }
   .chat-banner-text { font-size: 0.86rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat-list { display: flex; flex-direction: column; }
-  .chat-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 10px 2px; font: inherit; color: var(--ink); cursor: pointer; }
+  .chat-item { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 10px 2px; font: inherit; color: var(--ink); cursor: pointer; }
   .chat-item:last-child { border-bottom: 0; }
   .chat-item-mid { flex: 1; min-width: 0; }
   .chat-item-name { font-weight: 700; font-size: 0.95rem; }
@@ -981,7 +981,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-426';
+  var APP_VERSION = '2026-10-10-427';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1000,7 +1000,6 @@
   var ZONE_MIN_OPPOSITE = 10;
   var zoneView = 'auto';        /* 회원 채널: auto | mine(고른 지역 전부) | capital·yeongnam·honam(한 곳) | all(전체 지역) */
   var adminZone = 'all';        /* 관리자 명단 지역 필터: all | capital | yeongnam | honam */
-  var _zoneModeShown = 'all';
   var _zoneViewFor = null;
   function zonesOf(e) { var z = (e && Array.isArray(e.meetZones)) ? e.meetZones.filter(function (k) { return ZONE_LABEL[k]; }) : []; return z.length ? z : ['capital']; }
   function zonesText(z) { return z.map(function (k) { return ZONE_LABEL[k]; }).join('·'); }
@@ -1115,6 +1114,12 @@
       return refreshNow();
     });
   }
+  function setZoneChecks(form, zones) {
+    Array.prototype.forEach.call(form.querySelectorAll('[name="meetZones"]'), function (x) { x.checked = zones.indexOf(x.value) >= 0; var l = x.closest('label'); if (l) l.classList.toggle('on', x.checked); });
+  }
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.name === 'meetZones') { var l = e.target.closest('label'); if (l) l.classList.toggle('on', e.target.checked); }
+  });
   function viewerZonesNow() { var m = currentUser ? findMyEntry(currentState) : null; return (m && !m.isMatchmaker) ? zonesOf(m) : null; }
   /* 다른 지역 회원 표시 칩: 회원에겐 '나와 안 겹치는' 사람만, 손님·관리자에겐 수도권만이 아닌 사람만 */
   function zoneChipFor(entry, viewerZones) {
@@ -4422,22 +4427,12 @@
     if (!e || !e.managedBy || e.ownerSelf) return ''; /* 일반 회원·주선자 본인 프로필은 라벨 없음 */
     return m.viaMm ? '🤝 주선자' : ('🙋 당사자 · ' + e.nickname);
   }
-  function dmLineHtml(m, meId) {
-    var mine = m.fromId === meId;
-    var lbl = dmSenderLabel(currentState, m);
-    var lblHtml = lbl ? '<div style="font-size:0.66rem;font-weight:700;opacity:0.8;margin-bottom:2px;' + (mine ? 'text-align:right;' : '') + '">' + escapeHtml(lbl) + '</div>' : '';
-    return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? 'flex-end' : 'flex-start') + ';margin:6px 0;">' +
-      lblHtml +
-      '<div style="max-width:78%;padding:7px 11px;border-radius:13px;background:' + (mine ? 'var(--accent)' : '#efefef') + ';color:' + (mine ? '#fff' : 'var(--ink)') + ';white-space:pre-wrap;word-break:break-word;">' +
-        escapeHtml(m.text) +
-        '<div style="font-size:0.66rem;opacity:0.75;margin-top:3px;text-align:right;">' + fmtDate(m.at) + '</div>' +
-      '</div></div>';
-  }
   /* ════ 채팅 화면 (2026-10-10 Benny: '카톡처럼' — 디자인·스크롤·속도·알림·대화방) ════
      전체 화면 · 상대 말풍선(흰색, 프로필 원·닉네임) / 내 말풍선(노랑) · 같은 분 안 묶음 · 날짜 구분선 · 읽음 '1'
      · 보내면 바로 화면에(전송 중 표시) · 아래 보고 있을 땐 새 메시지로 자동 스크롤, 위를 보고 있으면 '새 메시지 ↓'
      · PC 는 Enter 보내기(Shift+Enter 줄바꿈), 폰은 보내기 버튼 */
   var _openChatWith = null;
+  var _openChatClose = null;
   var SHOW_READ_MARK = false;   /* 읽음 '1' 표시 (2026-10-10: 소개팅이라 '읽고 답 안 함' 부담 → 끔. 켜려면 true) */
   function chatTime(iso) {
     var d = new Date(iso); if (isNaN(d)) return '';
@@ -4494,6 +4489,7 @@
     return out;
   }
   function openDmChat(otherId) {
+    if (_openChatClose) { if (_openChatWith === otherId) return; _openChatClose(); }   /* 채팅 화면은 하나만 */
     var me = findMyEntry(currentState);
     if (!me) { modalNotice('로그인 필요', '먼저 로그인해주세요.'); return; }
     /* 주선자가 친구로 전환한 상태에서 대신 대화할 수 있음 → 보낸 메시지엔 "🤝 주선자" 라벨이 붙음 */
@@ -4550,33 +4546,45 @@
     function draw(forceBottom) {
       var stick = forceBottom || nearBottom();
       var thread = dmThread(currentState, me.id, otherId);
-      var have = {}; thread.forEach(function (m) { have[m.text + '|' + m.fromId] = (have[m.text + '|' + m.fromId] || 0) + 1; });
-      pendings = pendings.filter(function (p) { return !p.done; });
+      var used = {};
+      pendings = pendings.filter(function (p) {
+        if (p.done) return false;
+        var hit = thread.find(function (m) { return !used[m.id] && m.fromId === me.id && m.text === p.text && (m.at || '') >= p.since; });
+        if (hit) { used[hit.id] = 1; return false; }
+        return true;
+      });
       body.innerHTML = chatBodyHtml(thread.concat(pendings), me.id, otherId, otherNick, otherReadAt());
       if (stick) toBottom();
     }
     draw(true); markDmSeen(me.id, otherId);
     _openChatWith = otherId;
-    var lastCount = dmThread(currentState, me.id, otherId).length, lastRead = otherReadAt();
+    function threadKey(th) { var l = th[th.length - 1]; return th.length + '|' + (l ? (l.id || l.at) : ''); }
+    var lastCount = dmThread(currentState, me.id, otherId).length, lastRead = otherReadAt(), lastKey = threadKey(dmThread(currentState, me.id, otherId));
     /* 대화방 실시간 구독이 바뀌면(새 메시지·상대 읽음) 이 화면만 다시 그림 */
     _openChatRedraw = function () {
-      var th = dmThread(currentState, me.id, otherId), rd = otherReadAt();
-      if (th.length === lastCount && rd === lastRead) return;
-      var incoming = th.length > lastCount && th[th.length - 1].fromId !== me.id;
+      var th = dmThread(currentState, me.id, otherId), rd = otherReadAt(), key = threadKey(th);
+      if (key === lastKey && rd === lastRead) return;
+      var incoming = key !== lastKey && th.length && th[th.length - 1].fromId !== me.id;
       var wasNear = nearBottom();
-      lastCount = th.length; lastRead = rd;
+      lastCount = th.length; lastRead = rd; lastKey = key;
       draw(false); drawStatus();
       if (incoming) { if (!wasNear) newbar.hidden = false; if (!document.hidden) markDmSeen(me.id, otherId); }
     };
     body.addEventListener('scroll', function () { if (nearBottom()) newbar.hidden = true; });
     newbar.addEventListener('click', toBottom);
     function close() {
-      _openChatRedraw = null; _openChatWith = null;
-      if (scr.parentNode) scr.remove();
+      if (!scr.parentNode) return;
+      _openChatRedraw = null; _openChatWith = null; _openChatClose = null;
+      document.removeEventListener('visibilitychange', onVisible);
+      scr.remove();
       popOverlay(scr);
       paint(currentState);
     }
     pushOverlay(scr, close);
+    _openChatClose = close;
+    /* 다른 앱 갔다 돌아왔을 때 그사이 온 메시지 읽음 처리 */
+    function onVisible() { if (!document.hidden) markDmSeen(me.id, otherId); }
+    document.addEventListener('visibilitychange', onVisible);
     scr.querySelector('#chat-back').addEventListener('click', close);
     /* ⋯ 메뉴: 프로필 · 대화 지우기 · 신고 */
     scr.querySelector('#chat-menu').addEventListener('click', function () {
@@ -4588,7 +4596,7 @@
           '<button type="button" class="card-btn" id="cm-clear">🗑 대화 지우기 (내 화면에서만)</button>' +
           '<button type="button" class="card-btn" id="cm-report" style="color:#c5221f;">🚨 신고</button>' +
         '</div>' +
-        '<p class="modal-msg" style="margin:10px 0 0;font-size:0.76rem;color:var(--muted);">🔒 대화는 두 사람만 볼 수 있고, 신고·분쟁에 대비해 서버에 안전하게 보관돼요.</p>' +
+        '<p class="modal-msg" style="margin:10px 0 0;font-size:0.76rem;color:var(--muted);">🔒 대화는 두 사람만 볼 수 있고(친구 프로필은 담당 주선자 포함), 신고·분쟁에 대비해 서버에 안전하게 보관돼요.</p>' +
         '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>');
       ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
       /* 회수 버튼은 앱 공통 동작(확인 창)으로 넘기고 이 메뉴는 닫음 */
@@ -4614,7 +4622,7 @@
     function grow() { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 110) + 'px'; }
     ta.addEventListener('input', grow);
     ta.addEventListener('keydown', function (e) {
-      if (!touch && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+      if (!touch && e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); }
     });
     scr.querySelector('#dm-send').addEventListener('click', function () { send(); ta.focus(); });
     function send() {
@@ -4622,10 +4630,11 @@
       if (!t || !canSend) return;
       ta.value = ''; grow();
       /* 서버 확인 전에 바로 내 말풍선(전송 중)으로 — 여러 개 연달아 보내도 순서대로 */
-      var p = { fromId: me.id, toId: otherId, text: t, at: new Date().toISOString(), _pending: true };
+      var p = { fromId: me.id, toId: otherId, text: t, at: new Date().toISOString(), _pending: true, viaMm: viaMm || undefined,
+        since: new Date(Date.now() - 5 * 60000).toISOString() };   /* since: 서버 시각이 조금 달라도 같은 메시지로 알아보게 */
       pendings.push(p); draw(true);
       sendDm(me.id, otherId, t).then(function () {
-        p.done = true; lastCount = dmThread(currentState, me.id, otherId).length; draw(true);
+        p.done = true; var _th = dmThread(currentState, me.id, otherId); lastCount = _th.length; lastKey = threadKey(_th); draw(true);
       }).catch(function (err) {
         p.done = true; draw(false);
         if (!ta.value) { ta.value = t; grow(); }
@@ -4950,14 +4959,14 @@
     }).then(function () { return refreshNow(); });
   }
   /* ---- 안 읽음(unread) 계산: 마지막으로 본 시각 이후의 이벤트 수 ---- */
-  function userUnread(state, me) {
+  function userUnread(state, me, noChat) {
     if (!me) return 0;
     var seen = me.mineSeenAt || '';
     var reqs = state.dateRequests || [];
     var inc = reqs.filter(function (r) { return r.toId === me.id && (r.hiddenBy || []).indexOf(me.id) < 0 && (r.submittedAt || '') > seen; }).length;
     var out = reqs.filter(function (r) { return r.fromId === me.id && (r.hiddenBy || []).indexOf(me.id) < 0 && (r.decidedAt || '') > seen; }).length;
     var msg = (state.messages || []).filter(function (m) { return m.entryId === me.id && m.from === 'admin' && !m.hiddenByUser && (m.at || '') > seen; }).length;
-    return inc + out + msg + chatUnreadTotal(state, me);
+    return inc + out + msg + (noChat ? 0 : chatUnreadTotal(state, me));   /* noChat: mineSeenAt 판단용 (채팅은 대화방 읽음으로 따로 정리) */
   }
   function adminMsgUnread(state) {
     return (state.messages || []).filter(function (m) { return m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin; }).length;
@@ -4965,7 +4974,7 @@
   function markMineSeen() {
     if (!currentUser) return;
     var me = findMyEntry(currentState); if (!me) return;
-    if (userUnread(currentState, me) <= 0) return;
+    if (userUnread(currentState, me, true) <= 0) return;
     var now = new Date().toISOString();
     db.runTransaction(function (tx) {
       return tx.get(stateRef).then(function (doc) {
@@ -5542,11 +5551,10 @@
     /* 지역: 회원은 내 '만나고 싶은 지역'과 겹치는 사람 먼저 — 내 지역 이성이 적으면(초기 지방) 전체를 보여주고 다른 지역엔 📍 칩 */
     var _zm = zoneModeFor(state, me, teaser, entries);
     var myZones = _zm.myZones, zoneMode = _zm.mode, mineOpp = _zm.mineOpp;
-    _zoneModeShown = zoneMode;
     var filtered = entries.filter(function (e) {
       if (myHiddenIds.indexOf(e.id) >= 0) return false; /* 지인 필터(마주치기 방지)로 숨김 */
-      if (zoneMode === 'mine' && e.id !== me.id && !zonesOverlap(zonesOf(e), myZones)) return false;
-      if (zoneMode === 'sel' && e.id !== me.id && !zonesOverlap(zonesOf(e), _zm.sel)) return false;
+      if (!isPermFilter && zoneMode === 'mine' && e.id !== me.id && !zonesOverlap(zonesOf(e), myZones)) return false;
+      if (!isPermFilter && zoneMode === 'sel' && e.id !== me.id && !zonesOverlap(zonesOf(e), _zm.sel)) return false;
       if (!myZones && isAdminUnlocked && adminZone !== 'all' && zonesOf(e).indexOf(adminZone) < 0) return false;
       if (isAdminUnlocked && accessFilter !== 'all' && accessBucket(e) !== accessFilter) return false; /* 관리자 접속 필터 */
       if (listFilter === 'male' || listFilter === 'female') return e.gender === listFilter;
@@ -5714,7 +5722,7 @@
     overlay.classList.add('card-detail-modal');
     /* 관리자: 알람 설정 여부를 pushTokens에서 조회해 채움 */
     if (isAdminUnlocked) fillNotifStatus(entry.id);
-    var closeActions = ['edit', 'delete', 'admin-manage', 'request-photo', 'request-contact', 'reapply', 'detail', 'card-detail'];
+    var closeActions = ['edit', 'delete', 'admin-manage', 'request-photo', 'request-contact', 'reapply', 'detail', 'card-detail', 'dm-chat'];
     overlay.addEventListener('click', function (e) {
       if (e.target === overlay) { closeModal(overlay); return; }
       if (e.target.closest('#card-detail-close')) { closeModal(overlay); return; }
@@ -6109,7 +6117,7 @@
               '<input type="text" id="f-region" name="region" maxlength="40" placeholder="예: 서울 마포구" required></div>' +
             '<div class="field"><label>만나고 싶은 지역 <span class="opt">(여러 개 선택 가능)</span></label>' +
               '<div class="zone-opts" style="padding:4px 0;">' +
-                ZONES.map(function (z) { return '<label class="zone-opt zone-check"><input type="checkbox" name="meetZones" value="' + z[0] + '"' + (z[0] === 'capital' ? ' checked' : '') + '>' + z[1] + '</label>'; }).join('') +
+                ZONES.map(function (z) { return '<label class="zone-opt zone-check' + (z[0] === 'capital' ? ' on' : '') + '"><input type="checkbox" name="meetZones" value="' + z[0] + '"' + (z[0] === 'capital' ? ' checked' : '') + '>' + z[1] + '</label>'; }).join('') +
               '</div>' +
               '<span class="hint">수도권은 서울·경기·인천·충청·강원이에요. 고른 지역 회원이 명단에 먼저 보여요.</span></div>' +
             '<div class="field"><label for="f-workplace">직장 위치 <span class="opt">(회사명/직업 공개는 자유)</span> <span class="req">필수</span></label>' +
@@ -6463,23 +6471,28 @@
   }
   /* 꾹 누르기 / 오른쪽 클릭 (대화방 목록 줄) */
   (function bindChatItemPress() {
-    var timer = null, fired = false, sx = 0, sy = 0;
+    var timer = null, firedAt = 0, sx = 0, sy = 0;
+    function fire(id) { if (Date.now() - firedAt < 1000) return; firedAt = Date.now(); chatItemMenu(id); }
     document.addEventListener('contextmenu', function (e) {
       var it = e.target.closest && e.target.closest('.chat-item'); if (!it) return;
-      e.preventDefault(); chatItemMenu(it.getAttribute('data-id'));
+      e.preventDefault();
+      if (timer) { clearTimeout(timer); timer = null; }
+      fire(it.getAttribute('data-id'));
     });
     document.addEventListener('touchstart', function (e) {
       var it = e.target.closest && e.target.closest('.chat-item'); if (!it) return;
-      fired = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-      timer = setTimeout(function () { fired = true; if (navigator.vibrate) { try { navigator.vibrate(15); } catch (x) {} } chatItemMenu(it.getAttribute('data-id')); }, 550);
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      timer = setTimeout(function () { timer = null; if (navigator.vibrate) { try { navigator.vibrate(15); } catch (x) {} } fire(it.getAttribute('data-id')); }, 550);
     }, { passive: true });
     document.addEventListener('touchmove', function (e) {
       if (!timer) return;
       var t = e.touches[0]; if (Math.abs(t.clientX - sx) > 8 || Math.abs(t.clientY - sy) > 8) { clearTimeout(timer); timer = null; }
     }, { passive: true });
-    document.addEventListener('touchend', function () { if (timer) { clearTimeout(timer); timer = null; } }, { passive: true });
-    document.addEventListener('click', function (e) {   /* 꾹 눌러 메뉴가 떴으면 이어지는 클릭(채팅 열기)은 무시 */
-      if (fired && e.target.closest && e.target.closest('.chat-item')) { e.stopPropagation(); e.preventDefault(); fired = false; }
+    function stop() { if (timer) { clearTimeout(timer); timer = null; } }
+    document.addEventListener('touchend', stop, { passive: true });
+    document.addEventListener('touchcancel', stop, { passive: true });
+    document.addEventListener('click', function (e) {   /* 꾹 눌러 메뉴가 뜬 직후 이어지는 클릭(채팅 열기·메뉴 버튼 오작동)은 무시 */
+      if (Date.now() - firedAt < 700) { e.stopPropagation(); e.preventDefault(); }
     }, true);
   })();
   function chatRoomsHtml(state, me) {
@@ -8271,6 +8284,7 @@
     var fields = form.querySelectorAll('input, textarea, select');
     for (var i = 0; i < fields.length; i++) {
       var el = fields[i];
+      if (el.name === 'meetZones') continue;   /* 수도권은 기본 체크라 '작성 중' 판단에서 제외 */
       if (el.type === 'radio' || el.type === 'checkbox') { if (el.checked) return true; }
       else if ((el.value || '').trim()) return true;
     }
@@ -8291,6 +8305,7 @@
         gender: radio('gender'), birthYear: g('birthYear'), region: g('region'),
         workplace: g('workplace'), referrerText: g('referrerText'), degreeChoice: radio('degreeChoice'),
         height: g('height'), intro: g('intro'), idealType: g('idealType'), dealbreaker: g('dealbreaker'),
+        meetZones: Array.prototype.map.call(form.querySelectorAll('[name="meetZones"]:checked'), function (x) { return x.value; }),
         photos: (photoDataUrls || []).slice(), savedAt: Date.now()
       };
       /* PIN은 민감정보라 저장하지 않음 */
@@ -8317,6 +8332,7 @@
     setVal('birthYear', d.birthYear); setVal('region', d.region); setVal('workplace', d.workplace);
     setVal('referrerText', d.referrerText); if (d.referrerText) { try { setReferrerField(d.referrerText); } catch (e) {} } setVal('height', d.height);
     setVal('intro', d.intro); setVal('idealType', d.idealType); setVal('dealbreaker', d.dealbreaker);
+    if (Array.isArray(d.meetZones) && d.meetZones.length) setZoneChecks(form, d.meetZones);
     if (d.gender) { var gr = form.querySelector('[name="gender"][value="' + d.gender + '"]'); if (gr) gr.checked = true; }
     if (d.degreeChoice) { var dr = form.querySelector('[name="degreeChoice"][value="' + d.degreeChoice + '"]'); if (dr) dr.checked = true; }
     if (d.photos && d.photos.length) { photoDataUrls = d.photos.slice(); renderPhotoThumbs(); }
@@ -8945,8 +8961,7 @@
       if (genderRadio) genderRadio.checked = true;
       setVal('birthYear', entry.birthYear);
       setVal('region', entry.region);
-      var _zs = zonesOf(entry);
-      Array.prototype.forEach.call(form.querySelectorAll('[name="meetZones"]'), function (x) { x.checked = _zs.indexOf(x.value) >= 0; });
+      setZoneChecks(form, zonesOf(entry));
       setVal('workplace', entry.workplace);
       setVal('referrerText', '');
       var degRadio = form.querySelector('[name="degreeChoice"][value="' + (entry.degreeChoice || '') + '"]');
@@ -9751,7 +9766,7 @@
         '<h3>' + icon + ' ' + escapeHtml(target.nickname) + '님에게 ' + actionText + '</h3>' +
         (isViaMm ? '<p class="modal-msg" style="background:var(--gold-soft);border:1px solid var(--gold);border-radius:8px;color:var(--gold);padding:7px 10px;margin:0 0 8px;">🤝 <b>' + escapeHtml(fromEntry.nickname) + '</b>님을 대신해 주선자로 요청하는 중이에요. 받는 분께 <b>주선자가 대신</b>임이 안내돼요.</p>' : '') +
         '<p class="modal-msg">' + (isPhoto ? '수락하면 <b>서로 사진이 공개</b>돼요. ' : '수락하면 <b>앱 안에서 채팅</b>으로 대화할 수 있어요 (대화 후 번호/카톡 교환 추천해요). ') + '간단한 인사·요청 이유를 꼭 남겨주세요 <b>(최소 10자)</b>.</p>' +
-        (isPhoto ? '' : '<p class="modal-msg" style="font-size:0.82rem;color:var(--muted);margin:-2px 0 6px;">대화는 두 사람만 볼 수 있고, 신고·분쟁에 대비해 서버에 안전하게 보관돼요.</p>') +
+        (isPhoto ? '' : '<p class="modal-msg" style="font-size:0.82rem;color:var(--muted);margin:-2px 0 6px;">대화는 두 사람만 볼 수 있고(친구 프로필은 담당 주선자 포함), 신고·분쟁에 대비해 서버에 안전하게 보관돼요.</p>') +
         '<p class="modal-msg" style="color:var(--gold);font-size:0.82rem;margin:-2px 0 6px;">오늘 ' + actionText + ' 남은 횟수: <b>' + remainToday + '/' + typeLimit + '</b></p>' +
         '<textarea class="modal-input" id="modal-note" rows="3" maxlength="200" placeholder="' + noteEx + '"></textarea>' +
         '<p id="modal-note-warn" class="modal-msg" style="color:var(--accent);margin:4px 0 0;font-size:0.82rem;" hidden>최소 10자 이상 남겨주세요.</p>' +
@@ -11781,7 +11796,7 @@
     var me = findMyEntry(currentState); if (!me) return;
     var cfg = checkinCfg();
     if (!cfg.enabled) return;                                  /* 예약 팝업 꺼짐 */
-    if (document.querySelector('.modal-overlay')) { setTimeout(maybeShowCheckin, 4000); return; }
+    if (document.querySelector('.modal-overlay, .chat-screen')) { setTimeout(maybeShowCheckin, 4000); return; }
     if (!autoPopupOk('checkin')) return;                       /* 다른 팝업이 이미 떴으면 이번엔 생략(본 걸로 기록 안 함 → 다음에 표시) */
     /* 1) 관리자가 "지금 발송"한 경우 — 예약과 무관하게 1회 표시 */
     if (cfg.forceVer) {
@@ -11817,7 +11832,7 @@
     if (!currentUser) return;
     var pop = (currentState && currentState.popup) || null;
     if (!pop || !pop.text || !pop.ver) return;
-    if (document.querySelector('.modal-overlay')) { setTimeout(maybeShowOneOffPopup, 4000); return; }
+    if (document.querySelector('.modal-overlay, .chat-screen')) { setTimeout(maybeShowOneOffPopup, 4000); return; }
     var seen = ''; try { seen = localStorage.getItem('popup-seen') || ''; } catch (e) {}
     if (seen === pop.ver) return;
     if (!autoPopupOk('popup')) return;
@@ -11841,7 +11856,7 @@
     if (!currentUser) return;
     if (!currentState || !currentState.entries) { if ((tries || 0) < 5) setTimeout(function () { maybeShowReqNudge((tries || 0) + 1); }, 3000); return; }
     if (isAdminUnlocked) return;
-    if (document.querySelector('.modal-overlay')) { setTimeout(maybeShowReqNudge, 4000); return; }
+    if (document.querySelector('.modal-overlay, .chat-screen')) { setTimeout(maybeShowReqNudge, 4000); return; }
     var state = currentState;
     var auth = myAuthEntry(state); if (!auth || auth.deactivated) return;
     var key = 'req-nudge-' + currentUser.id;
@@ -12570,7 +12585,7 @@
       function reset() { if (ind) ind.style.height = '0px'; dy = 0; active = false; }
       document.addEventListener('touchstart', function (e) {
         if (e.touches.length !== 1) { active = false; return; }
-        if (document.querySelector('.modal-overlay')) { active = false; return; } /* 모달 열림 시 비활성 */
+        if (document.querySelector('.modal-overlay, .chat-screen')) { active = false; return; } /* 모달·채팅 화면 열림 시 비활성 (채팅에서 위로 스크롤하다 새로고침되던 문제) */
         if (topPos() <= 0) { startY = e.touches[0].clientY; active = true; dy = 0; }
         else active = false;
       }, { passive: true });
