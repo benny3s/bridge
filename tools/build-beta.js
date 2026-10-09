@@ -56,7 +56,8 @@ if (at < 0) throw new Error('앱 코드 끝을 못 찾음');
 h = h.slice(0, at) + '\n' + panel + '\n' + h.slice(at);
 
 fs.mkdirSync(path.join(root, 'beta'), { recursive: true });
-fs.writeFileSync(path.join(root, 'beta', 'index.html'), h);
+const outName = process.argv[3] || 'index.html';   /* 예: node tools/build-beta.js master old.html (비교용 옛 화면) */
+fs.writeFileSync(path.join(root, 'beta', outName), h);
 
 /* 서비스워커도 베타 설정으로 (푸시는 꺼져 있지만 혹시 등록돼도 운영과 섞이지 않게) */
 let sw = fs.readFileSync(path.join(root, 'firebase-messaging-sw.js'), 'utf8');
