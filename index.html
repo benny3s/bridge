@@ -931,7 +931,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-09-418';
+  var APP_VERSION = '2026-10-09-419';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -974,7 +974,7 @@
     var me = currentUser ? findMyEntry(state) : null;
     if (me) {
       var zm = zoneModeFor(state, me, false);
-      if (zm.mode === 'all') return '전체 지역';
+      if (zm.mode === 'all') return zoneView === 'all' ? '전체 지역' : zonesText(zm.myZones);   /* 내 지역이 아직 적어 전체를 같이 보여줄 땐 채널 이름은 내 지역 */
       if (ZONE_LABEL[zm.mode]) return ZONE_LABEL[zm.mode];
       return zonesText(zm.myZones);
     }
@@ -990,7 +990,7 @@
     var me = currentUser ? findMyEntry(currentState) : null;
     var mz = me ? zonesOf(me) : null;
     var opt = function (key, label, on) { return '<button type="button" class="zone-opt' + (on ? ' on' : '') + '" data-zch="' + key + '">' + escapeHtml(label) + '</button>'; };
-    var cur = mz ? zoneModeFor(currentState, me, false).mode : adminZone;
+    var cur = mz ? (zoneView === 'auto' ? 'mine' : zoneModeFor(currentState, me, false).mode) : adminZone;
     var chHtml;
     if (mz) {
       chHtml = (mz.length > 1 ? opt('mine', zonesText(mz) + ' 모두', cur === 'mine') : '') +
