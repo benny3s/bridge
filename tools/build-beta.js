@@ -70,4 +70,4 @@ sw = sw.replace(/apiKey: "[^"]*"/, 'apiKey: "' + BETA.apiKey + '"')
 fs.writeFileSync(path.join(root, 'beta', 'firebase-messaging-sw.js'), sw);
 
 const ver = (h.match(/APP_VERSION = '([0-9-]+)'/) || [])[1];
-console.log('beta/index.html 생성 — 버전 ' + ver + ', ' + Math.round(h.length / 1024) + 'KB');
+console.log('beta/' + outName + ' 생성 — 버전 ' + ver + ', ' + Math.round(h.length / 1024) + 'KB');
