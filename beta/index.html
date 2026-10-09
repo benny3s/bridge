@@ -983,7 +983,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-427';
+  var APP_VERSION = '2026-10-10-428';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4724,7 +4724,7 @@
   function adminChatBubble(m, withDel) {
     var mine = m.from === 'admin';
     var who = (mine ? '👑 관리자' : (m.guestName ? '🙋 ' + escapeHtml(m.guestName) + ' · 비회원' : '🙋 회원')) + (m.broadcast ? ' · 📢 공지' : '');
-    var delBtn = withDel ? ' <button type="button" data-action="msg-del" data-id="' + escapeHtml(m.id) + '" title="삭제" style="border:none;background:none;color:var(--muted);cursor:pointer;font-size:0.82rem;padding:0;">&#10005;</button>' : '';
+    var delBtn = withDel ? ' <button type="button" data-action="msg-del" data-id="' + escapeHtml(m.id) + '" title="관리자 목록에서 숨기기" style="border:none;background:none;color:var(--muted);cursor:pointer;font-size:0.82rem;padding:0;">&#10005;</button>' : '';
     return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? 'flex-end' : 'flex-start') + ';margin:6px 0;">' +
       '<div style="font-size:0.66rem;font-weight:700;color:var(--muted);margin-bottom:2px;' + (mine ? 'text-align:right;' : '') + '">' + who + ' · ' + fmtDate(m.at) + delBtn + '</div>' +
       '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:' + (mine ? 'var(--accent)' : '#efefef') + ';color:' + (mine ? '#fff' : 'var(--ink)') + ';white-space:pre-wrap;word-break:break-word;">' +
@@ -7688,8 +7688,10 @@
               ? (msgs.filter(function (m) { return m.guestPhoneEnc; })[0]
                   ? '<button type="button" class="card-btn primary" data-action="guest-phone" data-id="' + escapeHtml(msgs.filter(function (m) { return m.guestPhoneEnc; })[0].id) + '" style="flex:none;">📞 연락처 확인</button>' : '')
               : '<button type="button" class="card-btn primary" data-action="admin-msg-reply" data-id="' + escapeHtml(eid) + '" style="flex:none;">💬 대화</button>') +
+            (!isGuest && msgs.some(function (m) { return m.from === 'user' && /탈퇴|탈회|삭제해|지워\s*주|계정\s*삭제|그만\s*할|나가고/.test(m.text || ''); })
+              ? '<button type="button" class="card-btn danger" data-action="admin-manage" data-id="' + escapeHtml(eid) + '" style="flex:none;" title="회원 카드의 보류·삭제 창을 열어요">🚪 탈퇴 요청 같아요 → 처리하기</button>' : '') +
             profileBtn +
-            '<button type="button" class="card-btn danger" data-action="admin-msg-delall" data-id="' + escapeHtml(eid) + '" style="flex:none;">전체 삭제</button>' +
+            '<button type="button" class="card-btn" data-action="admin-msg-delall" data-id="' + escapeHtml(eid) + '" style="flex:none;" title="관리자 목록에서만 숨겨요 (회원 쪽은 그대로)">🙈 목록에서 숨기기</button>' +
           '</div>' +
         '</div>' +
       '</details>';
@@ -11491,7 +11493,7 @@
       else if (action === 'admin-msg') openAdminChat(id);
       else if (action === 'admin-msg-reply') openAdminChat(id);
       else if (action === 'guest-phone') handleGuestPhone(id);
-      else if (action === 'msg-del') { if (isAdminUnlocked) modalConfirm('메시지 삭제', '이 메시지를 삭제할까요? 되돌릴 수 없어요.', '삭제', 'danger').then(function (ok) { if (ok) deleteAdminMessage(id); }); }
+      else if (action === 'msg-del') { if (isAdminUnlocked) modalConfirm('메시지 숨기기', '이 메시지를 관리자 목록에서 숨길까요? 회원 쪽 메시지는 그대로예요. (탈퇴·삭제 요청이면 회원 카드의 \'보류·삭제\'에서 처리해 주세요)', '숨기기').then(function (ok) { if (ok) deleteAdminMessage(id); }); }
       else if (action === 'mymsg-del') { modalConfirm('메시지 삭제', '이 메시지를 삭제할까요? 되돌릴 수 없어요.', '삭제', 'danger').then(function (ok) { if (ok) deleteMyMessage(id); }); }
       else if (action === 'access-filter-open') { openAccessFilterPicker(actionBtn.getAttribute('data-scope') || 'list'); return; }
       else if (action === 'mm-scope') { mmScopeFilter = actionBtn.getAttribute('data-scope') || 'all'; paint(currentState); return; }
@@ -11520,7 +11522,7 @@
       else if (action === 'broadcast') { handleBroadcast(); return; }
       else if (action === 'sms-custom') { openSmsCustom(); return; }
       else if (action === 'admin-msg-delall') {
-        if (isAdminUnlocked) modalConfirm('전체 삭제', nickForEntry(currentState, id) + '님과의 메시지를 모두 지울까요?').then(function (ok) { if (ok) deleteAdminThread(id); });
+        if (isAdminUnlocked) modalConfirm('목록에서 숨기기', nickForEntry(currentState, id) + '님과의 대화를 관리자 목록에서 숨길까요? 회원 쪽 메시지는 그대로이고, 새 메시지가 오면 다시 보여요. (탈퇴·삭제 요청이면 회원 카드의 \'보류·삭제\'에서 처리해 주세요)', '숨기기').then(function (ok) { if (ok) deleteAdminThread(id); });
       }
       return;
     }
