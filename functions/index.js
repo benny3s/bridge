@@ -1419,3 +1419,54 @@ async function detectTamper(before, after) {
   await securityAlert({ type: 'tamper', writer: r.writer, writerNick: nick(r.writer), summary, issues: r.issues.slice(0, 30) },
     '🚨 이상 변경 감지', nick(r.writer) + '님 계정으로 다른 회원 데이터 ' + r.issues.length + '건 변경 — 관리자 화면에서 확인·되돌리기');
 }
+
+/* ══ 베타 서버 전용: 시험 데이터 심기 (2026-10-09) ══
+   benny-bridge-beta 프로젝트에서만 동작 — 운영(benny-meeting)에 배포돼도 호출하면 거절.
+   베타 페이지(beta/index.html, tools/build-beta.js 가 만듦)의 🧪 패널이 가짜 회원·관리자 키를 만들어 보냄.
+   처음(데이터 없음)엔 누구나, 그 뒤엔 베타 관리자만 다시 심을 수 있음. 기존 베타 데이터는 모두 지움. */
+const BETA_PROJECT = 'benny-bridge-beta';
+function isBetaProject() {
+  let pid = process.env.GCLOUD_PROJECT || '';
+  if (!pid) { try { pid = JSON.parse(process.env.FIREBASE_CONFIG || '{}').projectId || ''; } catch (e) { pid = ''; } }
+  return pid === BETA_PROJECT;
+}
+async function wipeCollection(name) {
+  const qs = await db.collection(name).get();
+  for (let i = 0; i < qs.docs.length; i += 400) {
+    const b = db.batch();
+    qs.docs.slice(i, i + 400).forEach((d) => b.delete(d.ref));
+    await b.commit();
+  }
+  return qs.size;
+}
+exports.betaSeed = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 120, memory: '512MB' })
+  .https.onCall(async (data, context) => {
+    if (!isBetaProject()) throw new HttpsError('permission-denied', '베타 서버 전용 기능이에요.');
+    const cur = await db.doc('app/state').get();
+    const isAdm = !!(context.auth && context.auth.token && context.auth.token.admin === 1);
+    if (cur.exists && !isAdm) throw new HttpsError('permission-denied', '이미 데이터가 있어요. 베타 관리자로 로그인한 뒤 다시 심어주세요.');
+    const st = data && data.state;
+    if (!st || !Array.isArray(st.entries) || !st.adminAuth) throw new HttpsError('invalid-argument', '시드 데이터가 올바르지 않아요.');
+    const wiped = {};
+    for (const col of ['secrets', 'adminOnly', 'adminKey', 'photos', 'chats', 'pushTokens', 'securityAlerts', 'loginGuard', 'loginIp', 'rateLimit', 'acl', 'acqFilter', 'sendContacts']) {
+      wiped[col] = await wipeCollection(col);
+    }
+    await db.doc('app/logs').delete().catch(() => {});
+    await db.doc('app/public').delete().catch(() => {});
+    const photos = (data && data.photos) || {};
+    const ids = Object.keys(photos);
+    for (let i = 0; i < ids.length; i += 200) {
+      const b = db.batch();
+      ids.slice(i, i + 200).forEach((id) => {
+        const arr = Array.isArray(photos[id]) ? photos[id].filter((x) => typeof x === 'string').slice(0, 5) : [];
+        b.set(db.collection('photos').doc(id), { photos: arr, owners: [id], viewers: [id] });
+      });
+      await b.commit();
+    }
+    st._w = 'beta-seed'; st._wn = String(Date.now());
+    await db.doc('app/state').set(st);
+    await syncPublicView(st);   /* 손님 화면용 공개 요약도 바로 (state 첫 생성은 onStateChange(onUpdate) 가 안 잡음) */
+    return { ok: true, entries: st.entries.length, photos: ids.length, wiped };
+  });

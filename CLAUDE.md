@@ -38,6 +38,14 @@
    - ⚠️ **일부 환경(클라우드/샌드박스)에선 `benny3s.github.io` 접속이 네트워크 정책으로 차단**될 수 있음(예: 403 to CONNECT). 그러면 이 폴링은 실패 → 배포 반영은 **사용자가 직접 확인**하거나, GitHub API로 Pages 빌드 상태만 확인. (api.github.com·firestore.googleapis.com은 대개 열려 있음)
 - **커밋 attribution**: 커밋 메시지 끝에 `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` (세션 지침이 다르면 그걸 우선).
 
+## 베타 서버 (2026-10-09~)
+운영과 완전히 분리된 시험 환경. **데이터 구조 변경·이전(마이그레이션)·위험한 기능은 베타에서 먼저 시험한 뒤 운영 반영.**
+- Firebase 프로젝트 **`benny-bridge-beta`** (Blaze, 서울 asia-northeast3, 월 예산 알림 1,000원) — 가짜 데이터만. 운영은 `benny-meeting`.
+- 페이지 **https://benny3s.github.io/bridge/beta/** = `beta/index.html` (**직접 고치지 말 것** — `node tools/build-beta.js`가 운영 `index.html`을 복사해 만듦: Firebase 설정만 베타로, 저장소 키 `beta:` 접두어로 운영과 분리, 푸시 끔, 🧪 패널 삽입). 운영 코드를 고치면 → 빌드 → 커밋·푸시 → 베타에서 시험 → 문제없으면 운영 그대로.
+- **🧪 패널**(`tools/beta-panel.js`, 베타에만 들어감): 관리자로 / 손님으로 / 회원 골라 들어가기 / 🌱 시험 데이터 다시 심기. 시험 계정 비번·PIN은 그 파일 상수(가짜 데이터 전용). 콘솔에선 `window.__beta.asAdmin()` 등.
+- 시드: CF **`betaSeed`** — 베타 프로젝트에서만 동작(운영에서 부르면 거절). 처음엔 누구나, 그 뒤엔 베타 관리자만. 베타의 모든 컬렉션을 지우고 가짜 회원(여12·남12·주선자1+친구1·대기1·보류1)·요청·사진을 심음.
+- 배포: 규칙 `firebase deploy --only firestore:rules --project benny-bridge-beta`(Windows MCP), 함수 `--project benny-bridge-beta`. 베타 비밀값(NUM_ENC_KEY 등)은 베타 전용 새 값(SOLAPI는 가짜). **운영에 배포할 땐 `--project benny-meeting`(기본값) 확인.**
+
 ## 환경별 주의 (로컬 데스크톱 vs 클라우드/샌드박스)
 이 프로젝트의 풀 워크플로(배포·라이브확인·QA·라이브 데이터)는 **로컬 데스크톱 세션**을 전제로 한다. 클라우드/샌드박스(원격) 세션은 제약이 있으니 주의:
 - **브라우저 도구(`mcp__Claude_Browser__*`)** 는 데스크톱 앱 세션에만 있음. 없는 환경에선 **QA·data-ops·라이브 Firestore 조작이 불가**(컨테이너에 Chromium+Playwright가 있으면 대체 경로를 별도로 만들 수 있음).
