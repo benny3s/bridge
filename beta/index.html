@@ -923,7 +923,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-09-416';
+  var APP_VERSION = '2026-10-09-417';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -943,6 +943,7 @@
   var zoneView = 'auto';        /* 회원: auto | mine | all */
   var adminZone = 'all';        /* 관리자 명단 지역 필터: all | capital | yeongnam | honam */
   var _zoneModeShown = 'all';
+  var _zoneViewFor = null;
   function zonesOf(e) { var z = (e && Array.isArray(e.meetZones)) ? e.meetZones.filter(function (k) { return ZONE_LABEL[k]; }) : []; return z.length ? z : ['capital']; }
   function zonesText(z) { return z.map(function (k) { return ZONE_LABEL[k]; }).join('·'); }
   function zonesOverlap(a, b) { return a.some(function (k) { return b.indexOf(k) >= 0; }); }
@@ -5215,6 +5216,7 @@
     var teaser = !!state._public || (!isAdminUnlocked && !myAuthEntry(state)); /* 비로그인·관리자 아님·승인 대기(미승인) → 신원 가린 티저 뷰 */
     var isPermFilter = (listFilter === 'photo' || listFilter === 'contact');
     /* 지역: 회원은 내 '만나고 싶은 지역'과 겹치는 사람 먼저 — 내 지역 이성이 적으면(초기 지방) 전체를 보여주고 다른 지역엔 📍 칩 */
+    if (me && _zoneViewFor !== me.id) { zoneView = 'auto'; _zoneViewFor = me.id; }  /* 프로필이 바뀌면 지역 보기는 자동으로 (앞 사람 선택이 남지 않게) */
     var myZones = (me && !teaser) ? zonesOf(me) : null;
     var zoneMode = 'all', mineOpp = 0;
     if (myZones) {
