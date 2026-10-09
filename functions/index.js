@@ -1475,6 +1475,7 @@ exports.betaSeed = functions
       await b.commit();
     }
     st._w = 'beta-seed'; st._wn = String(Date.now());
+    await db.doc('app/state').delete().catch(() => {});   /* 지우고 새로 만들기 — 덮어쓰면 onStateChange(onUpdate)가 '이상 변경'으로 오탐 */
     await db.doc('app/state').set(st);
     await syncPublicView(st);   /* 손님 화면용 공개 요약도 바로 (state 첫 생성은 onStateChange(onUpdate) 가 안 잡음) */
     return { ok: true, entries: st.entries.length, photos: ids.length, wiped };
