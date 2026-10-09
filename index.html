@@ -931,7 +931,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-09-419';
+  var APP_VERSION = '2026-10-09-420';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -958,7 +958,7 @@
   /* 지금 채널 계산 (명단·머리글 버튼 공용): auto 면 내 지역 이성이 ZONE_MIN_OPPOSITE 명 이상일 때만 '내 지역', 아니면 전체(내 지역 먼저) */
   function zoneModeFor(state, me, teaser, entries) {
     if (me && _zoneViewFor !== me.id) { zoneView = 'auto'; _zoneViewFor = me.id; }  /* 프로필이 바뀌면 자동으로 (앞 사람 선택이 남지 않게) */
-    var myZones = (me && !teaser) ? zonesOf(me) : null;
+    var myZones = (me && !teaser && !me.isMatchmaker) ? zonesOf(me) : null;   /* 주선자 본인(소개 프로필 없음)은 지역 없이 전체 */
     var mode = 'all', mineOpp = 0;
     if (myZones) {
       entries = entries || profileEntries(state).filter(function (e) { return listMemberVisible(e); });
@@ -982,12 +982,14 @@
   }
   /* 머리글 '베니브릿지' 옆 작은 채널 버튼 — 로그인 회원·관리자만 (손님은 전체 지역이라 없음) */
   function zonePillHtml(state) {
-    if (!(isAdminUnlocked || (currentUser && findMyEntry(state)))) return '';
+    var _me = currentUser ? findMyEntry(state) : null;
+    if (!(isAdminUnlocked || (_me && !_me.isMatchmaker))) return '';   /* 손님·주선자 본인 상태엔 없음 */
     return '<button type="button" class="zone-pill" data-action="zone-sheet" title="지역 채널">' + escapeHtml(zoneChannelLabel(state)) + ' <span style="opacity:.7;font-size:0.85em;">▾</span></button>';
   }
   /* 채널 창: 지금 볼 채널 고르기 + (회원) 내 '만나고 싶은 지역' 바꾸기 */
   function openZoneSheet() {
     var me = currentUser ? findMyEntry(currentState) : null;
+    if (me && me.isMatchmaker) me = null;
     var mz = me ? zonesOf(me) : null;
     var opt = function (key, label, on) { return '<button type="button" class="zone-opt' + (on ? ' on' : '') + '" data-zch="' + key + '">' + escapeHtml(label) + '</button>'; };
     var cur = mz ? (zoneView === 'auto' ? 'mine' : zoneModeFor(currentState, me, false).mode) : adminZone;
@@ -1053,7 +1055,7 @@
       return refreshNow();
     });
   }
-  function viewerZonesNow() { var m = currentUser ? findMyEntry(currentState) : null; return m ? zonesOf(m) : null; }
+  function viewerZonesNow() { var m = currentUser ? findMyEntry(currentState) : null; return (m && !m.isMatchmaker) ? zonesOf(m) : null; }
   /* 다른 지역 회원 표시 칩: 회원에겐 '나와 안 겹치는' 사람만, 손님·관리자에겐 수도권만이 아닌 사람만 */
   function zoneChipFor(entry, viewerZones) {
     var z = zonesOf(entry);
