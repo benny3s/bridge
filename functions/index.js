@@ -673,6 +673,7 @@ function buildPublicView(state) {
   /* 티저: 승인 회원 중 명단 노출 대상. 신원 연결 안 되게 닉네임·id·사진 없음, 소개는 앞 18자만 */
   const teaser = entries.filter((e) => !e.isMatchmaker && !e.deactivated && !e.testAccount).map((e, i) => ({
     id: 't' + i, gender: e.gender || '', birthYear: e.birthYear || null, region: clip(e.region, 20),
+    meetZones: (Array.isArray(e.meetZones) && e.meetZones.length) ? e.meetZones.filter((k) => MEET_ZONES.includes(k)) : ['capital'],
     intro: clip(e.intro, 18), idealType: clip(e.idealType, 18),
     submittedAt: e.submittedAt || null, lastSeenAt: roundHour(lastOf(e)), serial: e.serial || null
   }));
@@ -715,6 +716,7 @@ async function syncPublicView(state) {
 /* ── 신청자 쓰기 대행 ── */
 const ENTRY_TEXT_LIMITS = { nickname: 20, region: 40, workplace: 60, height: 10, intro: 1000, idealType: 600, dealbreaker: 600, degreeChoice: 20 };
 const ENC_FIELDS = ['realNameEnc', 'contactEnc', 'referrerEnc', 'contactSelfEnc'];
+const MEET_ZONES = ['capital', 'yeongnam', 'honam'];   /* 수도권(충청·강원 포함)·경상도·전라도 */
 function isSmallObj(v, max) { return !!v && typeof v === 'object' && JSON.stringify(v).length <= (max || 8000); }
 function cleanPinAuth(p) {
   if (!p || typeof p !== 'object') return null;
@@ -730,6 +732,10 @@ function pickProfile(src, kind) {
   ['region', 'workplace', 'height', 'intro', 'idealType', 'dealbreaker', 'degreeChoice'].forEach((k) => {
     if (typeof src[k] === 'string') out[k] = src[k].trim().slice(0, ENTRY_TEXT_LIMITS[k]);
   });
+  if (Array.isArray(src.meetZones)) {   /* 만나고 싶은 지역 (2026-10-09) — 허용 값만, 비면 수도권 */
+    const z = src.meetZones.filter((k, i, a) => MEET_ZONES.includes(k) && a.indexOf(k) === i);
+    out.meetZones = z.length ? z : ['capital'];
+  }
   if (src.gender === 'male' || src.gender === 'female') out.gender = src.gender;
   const by = parseInt(src.birthYear, 10);
   if (by >= 1900 && by <= new Date().getFullYear() - 19) out.birthYear = by;
