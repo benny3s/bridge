@@ -140,18 +140,21 @@ function adminPasswordOk(pw, a) {
   } catch (e) { return false; }
 }
 
+/* 로그인 속도 (2026-10-09): ① 로그인 창을 열 때 앱이 {ping:1} 로 미리 깨움(콜드 스타트 3~5초를 PIN 입력 시간에 숨김)
+   ② 1GB — 1세대 함수는 메모리에 비례해 CPU가 커져 PIN 확인(PBKDF2 15만 회)이 약 3배 빨라짐(로그인 때만 써서 비용 차이 미미)
+   ③ IP 차단·잠금·state 읽기를 동시에 */
 exports.memberLogin = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 20, memory: '256MB' })
+  .runWith({ timeoutSeconds: 20, memory: '1GB' })
   .https.onCall(async (data, context) => {
+    if (data && data.ping) return { ok: true };
     const entryId = String((data && data.entryId) || '');
     const pin = String((data && data.pin) || '');
     if (!entryId || !pin || pin.length > 64) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.');
     const ip = clientIp(context);
-    await ipBlockedCheck(ip);
     const gk = guardKey('m_', entryId);
-    const guard = await loginGuardCheck(gk);
-    const state = (await db.doc('app/state').get()).data() || {};
+    const [, guard, stSnap] = await Promise.all([ipBlockedCheck(ip), loginGuardCheck(gk), db.doc('app/state').get()]);
+    const state = stSnap.data() || {};
     let entry = (state.entries || []).find((e) => e.id === entryId);
     let pending = false;
     if (!entry) { entry = (state.pendingEntries || []).find((e) => e.id === entryId); pending = !!entry; }
@@ -180,14 +183,14 @@ exports.memberLogin = functions
 
 exports.adminLogin = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 20, memory: '256MB' })
+  .runWith({ timeoutSeconds: 20, memory: '1GB' })
   .https.onCall(async (data, context) => {
+    if (data && data.ping) return { ok: true };   /* 관리자 로그인 창 열 때 미리 깨우기 */
     const pw = String((data && data.password) || '');
     if (!pw || pw.length > 128) throw new HttpsError('invalid-argument', '비밀번호를 확인해주세요.');
     const ip = clientIp(context);
-    await ipBlockedCheck(ip);
-    const guard = await loginGuardCheck('admin');
-    const st = ((await db.doc('app/state').get()).data() || {}).adminAuth;
+    const [, guard, stSnap] = await Promise.all([ipBlockedCheck(ip), loginGuardCheck('admin'), db.doc('app/state').get()]);
+    const st = (stSnap.data() || {}).adminAuth;
     const a = (st && st.wrappedPrivateKey) ? st : (await db.collection('adminKey').doc('main').get()).data();
     const ok = adminPasswordOk(pw, a);
     const fails = await loginGuardResult(guard, ok);
