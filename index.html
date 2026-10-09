@@ -101,19 +101,9 @@
   .zone-pill { margin-left: 8px; vertical-align: 0.35em; font: inherit; font-size: 0.74rem; font-weight: 600; color: #E8C48A; background: rgba(255,255,255,0.05); border: 1px solid rgba(232,196,138,0.4); border-radius: 999px; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
   .zone-pill:active { background: rgba(255,255,255,0.12); }
   .zone-opts { display: flex; flex-wrap: wrap; gap: 8px; }
-  /* 채널 창: 위 = 지금 보는 채널(이어 붙은 탭), 아래 = 내 프로필 설정(체크 버튼) — 모양을 달리해 헷갈리지 않게 */
-  .zone-sec-title { font-size: 0.78rem; color: var(--muted); font-weight: 700; margin: 4px 0 8px; }
-  .zone-seg { display: flex; flex-wrap: wrap; border: 1px solid var(--accent); border-radius: 12px; overflow: hidden; }
-  .zone-seg-btn { flex: 1 1 auto; font: inherit; font-size: 0.86rem; padding: 9px 10px; border: 0; border-left: 1px solid var(--accent-soft); background: var(--paper); color: var(--accent); cursor: pointer; white-space: nowrap; }
-  .zone-seg-btn:first-child { border-left: 0; }
-  .zone-seg-btn.on { background: var(--accent); color: #fff; font-weight: 700; }
-  .zone-settings { margin-top: 18px; padding: 12px 12px 14px; border-radius: 12px; background: var(--gold-soft); border: 1px dashed var(--gold); }
-  .zone-chk { font: inherit; font-size: 0.88rem; padding: 6px 12px 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
-  .zone-chk::before { content: '☐ '; color: var(--muted); }
-  .zone-chk.on { border-color: var(--gold); color: var(--ink); font-weight: 700; }
-  .zone-chk.on::before { content: '☑ '; color: var(--gold); }
-  .zone-opt { font: inherit; font-size: 0.9rem; padding: 7px 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; }
-  .zone-opt.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  /* 채널 창: 위 = 지금 보는 채널, 구분선, 아래 = 내 프로필 설정 (버튼 모양은 둥근 선택 버튼으로 통일) */
+  .zone-sec-title { font-size: 0.8rem; color: var(--muted); font-weight: 700; margin: 4px 0 8px; }
+  .zone-divider { border-top: 1px dashed var(--line); margin: 16px 0 12px; }
   .zone-check { position: relative; }
   .zone-check input { position: absolute; opacity: 0; width: 1px; height: 1px; }
   .zone-check:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
@@ -987,7 +977,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-422';
+  var APP_VERSION = '2026-10-10-423';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1047,30 +1037,26 @@
     var me = currentUser ? findMyEntry(currentState) : null;
     if (me && me.isMatchmaker) me = null;
     var mz = me ? zonesOf(me) : null;
-    var opt = function (key, label, on) { return '<button type="button" class="zone-seg-btn' + (on ? ' on' : '') + '" data-zch="' + key + '">' + escapeHtml(label) + '</button>'; };
+    var opt = function (key, label, on) { return '<button type="button" class="zone-opt' + (on ? ' on' : '') + '" data-zch="' + key + '">' + escapeHtml(label) + '</button>'; };
     var cur = mz ? (zoneView === 'auto' ? 'mine' : zoneModeFor(currentState, me, false).mode) : adminZone;
     var chHtml;
     if (mz) {
-      chHtml = (mz.length > 1 ? opt('mine', zonesText(mz) + ' 모두', cur === 'mine') : '') +
-        mz.map(function (k) { return opt(k, ZONE_LABEL[k], cur === k || (mz.length === 1 && cur === 'mine')); }).join('') +
-        opt('all', '전체', cur === 'all');
+      /* '전체' 버튼 없음 (2026-10-10 Benny: 세 곳 다 고르면 그게 전체) — 두 곳 이상 고른 사람만 채널 고르기 */
+      chHtml = mz.length > 1 ? opt('mine', '모두', cur === 'mine' || cur === 'all') + mz.map(function (k) { return opt(k, ZONE_LABEL[k], cur === k); }).join('') : '';
     } else {
       chHtml = opt('all', '전체', cur === 'all') + ZONES.map(function (z) { return opt(z[0], z[1], cur === z[0]); }).join('');
     }
     var ov = openModal(
       '<h3>📍 지역 채널</h3>' +
-      '<div class="zone-sec-title">👀 지금 보는 채널</div>' +
-      '<div class="zone-seg" id="zch-opts">' + chHtml + '</div>' +
-      (mz ? '<div class="zone-settings">' +
-          '<div class="zone-sec-title">⚙️ ' + (me.managedBy && !me.ownerSelf ? escapeHtml(me.nickname) + '님 프로필 설정' : '내 프로필 설정') + '</div>' +
-          '<div style="font-weight:700;font-size:0.92rem;margin:2px 0 1px;">만나고 싶은 지역</div>' +
-          '<div style="font-size:0.76rem;color:var(--muted);margin:0 0 8px;">여러 곳 고를 수 있어요<br>수도권은 충청·강원도 포함이에요</div>' +
-          '<div class="zone-opts" id="zmy-opts">' + ZONES.map(function (z) { return '<button type="button" class="zone-chk' + (mz.indexOf(z[0]) >= 0 ? ' on' : '') + '" data-zmy="' + z[0] + '">' + z[1] + '</button>'; }).join('') + '</div>' +
-        '</div>' : '') +
+      (chHtml ? '<div class="zone-sec-title">👀 지금 보는 채널</div><div class="zone-opts" id="zch-opts">' + chHtml + '</div>' : '') +
+      (mz ? (chHtml ? '<div class="zone-divider"></div>' : '') +
+          '<div class="zone-sec-title">⚙️ ' + (me.managedBy && !me.ownerSelf ? escapeHtml(me.nickname) + '님 프로필 설정' : '내 프로필 설정') + ' · 만나고 싶은 지역</div>' +
+          '<div style="font-size:0.76rem;color:var(--muted);margin:-4px 0 8px;">여러 곳 고를 수 있어요<br>수도권은 충청·강원도 포함이에요</div>' +
+          '<div class="zone-opts" id="zmy-opts">' + ZONES.map(function (z) { return '<button type="button" class="zone-opt' + (mz.indexOf(z[0]) >= 0 ? ' on' : '') + '" data-zmy="' + z[0] + '">' + z[1] + '</button>'; }).join('') + '</div>' : '') +
       '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button>' + (mz ? '<button type="button" class="card-btn primary" id="zmy-save" style="display:none;">지역 저장</button>' : '') + '</div>'
     );
     ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
-    ov.querySelector('#zch-opts').addEventListener('click', function (e) {
+    if (ov.querySelector('#zch-opts')) ov.querySelector('#zch-opts').addEventListener('click', function (e) {
       var b = e.target.closest('[data-zch]'); if (!b) return;
       var k = b.getAttribute('data-zch');
       if (mz) zoneView = (mz.length === 1 && k === mz[0]) ? 'mine' : k; else adminZone = k;
