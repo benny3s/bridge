@@ -19,7 +19,13 @@ const BETA = {
   appId: '1:139096808793:web:516002f6f9fcac348bc048'
 };
 
-let h = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+/* 인자로 git 브랜치를 주면 그 브랜치의 index.html 로 만듦 (운영 반영 전 기능 브랜치 시험용):
+   node tools/build-beta.js feature/meet-zones   — master 에 있는 채로 실행하고 beta/ 만 커밋 */
+const ref = process.argv[2];
+let h = ref
+  ? require('child_process').execSync('git show ' + ref + ':index.html', { cwd: root, maxBuffer: 64 * 1024 * 1024 }).toString('utf8')
+  : fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+if (ref) console.log('원본: ' + ref + ' 브랜치의 index.html');
 function rep(re, to, label) {
   const before = h;
   h = h.replace(re, to);

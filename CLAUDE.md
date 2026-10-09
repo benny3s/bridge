@@ -44,6 +44,9 @@
 - 페이지 **https://benny3s.github.io/bridge/beta/** = `beta/index.html` (**직접 고치지 말 것** — `node tools/build-beta.js`가 운영 `index.html`을 복사해 만듦: Firebase 설정만 베타로, 저장소 키 `beta:` 접두어로 운영과 분리, 푸시 끔, 🧪 패널 삽입). 운영 코드를 고치면 → 빌드 → 커밋·푸시 → 베타에서 시험 → 문제없으면 운영 그대로.
 - **🧪 패널**(`tools/beta-panel.js`, 베타에만 들어감): 관리자로 / 손님으로 / 회원 골라 들어가기 / 🌱 시험 데이터 다시 심기. 시험 계정 비번·PIN은 그 파일 상수(가짜 데이터 전용). 콘솔에선 `window.__beta.asAdmin()` 등.
 - 시드: CF **`betaSeed`** — 베타 프로젝트에서만 동작(운영에서 부르면 거절). 처음엔 누구나, 그 뒤엔 베타 관리자만. 베타의 모든 컬렉션을 지우고 가짜 회원(여12·남12·주선자1+친구1·대기1·보류1)·요청·사진을 심음.
+- **운영 반영 전 기능은 브랜치로**: 기능 브랜치(예 `feature/meet-zones`)에 index.html·functions 커밋 → master 로 돌아와 `node tools/build-beta.js feature/meet-zones` → `beta/`만 커밋·푸시(Pages는 master만 배포) → 베타 시험 → 문제없으면 브랜치를 master 에 병합해 운영 반영 + 운영 함수 배포. master 의 index.html = 항상 운영 코드.
+- **index.html 은 CRLF** — Git Bash `sed -i` 는 LF로 바꿔 파일 전체가 바뀐 것처럼 됨 → 편집은 Edit/python 으로.
+- 🧬 운영 모양으로 심기: 운영 관리자 탭에서 익명화 템플릿(성별·나이·키·사는 지역·관계·시각·요청 그래프만, 이름·사진·소개·연락처 없음)을 `localStorage['beta:seedTemplate']`에 넣고 같은 브라우저 베타 탭에서 패널 버튼.
 - 배포: 규칙 `firebase deploy --only firestore:rules --project benny-bridge-beta`(Windows MCP), 함수 `--project benny-bridge-beta`. 베타 비밀값(NUM_ENC_KEY 등)은 베타 전용 새 값(SOLAPI는 가짜). **운영에 배포할 땐 `--project benny-meeting`(기본값) 확인.**
 
 ## 환경별 주의 (로컬 데스크톱 vs 클라우드/샌드박스)
