@@ -853,7 +853,7 @@
   .chat-row.first { margin-top: 10px; }
   .chat-row.mine { flex-direction: column; align-items: flex-end; }
   .chat-av { width: 34px; height: 34px; border-radius: 50%; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; flex: none; }
-  .chat-av.big { width: 44px; height: 44px; font-size: 1.05rem; }
+  .chat-av.big { width: 40px; height: 40px; font-size: 1rem; }
   .chat-av-sp { width: 34px; flex: none; }
   .chat-col { display: flex; flex-direction: column; min-width: 0; max-width: 78%; }
   .chat-name { font-size: 0.76rem; color: var(--muted); margin: 0 0 3px 2px; }
@@ -875,8 +875,11 @@
   .chat-banner.show { transform: translate(-50%, 0); }
   .chat-banner-text { font-size: 0.86rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat-list { display: flex; flex-direction: column; }
-  .chat-item { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 10px 2px; font: inherit; color: var(--ink); cursor: pointer; }
+  .chat-item { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 8px 2px; font: inherit; color: var(--ink); cursor: pointer; }
   .chat-item:last-child { border-bottom: 0; }
+  .chat-list .chat-item.fold { display: none; }
+  .chat-list.open .chat-item.fold { display: flex; }
+  .chat-more { display: block; width: 100%; border: 0; border-top: 1px dashed var(--line); background: none; padding: 9px 0 3px; font: inherit; font-size: 0.84rem; color: var(--muted); cursor: pointer; }
   .chat-item-mid { flex: 1; min-width: 0; }
   .chat-item-name { font-weight: 700; font-size: 0.95rem; }
   .chat-item-prev { font-size: 0.84rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
@@ -983,7 +986,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-429';
+  var APP_VERSION = '2026-10-10-430';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6517,6 +6520,7 @@
       if (Date.now() - firedAt < 700) { e.stopPropagation(); e.preventDefault(); }
     }, true);
   })();
+  var CHAT_LIST_SHOW = 3, chatListOpen = false;   /* 대화방 목록: 처음 보이는 개수 / 펼침 상태 */
   function chatRoomsHtml(state, me) {
     if (!me) return '';
     var ids = {};
@@ -6528,21 +6532,27 @@
       return { o: o, last: last, at: last ? last.at : '', alive: alive, un: dmUnreadFrom(state, me.id, o), live: canViewContactOf(state, me.id, o) };
     }).filter(function (x) { return x.live || x.last; });
     if (!rows.length) return '';
-    rows.sort(function (a, b) { return (b.at || '').localeCompare(a.at || ''); });
+    rows.sort(function (a, b) { return (b.live - a.live) || (b.at || '').localeCompare(a.at || ''); });   /* 지난 대화는 맨 아래 */
     var total = rows.reduce(function (n, x) { return n + x.un; }, 0);
+    /* 많으면 최근 3개 + 안 읽은 방만 보이고 나머지는 '더 보기'로 접음 (지난 대화는 늘 접힘) */
+    var shown = 0;
+    rows.forEach(function (x) { x.fold = rows.length > CHAT_LIST_SHOW + 1 && !x.un && (!x.live || shown >= CHAT_LIST_SHOW); if (!x.fold) shown++; });
+    var nFold = rows.filter(function (x) { return x.fold; }).length;
     return '<div class="mine-section">' +
       '<h3>💬 채팅' + (total ? '<span class="count blink">' + total + '</span>' : '<span class="count">' + rows.length + '</span>') + '</h3>' +
       '<p class="sub" style="margin:-4px 0 4px;font-size:0.76rem;">길게 누르거나(폰) 오른쪽 클릭(PC)하면 대화 지우기</p>' +
-      '<div class="chat-list">' + rows.map(function (x) {
+      '<div class="chat-list' + (chatListOpen ? ' open' : '') + '">' + rows.map(function (x) {
         var nick = x.alive ? nickForEntry(state, x.o) : '(탈퇴한 회원)';
         var prev = x.last ? ((x.last.fromId === me.id ? '나: ' : '') + x.last.text) : '대화가 연결됐어요. 먼저 인사해 보세요 👋';
-        return '<button type="button" class="chat-item" data-action="dm-chat" data-id="' + escapeHtml(x.o) + '">' +
+        return '<button type="button" class="chat-item' + (x.fold ? ' fold' : '') + '" data-action="dm-chat" data-id="' + escapeHtml(x.o) + '">' +
           '<div class="chat-av big" style="background:' + avatarColor(x.o) + ';">' + escapeHtml(initials(nick)) + '</div>' +
           '<div class="chat-item-mid"><div class="chat-item-name">' + escapeHtml(nick) + (x.live ? '' : ' <span style="font-weight:400;color:var(--muted);font-size:0.76rem;">지난 대화</span>') + '</div>' +
             '<div class="chat-item-prev">' + escapeHtml(prev) + '</div></div>' +
           '<div class="chat-item-right"><div class="chat-item-time">' + escapeHtml(chatListTime(x.at)) + '</div>' + (x.un ? '<div class="chat-item-badge">' + (x.un > 99 ? '99+' : x.un) + '</div>' : '') + '</div>' +
         '</button>';
-      }).join('') + '</div></div>';
+      }).join('') + '</div>' +
+      (nFold ? '<button type="button" class="chat-more" data-action="chat-more">' + (chatListOpen ? '▴ 접기' : '▾ 대화 ' + nFold + '개 더 보기') + '</button>' : '') +
+      '</div>';
   }
   function connectionsSummaryHtml(state, me) {
     if (!me) return '';
@@ -11450,6 +11460,13 @@
       }
       else if (action === 'reveal-mine') handleRevealMine(id);
       else if (action === 'dm-chat') openDmChat(id);
+      else if (action === 'chat-more') {
+        chatListOpen = !chatListOpen;
+        var cl = actionBtn.parentNode && actionBtn.parentNode.querySelector('.chat-list');
+        if (cl) cl.classList.toggle('open', chatListOpen);
+        var nf = cl ? cl.querySelectorAll('.chat-item.fold').length : 0;
+        actionBtn.textContent = chatListOpen ? '▴ 접기' : '▾ 대화 ' + nf + '개 더 보기';
+      }
       else if (action === 'report-view') { if (isAdminUnlocked) openReportedChat(id); }
       else if (action === 'sup-add') { openSupporterAdd(); return; }
       else if (action === 'sup-preview') { previewSupporters(); return; }
