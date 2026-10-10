@@ -1028,7 +1028,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-435';
+  var APP_VERSION = '2026-10-10-436';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6769,7 +6769,7 @@
   function showMinePane(k) {
     mineTab = k;
     var ts = document.querySelectorAll('.mine-tab'), ps = document.querySelectorAll('.mine-pane');
-    for (var i = 0; i < ts.length; i++) ts[i].classList.toggle('on', ts[i].getAttribute('data-tab') === k);
+    for (var i = 0; i < ts.length; i++) ts[i].classList.toggle('on', ts[i].getAttribute('data-mtab') === k);
     for (var j = 0; j < ps.length; j++) ps[j].classList.toggle('on', ps[j].getAttribute('data-pane') === k);
   }
   function mineTabsHtml(state, me, pd, restoreHtml) {
@@ -6794,7 +6794,7 @@
     };
     return '<div class="mine-tabs" role="tablist">' + tabs.map(function (t) {
         var badge = t.todo ? '<span class="mt-badge">' + (t.todo > 99 ? '99+' : t.todo) + '</span>' : (t.n ? '<span class="mt-n">' + t.n + '</span>' : '');
-        return '<button type="button" class="mine-tab' + (t.k === cur ? ' on' : '') + '" data-action="mine-tab" data-tab="' + t.k + '" role="tab">' +
+        return '<button type="button" class="mine-tab' + (t.k === cur ? ' on' : '') + '" data-action="mine-tab" data-mtab="' + t.k + '" role="tab">' +
           '<span class="mt-ic">' + t.ic + '</span><span class="mt-t">' + t.t + '</span>' + badge + '</button>';
       }).join('') + '</div>' +
       tabs.map(function (t) { return '<div class="mine-pane' + (t.k === cur ? ' on' : '') + '" data-pane="' + t.k + '">' + panes[t.k] + '</div>'; }).join('');
@@ -11640,7 +11640,7 @@
       }
       else if (action === 'reveal-mine') handleRevealMine(id);
       else if (action === 'dm-chat') openDmChat(id);
-      else if (action === 'mine-tab') showMinePane(actionBtn.getAttribute('data-tab'));
+      else if (action === 'mine-tab') showMinePane(actionBtn.getAttribute('data-mtab'));
       else if (action === 'conn-toggle') {
         var crow = actionBtn.closest('.conn-row');
         if (crow) {
