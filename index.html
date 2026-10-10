@@ -871,7 +871,8 @@
   .mine-pane .req-fold.req-need { background: var(--gold-soft); border-radius: 10px; border-bottom-color: transparent; margin: 2px 0; }
   .mine-pane .req-fold > summary { padding: 8px 2px; gap: 10px; overflow: visible; }
   .mine-pane .req-fold.req-need > summary { padding: 8px 8px; }
-  .mine-pane .req-fold-body { padding: 0 2px 12px 46px; }
+  .mine-pane .req-fold-body { padding: 0 2px 12px; }
+  .mine-pane .req-fold.req-need .req-fold-body { padding: 0 8px 12px; }
   .req-fold > summary > .req-mid { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
   .req-mid .req-sum-who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .req-sub { font-size: 0.76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
@@ -918,7 +919,7 @@
   .conn-caret { flex: none; font-size: 0.7rem; color: var(--muted); transition: transform .15s; }
   .conn-row.open .conn-caret { transform: rotate(180deg); }
   .conn-chat { flex: none; border: 1px solid #f6c1d6; background: #ffe3ef; color: #c2185b; border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 0.85rem; cursor: pointer; }
-  .conn-detail { display: none; gap: 5px; flex-wrap: wrap; padding: 0 0 10px 48px; }
+  .conn-detail { display: none; gap: 5px; flex-wrap: wrap; padding: 0 2px 10px; }
   .conn-row.open .conn-detail { display: flex; }
   .chat-list.open .chat-item.fold { display: flex; }
   .chat-more { display: block; width: 100%; border: 0; border-top: 1px dashed var(--line); background: none; padding: 9px 0 3px; font: inherit; font-size: 0.84rem; color: var(--muted); cursor: pointer; }
@@ -1028,7 +1029,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-437';
+  var APP_VERSION = '2026-10-10-438';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6414,7 +6415,7 @@
     }
     /* 받은 사진 요청: 상대가 자기 사진을 공개함 → 나는 명단에서 그 사람 사진을 볼 수 있음 */
     if (incoming && isPhoto && r.fromRevealed) {
-      revealMine += '<div class="mine-note" style="color:#137333;">📷 상대가 사진을 공개했어요! 명단에서 이 분의 사진을 볼 수 있어요.</div>';
+      revealMine += '<div class="mine-note" style="color:#137333;">📷 상대도 사진을 공개했어요.</div>';
     }
     /* 대화 신청(구 번호 요청)이 수락됨 → 채팅 버튼 (번호 대신 앱 내 채팅) */
     var chatBtn = '';
@@ -6723,8 +6724,8 @@
               (c.at && c.at > newSince ? '<span class="conn-new" title="3일 안에 새로 연결됐어요">새</span>' : '') + '</span>' +
               '<span class="conn-st">' + stLong + '</span></span>' +
           '</button>' +
-          '<button type="button" class="conn-fav' + (c.fav ? ' on' : '') + '" data-action="conn-fav" data-id="' + id + '" title="즐겨찾기 (맨 위에 고정)">' + (c.fav ? '★' : '☆') + '</button>' +
           (c.chat ? '<button type="button" class="conn-chat" data-action="dm-chat" data-id="' + id + '" title="대화하기">💬' + (c.un ? '<span class="count blink">' + c.un + '</span>' : '') + '</button>' : '') +
+          '<button type="button" class="conn-fav' + (c.fav ? ' on' : '') + '" data-action="conn-fav" data-id="' + id + '" title="즐겨찾기 (맨 위에 고정)">' + (c.fav ? '★' : '☆') + '</button>' +
         '</div>' +
         '<div class="conn-detail">' +
           '<button type="button" class="card-btn" data-action="card-detail" data-id="' + id + '" style="flex:none;padding:4px 9px;font-size:0.78rem;">👤 프로필</button>' +
