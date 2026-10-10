@@ -855,6 +855,26 @@
   .chat-row.mine { flex-direction: column; align-items: flex-end; }
   .chat-av { width: 34px; height: 34px; border-radius: 50%; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; flex: none; }
   .chat-av.big { width: 40px; height: 40px; font-size: 1rem; }
+  .chat-av.md { width: 36px; height: 36px; font-size: 0.95rem; }
+  .mine-tabs { display: flex; gap: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 4px; margin: 6px 0 12px; }
+  .mine-tab { flex: 1; min-width: 0; position: relative; border: 0; background: none; border-radius: 10px; padding: 6px 2px 5px; font: inherit; color: var(--muted); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .mine-tab .mt-ic { font-size: 1.05rem; line-height: 1.25; }
+  .mine-tab .mt-t { font-size: 0.76rem; white-space: nowrap; }
+  .mine-tab.on { background: var(--paper); color: var(--ink); font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,0.10); }
+  .mine-tab .mt-badge { position: absolute; top: 2px; right: 4px; background: var(--accent); color: #fff; font-size: 0.66rem; font-weight: 700; min-width: 17px; height: 17px; border-radius: 9px; display: flex; align-items: center; justify-content: center; padding: 0 4px; box-sizing: border-box; }
+  .mine-tab .mt-n { position: absolute; top: 3px; right: 7px; font-size: 0.66rem; color: var(--muted); font-weight: 400; }
+  .mine-pane { display: none; }
+  .mine-pane.on { display: block; }
+  .mine-empty { margin: 18px 0; text-align: center; line-height: 1.7; }
+  .mine-pane .req-fold { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; margin: 0; background: none; }
+  .mine-pane .req-fold:last-child { border-bottom: 0; }
+  .mine-pane .req-fold.req-need { background: var(--gold-soft); border-radius: 10px; border-bottom-color: transparent; margin: 2px 0; }
+  .mine-pane .req-fold > summary { padding: 8px 2px; gap: 10px; overflow: visible; }
+  .mine-pane .req-fold.req-need > summary { padding: 8px 8px; }
+  .mine-pane .req-fold-body { padding: 0 2px 12px 46px; }
+  .req-fold > summary > .req-mid { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+  .req-mid .req-sum-who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .req-sub { font-size: 0.76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
   .chat-av-sp { width: 34px; flex: none; }
   .chat-col { display: flex; flex-direction: column; min-width: 0; max-width: 78%; }
   .chat-name { font-size: 0.76rem; color: var(--muted); margin: 0 0 3px 2px; }
@@ -889,14 +909,16 @@
   .conn-line { display: flex; align-items: center; gap: 4px; min-height: 42px; }
   .conn-fav { flex: none; border: 0; background: none; font-size: 1.1rem; color: var(--muted); opacity: .45; padding: 4px 6px; cursor: pointer; }
   .conn-fav.on { color: var(--gold); opacity: 1; }
-  .conn-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: 0; background: none; padding: 6px 2px; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
-  .conn-nick { font-weight: 700; font-size: 0.93rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .conn-new { flex: none; font-size: 0.68rem; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
-  .conn-st { margin-left: auto; flex: none; font-size: 0.76rem; color: var(--muted); white-space: nowrap; }
+  .conn-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: none; padding: 8px 2px; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+  .conn-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .conn-nick { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 700; font-size: 0.93rem; }
+  .conn-nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conn-new { flex: none; font-size: 0.68rem; font-weight: 400; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
+  .conn-st { font-size: 0.76rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
   .conn-caret { flex: none; font-size: 0.7rem; color: var(--muted); transition: transform .15s; }
   .conn-row.open .conn-caret { transform: rotate(180deg); }
   .conn-chat { flex: none; border: 1px solid #f6c1d6; background: #ffe3ef; color: #c2185b; border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 0.85rem; cursor: pointer; }
-  .conn-detail { display: none; gap: 5px; flex-wrap: wrap; padding: 0 0 9px 34px; }
+  .conn-detail { display: none; gap: 5px; flex-wrap: wrap; padding: 0 0 10px 48px; }
   .conn-row.open .conn-detail { display: flex; }
   .chat-list.open .chat-item.fold { display: flex; }
   .chat-more { display: block; width: 100%; border: 0; border-top: 1px dashed var(--line); background: none; padding: 9px 0 3px; font: inherit; font-size: 0.84rem; color: var(--muted); cursor: pointer; }
@@ -1006,7 +1028,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-434';
+  var APP_VERSION = '2026-10-10-435';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1883,6 +1905,8 @@
     setTimeout(function () {
       try {
         var el = focusId ? document.querySelector('[data-rid="' + focusId + '"], [data-id="' + focusId + '"], [data-eid="' + focusId + '"], [data-cid="' + focusId + '"]') : null;
+        var _pane = el && el.closest ? el.closest('.mine-pane') : null;
+        if (_pane && !_pane.classList.contains('on')) showMinePane(_pane.getAttribute('data-pane'));
         if (el && el.tagName === 'DETAILS') {
           el.open = true;
           var sec = el.parentNode && el.parentNode.closest ? el.parentNode.closest('details') : null;   // 접힌 '보낸 요청' 묶음도 펼친다
@@ -6416,10 +6440,11 @@
       replyMsg + actions + chatBtn + revealMine;
     return (
       '<details class="req-fold' + (needAction ? ' req-need' : '') + '" data-rid="' + escapeHtml(r.id) + '"' + (needAction ? ' open' : '') + '>' +
-        '<summary>' + typeBadge +
-          '<span class="req-sum-who">' + escapeHtml(otherLabel) + '</span>' +
+        '<summary>' +
+          '<div class="chat-av md" style="background:' + avatarColor(otherId) + ';">' + escapeHtml(initials(other ? other.nickname : '?')) + '</div>' +
+          '<span class="req-mid"><span class="req-sum-who">' + escapeHtml(otherLabel) + '</span>' +
+            '<span class="req-sub">' + (isPhoto ? '📷 사진 요청' : '💌 대화 요청') + ' · ' + escapeHtml(fmtDate(r.submittedAt)) + (other && other.deactivated ? ' · 💤 상대 휴면 중' : '') + '</span></span>' +
           statusChip(st) +
-          '<span class="req-sum-when">' + fmtDate(r.submittedAt) + '</span>' +
         '</summary>' +
         '<div class="req-fold-body">' + body + '</div>' +
       '</details>'
@@ -6603,7 +6628,7 @@
     }, true);
   })();
   var CHAT_LIST_SHOW = 3, chatListOpen = false;   /* 대화방 목록: 처음 보이는 개수 / 펼침 상태 */
-  function chatRoomsHtml(state, me) {
+  function chatRoomsHtml(state, me, bare) {
     if (!me) return '';
     var ids = {};
     myChatRooms(me.id).forEach(function (r) { var o = (r.members || []).filter(function (id) { return id !== me.id; })[0]; if (o) ids[o] = 1; });
@@ -6613,21 +6638,21 @@
       var alive = (state.entries || []).some(function (e) { return e.id === o; });
       return { o: o, last: last, at: last ? last.at : '', alive: alive, un: dmUnreadFrom(state, me.id, o), live: canViewContactOf(state, me.id, o) };
     }).filter(function (x) { return x.live || x.last; });
-    if (!rows.length) return '';
+    if (!rows.length) return bare ? '<p class="sub mine-empty">아직 대화가 없어요.<br>대화 요청이 승인되면 여기서 이야기할 수 있어요.</p>' : '';
     rows.sort(function (a, b) { return (b.live - a.live) || (b.at || '').localeCompare(a.at || ''); });   /* 지난 대화는 맨 아래 */
     var total = rows.reduce(function (n, x) { return n + x.un; }, 0);
     /* 많으면 최근 3개 + 안 읽은 방만 보이고 나머지는 '더 보기'로 접음 (지난 대화는 늘 접힘) */
     var shown = 0;
-    rows.forEach(function (x) { x.fold = rows.length > CHAT_LIST_SHOW + 1 && !x.un && (!x.live || shown >= CHAT_LIST_SHOW); if (!x.fold) shown++; });
+    rows.forEach(function (x) { x.fold = !bare && rows.length > CHAT_LIST_SHOW + 1 && !x.un && (!x.live || shown >= CHAT_LIST_SHOW); if (!x.fold) shown++; });
     var nFold = rows.filter(function (x) { return x.fold; }).length;
     return '<div class="mine-section">' +
-      '<h3>💬 채팅' + (total ? '<span class="count blink">' + total + '</span>' : '<span class="count">' + rows.length + '</span>') + '</h3>' +
+      (bare ? '' : '<h3>💬 채팅' + (total ? '<span class="count blink">' + total + '</span>' : '<span class="count">' + rows.length + '</span>') + '</h3>') +
       '<p class="sub" style="margin:-4px 0 4px;font-size:0.76rem;">길게 누르거나(폰) 오른쪽 클릭(PC)하면 대화 지우기</p>' +
       '<div class="chat-list' + (chatListOpen ? ' open' : '') + '">' + rows.map(function (x) {
         var nick = x.alive ? nickForEntry(state, x.o) : '(탈퇴한 회원)';
         var prev = x.last ? ((x.last.fromId === me.id ? '나: ' : '') + x.last.text) : '대화가 연결됐어요. 먼저 인사해 보세요 👋';
         return '<button type="button" class="chat-item' + (x.fold ? ' fold' : '') + '" data-action="dm-chat" data-id="' + escapeHtml(x.o) + '">' +
-          '<div class="chat-av big" style="background:' + avatarColor(x.o) + ';">' + escapeHtml(initials(nick)) + '</div>' +
+          '<div class="chat-av md" style="background:' + avatarColor(x.o) + ';">' + escapeHtml(initials(nick)) + '</div>' +
           '<div class="chat-item-mid"><div class="chat-item-name">' + escapeHtml(nick) + (x.live ? '' : ' <span style="font-weight:400;color:var(--muted);font-size:0.76rem;">지난 대화</span>') + '</div>' +
             '<div class="chat-item-prev">' + escapeHtml(prev) + '</div></div>' +
           '<div class="chat-item-right"><div class="chat-item-time">' + escapeHtml(chatListTime(x.at)) + '</div>' + (x.un ? '<div class="chat-item-badge">' + (x.un > 99 ? '99+' : x.un) + '</div>' : '') + '</div>' +
@@ -6657,7 +6682,7 @@
     var more = box.parentNode.querySelector('[data-action="conn-more"]'); if (more) more.style.display = q ? 'none' : '';
     var empty = box.parentNode.querySelector('.conn-empty'); if (empty) empty.style.display = q && !shown ? '' : 'none';
   }
-  function connectionsSummaryHtml(state, me) {
+  function connectionsSummaryHtml(state, me, bare) {
     if (!me) return '';
     var others = (state.entries || []).filter(function (x) { return x.id !== me.id && !x.isMatchmaker; });
     var favs = connFavs(me.id);
@@ -6676,12 +6701,13 @@
       return { x: x, iSee: iSee, theySee: theySee, chat: chat, fav: !!favs[x.id], un: chat ? dmUnreadFrom(state, me.id, x.id) : 0, at: linkedAt[x.id] || '' };
     }).filter(Boolean);
     list.sort(function (a, b) { return (b.fav - a.fav) || ((b.un > 0) - (a.un > 0)) || b.at.localeCompare(a.at); });
-    var many = list.length > CONN_SHOW + 2, shownN = 0;
+    var many = !bare && list.length > CONN_SHOW + 2, shownN = 0;
     var rows = list.map(function (c) {
       var x = c.x, id = escapeHtml(x.id);
       var fold = many && !c.fav && !c.un && shownN >= CONN_SHOW;
       if (!fold) shownN++;
       var st = (c.iSee && c.theySee) ? '📷 서로' : (c.theySee ? '📤 내 사진만' : (c.iSee ? '📥 상대 사진만' : ''));
+      var stLong = ((c.iSee && c.theySee) ? '📷 서로 사진 공개' : (c.theySee ? '📤 내 사진만 공개' : (c.iSee ? '📥 상대 사진만 공개' : ''))) + (c.chat ? ((c.iSee || c.theySee) ? ' · ' : '') + '💬 대화 연결' : '');
       function btn(active, label, action, extra) {
         var cls = 'card-btn' + (active ? ' approve' : '');
         var style = 'flex:none;padding:4px 9px;font-size:0.78rem;' + (active ? '' : 'opacity:.38;');
@@ -6691,13 +6717,14 @@
       var pink = 'flex:none;padding:4px 9px;font-size:0.78rem;background:#ffe3ef;color:#c2185b;border-color:#f6c1d6;';
       return '<div class="conn-row' + (fold ? ' fold' : '') + (connOpen[x.id] ? ' open' : '') + '" data-id="' + id + '" data-csearch="' + escapeHtml((x.nickname || '').toLowerCase()) + '">' +
         '<div class="conn-line">' +
-          '<button type="button" class="conn-fav' + (c.fav ? ' on' : '') + '" data-action="conn-fav" data-id="' + id + '" title="즐겨찾기 (맨 위에 고정)">' + (c.fav ? '★' : '☆') + '</button>' +
           '<button type="button" class="conn-main" data-action="conn-toggle" data-id="' + id + '">' +
-            '<span class="conn-nick">' + escapeHtml(x.nickname) + '</span>' +
-            (c.at && c.at > newSince ? '<span class="conn-new" title="3일 안에 새로 연결됐어요">새</span>' : '') +
-            '<span class="conn-st">' + st + '</span>' +
+            '<div class="chat-av md" style="background:' + avatarColor(x.id) + ';">' + escapeHtml(initials(x.nickname)) + '</div>' +
+            '<span class="conn-txt"><span class="conn-nick"><span class="conn-nm">' + escapeHtml(x.nickname) + '</span>' +
+              (c.at && c.at > newSince ? '<span class="conn-new" title="3일 안에 새로 연결됐어요">새</span>' : '') + '</span>' +
+              '<span class="conn-st">' + stLong + '</span></span>' +
             '<span class="conn-caret">▾</span>' +
           '</button>' +
+          '<button type="button" class="conn-fav' + (c.fav ? ' on' : '') + '" data-action="conn-fav" data-id="' + id + '" title="즐겨찾기 (맨 위에 고정)">' + (c.fav ? '★' : '☆') + '</button>' +
           (c.chat ? '<button type="button" class="conn-chat" data-action="dm-chat" data-id="' + id + '" title="대화하기">💬' + (c.un ? '<span class="count blink">' + c.un + '</span>' : '') + '</button>' : '') +
         '</div>' +
         '<div class="conn-detail">' +
@@ -6719,7 +6746,7 @@
       var other = (r.members || []).filter(function (id) { return id !== me.id; })[0];
       return other && !canViewContactOf(state, me.id, other) && dmThread(state, me.id, other).length;
     });
-    if (pastRooms.length) {
+    if (!bare && pastRooms.length) {   /* 탭 모드에선 '대화' 탭이 지난 대화도 보여 줌 */
       body += '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);">' +
         '<div class="sub" style="margin:0 0 6px;font-size:0.8rem;">📁 지난 대화 (연결 해제·탈퇴한 상대, 읽기 전용)</div>' +
         pastRooms.map(function (r) {
@@ -6730,11 +6757,47 @@
             escapeHtml(alive ? nickForEntry(state, other) : '(탈퇴한 회원)') + (un ? ' <span class="count blink">' + un + '</span>' : '') + '</button>';
         }).join('') + '</div>';
     }
+    var hint = '<p class="sub" style="margin:0 0 6px;font-size:0.8rem;">사진·대화 권한이 있는 상대예요. 줄을 누르면 프로필·회수 버튼이 나오고, ☆ 즐겨찾기는 맨 위에 고정돼요(이 기기에만 저장).</p>';
+    if (bare) return '<div class="mine-section">' + (rows.length ? hint + body : '<p class="sub mine-empty">아직 연결된 사람이 없어요.<br>사진·대화 요청이 승인되면 여기 모여요.</p>') + '</div>';
     return '<details class="mine-section" id="conn-sec"' + (connSecOpen ? ' open' : '') + '>' +
         '<summary style="cursor:pointer;font-weight:700;list-style:revert;">🔗 내 연결<span class="count">' + rows.length + '</span></summary>' +
-        '<p class="sub" style="margin:0 0 6px;">사진·대화 권한이 있는 상대예요. 줄을 누르면 프로필·회수 버튼, ☆는 즐겨찾기(맨 위 고정, 이 기기에만 저장).</p>' +
-        body +
+        hint + body +
       '</details>';
+  }
+  /* 메시지함 탭: 한 번에 하나만 보여 구분이 확실하고 화면이 짧음. 숫자 = 할 일(안 읽은 대화·응답 필요) */
+  var mineTab = null, mineTabFor = '';
+  function showMinePane(k) {
+    mineTab = k;
+    var ts = document.querySelectorAll('.mine-tab'), ps = document.querySelectorAll('.mine-pane');
+    for (var i = 0; i < ts.length; i++) ts[i].classList.toggle('on', ts[i].getAttribute('data-tab') === k);
+    for (var j = 0; j < ps.length; j++) ps[j].classList.toggle('on', ps[j].getAttribute('data-pane') === k);
+  }
+  function mineTabsHtml(state, me, pd, restoreHtml) {
+    if (mineTabFor !== me.id) { mineTab = null; mineTabFor = me.id; }   /* 프로필 바꾸면 다시 자동 선택 */
+    var pin = pd['in'] || { n: 0, need: 0, html: '' }, pout = pd.out || { n: 0, need: 0, html: '' };
+    var chatUn = chatUnreadTotal(state, me);
+    var connHtml = connectionsSummaryHtml(state, me, true);
+    var connN = (connHtml.match(/class="conn-row/g) || []).length;
+    var cur = mineTab || (pin.need ? 'in' : (chatUn ? 'chat' : (pout.need ? 'out' : 'chat')));
+    var tabs = [
+      { k: 'chat', ic: '💬', t: '대화', todo: chatUn, n: 0 },
+      { k: 'in', ic: '📥', t: '받은 요청', todo: pin.need, n: pin.n },
+      { k: 'out', ic: '📤', t: '보낸 요청', todo: pout.need, n: pout.n },
+      { k: 'conn', ic: '🔗', t: '내 연결', todo: 0, n: connN }
+    ];
+    var panes = {
+      chat: chatRoomsHtml(state, me, true),
+      'in': '<div class="mine-section">' + (pin.n ? pin.html : '<p class="sub mine-empty">아직 받은 요청이 없어요.</p>') +
+        '<p class="sub" style="margin:10px 0 0;font-size:0.76rem;">승인한 요청은 3일 뒤 🔗 내 연결로 옮겨져요.</p></div>' + restoreHtml,
+      out: '<div class="mine-section">' + (pout.n ? pout.html : '<p class="sub mine-empty">아직 보낸 요청이 없어요.<br>명단에서 마음에 드는 분께 요청해 보세요.</p>') + '</div>' + restoreHtml,
+      conn: connHtml
+    };
+    return '<div class="mine-tabs" role="tablist">' + tabs.map(function (t) {
+        var badge = t.todo ? '<span class="mt-badge">' + (t.todo > 99 ? '99+' : t.todo) + '</span>' : (t.n ? '<span class="mt-n">' + t.n + '</span>' : '');
+        return '<button type="button" class="mine-tab' + (t.k === cur ? ' on' : '') + '" data-action="mine-tab" data-tab="' + t.k + '" role="tab">' +
+          '<span class="mt-ic">' + t.ic + '</span><span class="mt-t">' + t.t + '</span>' + badge + '</button>';
+      }).join('') + '</div>' +
+      tabs.map(function (t) { return '<div class="mine-pane' + (t.k === cur ? ' on' : '') + '" data-pane="' + t.k + '">' + panes[t.k] + '</div>'; }).join('');
   }
   function renderMine(state) {
     var me = findMyEntry(state);
@@ -6835,6 +6898,7 @@
       return '<div class="admin-panel">' + mmHome + selfNote + '</div>';
     }
     var reqs = state.dateRequests || [];
+    var paneData = {};   /* 탭용: 받은/보낸 요청 목록·개수·응답 필요 수 */
     var groups = [
       { key: 'in', title: '📥 받은 요청', incoming: true },
       { key: 'out', title: '📤 보낸 요청', incoming: false }
@@ -6859,6 +6923,7 @@
       var inner = items.length
         ? items.map(function (r) { return reqRowHtml(r, state, g.incoming); }).join('')
         : '<p class="sub" style="margin:0;">아직 없어요.</p>';
+      paneData[g.key] = { n: items.length, need: needCnt, html: inner };
       /* 5개 초과면 스크롤 */
       var body = items.length > 5
         ? '<div style="max-height:300px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + inner + '</div>'
@@ -6875,7 +6940,9 @@
     }).join('');
     /* 숨긴(내역 삭제한) 요청 복구 — 삭제는 완전삭제가 아니라 숨김이라 되돌릴 수 있음 */
     var _hiddenMine = reqs.filter(function (r) { return (r.fromId === me.id || r.toId === me.id) && (r.hiddenBy || []).indexOf(me.id) >= 0; }).length;
-    if (_hiddenMine) sections += '<div class="mine-section" style="text-align:right;padding:2px 0;"><button type="button" class="card-btn" data-action="restore-hidden" style="flex:none;background:var(--card);color:var(--muted);font-size:0.82rem;">🗑 숨긴 내역 ' + _hiddenMine + '건 복구</button></div>';
+    var restoreHtml = _hiddenMine ? '<div class="mine-section" style="text-align:right;padding:2px 0;"><button type="button" class="card-btn" data-action="restore-hidden" style="flex:none;background:var(--card);color:var(--muted);font-size:0.82rem;">🗑 숨긴 내역 ' + _hiddenMine + '건 복구</button></div>' : '';
+    sections += restoreHtml;
+    var tabsHtml = mineTabsHtml(state, me, paneData, restoreHtml);   /* 💬 대화 · 📥 받은 · 📤 보낸 · 🔗 내 연결 탭 (2026-10-10) */
     var thread = threadFor(state, me.id, 'user');
     var hasUnreadAdmin = thread.some(function (m) { return m.from === 'admin' && (m.at || '') > (me.mineSeenAt || ''); });
     var msgBody = thread.length
@@ -6904,9 +6971,7 @@
           '</div>' +
           '<div class="my-uid">고유번호 ' + escapeHtml(formatUid(me) || '—') + '</div>' +
           '<p class="sub">내 소개팅 프로필로 받고 보낸 요청이에요.</p>' +
-          chatRoomsHtml(state, me) +
-          sections +
-          connectionsSummaryHtml(state, me) +
+          tabsHtml +
         '</div>'
       );
     }
@@ -6956,9 +7021,7 @@
         (me.deactivated ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">🗄 <b>보관 상태</b>예요 (명단에 노출되지 않아요). 복구는 상단 <b>💬 Q&amp;A</b>로 문의하거나 카카오톡으로 요청해 주세요.</div>' : '') +
         (isSubProfile ? '' : msgSection) + /* 관리자 메시지를 맨 위로 */
         (isSubProfile ? '' : joinRequestSectionHtml(state, false)) + /* 나에게 온 주선자 요청 있으면 표시 */
-        chatRoomsHtml(state, me) + /* 💬 채팅 대화방 목록 (카톡처럼 맨 위쪽) */
-        sections +
-        connectionsSummaryHtml(state, me) +
+        tabsHtml +
       '</div>'
     );
   }
@@ -11577,6 +11640,7 @@
       }
       else if (action === 'reveal-mine') handleRevealMine(id);
       else if (action === 'dm-chat') openDmChat(id);
+      else if (action === 'mine-tab') showMinePane(actionBtn.getAttribute('data-tab'));
       else if (action === 'conn-toggle') {
         var crow = actionBtn.closest('.conn-row');
         if (crow) {
