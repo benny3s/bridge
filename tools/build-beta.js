@@ -32,6 +32,9 @@ function rep(re, to, label) {
   if (h === before) throw new Error('바꿀 곳을 못 찾음: ' + label);
 }
 
+/* 0) 지역 기능 스위치: 베타는 켬. ZONES_OFF=1 이면 운영과 같은 상태(끔)로 — 운영 미리보기용 */
+if (!process.env.ZONES_OFF) h = h.replace('var ZONES_ON = false;', 'var ZONES_ON = true;');
+
 /* 1) Firebase 접속 설정 → 베타 */
 rep(/var firebaseConfig = \{[\s\S]*?\};/, 'var firebaseConfig = ' + JSON.stringify(BETA, null, 4).replace(/\n/g, '\n  ') + ';', 'firebaseConfig');
 
