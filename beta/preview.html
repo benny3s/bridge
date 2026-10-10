@@ -843,7 +843,10 @@
   .chat-who { flex: 1; min-width: 0; border: 0; background: none; text-align: left; font: inherit; color: var(--ink); cursor: pointer; padding: 2px 4px; }
   .chat-title { font-weight: 700; font-size: 1.02rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat-status { font-size: 0.74rem; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chat-icon { border: 0; background: none; font-size: 1.5rem; line-height: 1; padding: 2px 10px; color: var(--ink); cursor: pointer; }
+  .chat-icon { border: 0; background: none; font-size: 1.5rem; line-height: 1; padding: 2px 10px; color: var(--ink); cursor: pointer; min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+  .chat-back { font-size: 0.95rem; font-weight: 700; gap: 2px; padding: 0 12px 0 6px; border-radius: 999px; }
+  .chat-back b { font-size: 1.9rem; font-weight: 400; line-height: 1; margin-top: -3px; }
+  .chat-back:active { background: var(--gold-soft); }
   .chat-notice { font-size: 0.78rem; color: var(--ink); background: var(--gold-soft); border-bottom: 1px solid var(--line); padding: 6px 12px; }
   .chat-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px 12px 12px; overscroll-behavior: contain; }
   .chat-empty { text-align: center; color: var(--muted); font-size: 0.9rem; margin-top: 40px; line-height: 1.7; }
@@ -1003,7 +1006,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-432';
+  var APP_VERSION = '2026-10-10-433';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4552,7 +4555,7 @@
     scr.innerHTML =
       '<div class="chat-wrap">' +
         '<div class="chat-head">' +
-          '<button type="button" class="chat-icon" id="chat-back" aria-label="뒤로">‹</button>' +
+          '<button type="button" class="chat-icon chat-back" id="chat-back" aria-label="뒤로"><b>‹</b>목록</button>' +
           '<button type="button" class="chat-who" id="chat-who"' + (otherAlive ? '' : ' disabled') + '><div class="chat-title">' + escapeHtml(otherNick) + '</div><div class="chat-status" id="chat-status"></div></button>' +
           '<button type="button" class="chat-icon" id="chat-menu" aria-label="메뉴">⋯</button>' +
         '</div>' +
@@ -4616,6 +4619,7 @@
       if (!scr.parentNode) return;
       _openChatRedraw = null; _openChatWith = null; _openChatClose = null;
       document.removeEventListener('visibilitychange', onVisible);
+      document.removeEventListener('keydown', onKey);
       scr.remove();
       popOverlay(scr);
       paint(currentState);
@@ -4626,6 +4630,19 @@
     function onVisible() { if (!document.hidden) markDmSeen(me.id, otherId); }
     document.addEventListener('visibilitychange', onVisible);
     scr.querySelector('#chat-back').addEventListener('click', close);
+    /* 넓은 화면: 대화창 바깥(어두운 곳)을 누르면 닫힘 · Esc 로 닫힘 */
+    scr.addEventListener('click', function (e) { if (e.target === scr) close(); });
+    function onKey(e) { if (e.key === 'Escape' && !document.querySelector('.modal-overlay')) close(); }
+    document.addEventListener('keydown', onKey);
+    /* 폰: 화면 왼쪽 끝에서 오른쪽으로 밀면 닫힘 (홈 화면 앱엔 브라우저 뒤로 밀기가 없어서) */
+    var swX = null, swY = 0;
+    scr.addEventListener('touchstart', function (e) { var t = e.touches[0]; swX = (e.touches.length === 1 && t.clientX < 28) ? t.clientX : null; swY = t.clientY; }, { passive: true });
+    scr.addEventListener('touchend', function (e) {
+      if (swX === null) return;
+      var t = e.changedTouches[0];
+      if (t.clientX - swX > 70 && Math.abs(t.clientY - swY) < 60) close();
+      swX = null;
+    }, { passive: true });
     /* ⋯ 메뉴: 프로필 · 대화 지우기 · 신고 */
     scr.querySelector('#chat-menu').addEventListener('click', function () {
       var ov = openModal('<h3>💬 ' + escapeHtml(otherNick) + '</h3>' +
@@ -6571,7 +6588,7 @@
       (nFold ? '<button type="button" class="chat-more" data-action="chat-more">' + (chatListOpen ? '▴ 접기' : '▾ 대화 ' + nFold + '개 더 보기') + '</button>' : '') +
       '</div>';
   }
-  var CONN_SHOW = 6, connListOpen = false, connOpen = {}, connSearch = '';   /* 내 연결: 처음 보이는 수 / 펼침 / 펼친 줄 / 검색어 */
+  var CONN_SHOW = 6, connListOpen = false, connOpen = {}, connSearch = '', connSecOpen = true;   /* 내 연결: 처음 보이는 수 / 펼침 / 펼친 줄 / 검색어 */
   function connFavs(myId) { try { return JSON.parse(localStorage.getItem('bb-connfav:' + myId) || '{}') || {}; } catch (e) { return {}; } }
   function toggleConnFav(myId, id) {
     var f = connFavs(myId);
@@ -6665,11 +6682,11 @@
             escapeHtml(alive ? nickForEntry(state, other) : '(탈퇴한 회원)') + (un ? ' <span class="count blink">' + un + '</span>' : '') + '</button>';
         }).join('') + '</div>';
     }
-    return '<div class="mine-section">' +
-        '<h3>🔗 내 연결<span class="count">' + rows.length + '</span></h3>' +
+    return '<details class="mine-section" id="conn-sec"' + (connSecOpen ? ' open' : '') + '>' +
+        '<summary style="cursor:pointer;font-weight:700;list-style:revert;">🔗 내 연결<span class="count">' + rows.length + '</span></summary>' +
         '<p class="sub" style="margin:0 0 6px;">사진·대화 권한이 있는 상대예요. 줄을 누르면 프로필·회수 버튼, ☆는 즐겨찾기(맨 위 고정, 이 기기에만 저장).</p>' +
         body +
-      '</div>';
+      '</details>';
   }
   function renderMine(state) {
     var me = findMyEntry(state);
@@ -11514,7 +11531,13 @@
       else if (action === 'dm-chat') openDmChat(id);
       else if (action === 'conn-toggle') {
         var crow = actionBtn.closest('.conn-row');
-        if (crow) { connOpen[id] = !connOpen[id]; crow.classList.toggle('open', !!connOpen[id]); }
+        if (crow) {
+          var willOpen = !connOpen[id];
+          connOpen = {};   /* 한 번에 한 줄만 펼침 */
+          var openRows = crow.parentNode.querySelectorAll('.conn-row.open');
+          for (var oi = 0; oi < openRows.length; oi++) openRows[oi].classList.remove('open');
+          if (willOpen) { connOpen[id] = true; crow.classList.add('open'); }
+        }
       }
       else if (action === 'conn-fav') {
         var cme = currentUser ? findMyEntry(currentState) : null;
@@ -11632,6 +11655,7 @@
     }
   });
 
+  document.addEventListener('toggle', function (e) { if (e.target && e.target.id === 'conn-sec') connSecOpen = e.target.open; }, true);   /* 내 연결 접힘 상태 기억 */
   function stripNonDigits(el) { var v = el.value.replace(/[^0-9]/g, ''); if (el.value !== v) el.value = v; }
   document.body.addEventListener('input', function (e) {
     if (e.target.id === 'list-search') { listSearch = e.target.value; applyListSearch(); return; } /* paint 없이 즉시 필터 → 포커스·한글조합 유지 */
