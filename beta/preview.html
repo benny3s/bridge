@@ -866,6 +866,8 @@
   .chat-bubble { background: #efefef; color: #2A1F26; padding: 8px 12px; border-radius: 13px; white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.45; min-width: 0; }
   .chat-bubble.mine { background: var(--accent); color: #fff; }
   .chat-bubble.pending { opacity: 0.55; }
+  @media (hover: none) { .chat-bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
+  .chat-bubble.pressed { filter: brightness(0.92); }
   .chat-meta { display: flex; flex-direction: column; align-items: flex-end; font-size: 0.66rem; color: var(--muted); white-space: nowrap; flex: none; }
   .chat-row:not(.mine) .chat-meta { align-items: flex-start; }
   .chat-unread1 { color: var(--accent); font-weight: 700; font-size: 0.7rem; }
@@ -1006,7 +1008,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-433';
+  var APP_VERSION = '2026-10-10-434';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4410,10 +4412,12 @@
     var key = dmPairKey(meId, otherId);
     var room = _chats[key] || _reportedChats[key] || null;
     var cleared = (room && room.clearedAt && room.clearedAt[meId]) || '';
+    var hid = {}; ((room && room.hiddenFor && room.hiddenFor[meId]) || []).forEach(function (x) { hid[x] = 1; });   /* 꾹 눌러 지운 메시지 (내 화면만) */
     var seenIds = {}, out = [];
     ((room && room.msgs) || []).concat((state.dm || []).filter(function (m) { return m.pair === key; })).forEach(function (m) {
       if (seenIds[m.id]) return; seenIds[m.id] = 1;
       if (cleared && (m.at || '') <= cleared) return; /* 내가 지운 시점 이전 메시지는 내 화면에서만 숨김 */
+      if (m.id && hid[m.id]) return;
       out.push(m);
     });
     return out.sort(function (a, b) { return (a.at || '').localeCompare(b.at || ''); });
@@ -4518,7 +4522,7 @@
       var lbl = dmSenderLabel(currentState, m);
       var meta = '<div class="chat-meta">' + (SHOW_READ_MARK && mine && !m._pending && otherReadAt < (m.at || '') ? '<span class="chat-unread1">1</span>' : '') +
         (last ? (m._pending ? '<span>전송 중…</span>' : '<span>' + chatTime(m.at) + '</span>') : '') + '</div>';
-      var bubble = '<div class="chat-bubble' + (mine ? ' mine' : '') + (m._pending ? ' pending' : '') + '">' + escapeHtml(m.text) + '</div>';
+      var bubble = '<div class="chat-bubble' + (mine ? ' mine' : '') + (m._pending ? ' pending' : '') + '"' + (m.id && !m._pending ? ' data-mid="' + escapeHtml(m.id) + '"' : '') + '>' + escapeHtml(m.text) + '</div>';
       if (mine) {
         out += '<div class="chat-row mine' + (first ? ' first' : '') + '">' + (lbl && first ? '<div class="chat-lbl">' + escapeHtml(lbl) + '</div>' : '') +
           '<div class="chat-line">' + meta + bubble + '</div></div>';
@@ -4630,6 +4634,52 @@
     function onVisible() { if (!document.hidden) markDmSeen(me.id, otherId); }
     document.addEventListener('visibilitychange', onVisible);
     scr.querySelector('#chat-back').addEventListener('click', close);
+    /* 말풍선 꾹 누르기(폰) · 오른쪽 클릭(PC) → 복사 / 이 메시지 지우기(내 화면에서만) */
+    function bubbleMenu(bEl) {
+      var mid = bEl.getAttribute('data-mid'), text = bEl.textContent || '';
+      var ov = openModal('<h3>💬 메시지</h3>' +
+        '<div style="font-size:0.85rem;color:var(--muted);margin:-4px 0 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(text.slice(0, 60)) + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:8px;">' +
+          '<button type="button" class="card-btn" id="bm-copy">📋 복사</button>' +
+          '<button type="button" class="card-btn" id="bm-hide">🗑 이 메시지 지우기 (내 화면에서만)</button>' +
+        '</div>' +
+        '<p class="modal-msg" style="margin:10px 0 0;font-size:0.76rem;color:var(--muted);">상대 화면에서는 지워지지 않아요. 신고·분쟁에 대비해 서버에는 안전하게 보관돼요.</p>' +
+        '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>');
+      ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+      ov.querySelector('#bm-copy').addEventListener('click', function () {
+        closeModal(ov);
+        var done = function () { var tt = document.createElement('div'); tt.textContent = '복사했어요'; tt.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:90;background:rgba(0,0,0,.75);color:#fff;padding:7px 14px;border-radius:999px;font-size:0.85rem;'; document.body.appendChild(tt); setTimeout(function () { tt.remove(); }, 1300); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(function () {});
+        else { try { var t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); done(); } catch (x) {} }
+      });
+      ov.querySelector('#bm-hide').addEventListener('click', function () {
+        closeModal(ov);
+        var room = _chats[dmPairKey(me.id, otherId)];
+        if (room) { room.hiddenFor = Object.assign({}, room.hiddenFor || {}); room.hiddenFor[me.id] = (room.hiddenFor[me.id] || []).concat([mid]); }
+        draw(false);
+        callFn('chatAction', { op: 'hide', as: me.id, other: otherId, msgId: mid }).catch(function (err) {
+          if (room && room.hiddenFor) room.hiddenFor[me.id] = (room.hiddenFor[me.id] || []).filter(function (x) { return x !== mid; });
+          draw(false);
+          modalNotice('오류', '지우지 못했어요: ' + ((err && err.message) || err));
+        });
+      });
+    }
+    var bpTimer = null, bpX = 0, bpY = 0, bpFired = 0, bpEl = null;
+    function bpStop() { if (bpTimer) { clearTimeout(bpTimer); bpTimer = null; } if (bpEl) { bpEl.classList.remove('pressed'); bpEl = null; } }
+    body.addEventListener('contextmenu', function (e) {
+      var b = e.target.closest && e.target.closest('.chat-bubble[data-mid]'); if (!b) return;
+      if (window.getSelection && String(window.getSelection())) return;   /* PC에서 글자를 골라 둔 상태면 브라우저 메뉴(복사) 그대로 */
+      e.preventDefault(); bpStop(); bpFired = Date.now(); bubbleMenu(b);
+    });
+    body.addEventListener('touchstart', function (e) {
+      var b = e.target.closest && e.target.closest('.chat-bubble[data-mid]'); if (!b || e.touches.length !== 1) return;
+      bpX = e.touches[0].clientX; bpY = e.touches[0].clientY; bpEl = b; b.classList.add('pressed');
+      bpTimer = setTimeout(function () { bpTimer = null; var el = bpEl; bpStop(); bpFired = Date.now(); if (navigator.vibrate) { try { navigator.vibrate(15); } catch (x) {} } bubbleMenu(el); }, 500);
+    }, { passive: true });
+    body.addEventListener('touchmove', function (e) { var t = e.touches[0]; if (Math.abs(t.clientX - bpX) > 8 || Math.abs(t.clientY - bpY) > 8) bpStop(); }, { passive: true });
+    body.addEventListener('touchend', bpStop, { passive: true });
+    body.addEventListener('touchcancel', bpStop, { passive: true });
+    body.addEventListener('click', function (e) { if (Date.now() - bpFired < 700) { e.stopPropagation(); e.preventDefault(); } }, true);
     /* 넓은 화면: 대화창 바깥(어두운 곳)을 누르면 닫힘 · Esc 로 닫힘 */
     scr.addEventListener('click', function (e) { if (e.target === scr) close(); });
     function onKey(e) { if (e.key === 'Escape' && !document.querySelector('.modal-overlay')) close(); }
