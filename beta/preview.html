@@ -1003,7 +1003,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-431';
+  var APP_VERSION = '2026-10-10-432';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6616,7 +6616,7 @@
       var x = c.x, id = escapeHtml(x.id);
       var fold = many && !c.fav && !c.un && shownN >= CONN_SHOW;
       if (!fold) shownN++;
-      var st = (c.iSee && c.theySee) ? '📷 서로 공개' : (c.theySee ? '📤 내 사진만' : (c.iSee ? '📥 상대 사진만' : ''));
+      var st = (c.iSee && c.theySee) ? '📷 서로' : (c.theySee ? '📤 내 사진만' : (c.iSee ? '📥 상대 사진만' : ''));
       function btn(active, label, action, extra) {
         var cls = 'card-btn' + (active ? ' approve' : '');
         var style = 'flex:none;padding:4px 9px;font-size:0.78rem;' + (active ? '' : 'opacity:.38;');
@@ -6629,15 +6629,15 @@
           '<button type="button" class="conn-fav' + (c.fav ? ' on' : '') + '" data-action="conn-fav" data-id="' + id + '" title="즐겨찾기 (맨 위에 고정)">' + (c.fav ? '★' : '☆') + '</button>' +
           '<button type="button" class="conn-main" data-action="conn-toggle" data-id="' + id + '">' +
             '<span class="conn-nick">' + escapeHtml(x.nickname) + '</span>' +
-            (c.at && c.at > newSince ? '<span class="conn-new">새 연결</span>' : '') +
-            '<span class="conn-st">' + st + (c.chat ? (st ? ' · ' : '') + '💬' : '') + '</span>' +
+            (c.at && c.at > newSince ? '<span class="conn-new" title="3일 안에 새로 연결됐어요">새</span>' : '') +
+            '<span class="conn-st">' + st + '</span>' +
             '<span class="conn-caret">▾</span>' +
           '</button>' +
           (c.chat ? '<button type="button" class="conn-chat" data-action="dm-chat" data-id="' + id + '" title="대화하기">💬' + (c.un ? '<span class="count blink">' + c.un + '</span>' : '') + '</button>' : '') +
         '</div>' +
         '<div class="conn-detail">' +
           '<button type="button" class="card-btn" data-action="card-detail" data-id="' + id + '" style="flex:none;padding:4px 9px;font-size:0.78rem;">👤 프로필</button>' +
-          (c.theySee || c.iSee ? btn(true, st + ' · 회수', 'revoke-photo-link') : '') +
+          (c.theySee || c.iSee ? btn(true, (c.iSee && c.theySee ? '📷 서로 사진 공개' : st) + ' · 회수', 'revoke-photo-link') : '') +
           (c.chat ? '<button type="button" class="card-btn" data-action="revoke-contact-link" data-id="' + id + '" style="' + pink + '">💬 대화 회수</button>' : '') +
         '</div>' +
       '</div>';
