@@ -1227,6 +1227,17 @@ exports.chatAction = functions
       return { ok: true, at: now };
     }
 
+    if (op === 'hide') {   /* 메시지 하나 내 화면에서만 지우기 (2026-10-10) — 원본은 보관(신고·분쟁 대비) */
+      const msgId = String(data.msgId || '').slice(0, 64);
+      if (!msgId) throw new HttpsError('invalid-argument', '메시지를 확인해주세요.');
+      const snap = await ref.get();
+      if (!snap.exists) throw new HttpsError('not-found', '대화 내용이 없어요.');
+      const cur = ((snap.data().hiddenFor || {})[asId]) || [];
+      if (cur.length >= 500) throw new HttpsError('resource-exhausted', '더 지우려면 대화 지우기를 써 주세요.');
+      await ref.update(new admin.firestore.FieldPath('hiddenFor', asId), admin.firestore.FieldValue.arrayUnion(msgId));
+      return { ok: true };
+    }
+
     if (op === 'clear') {
       let deleted = false;
       await db.runTransaction(async (tx) => {
