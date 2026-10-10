@@ -140,18 +140,21 @@ function adminPasswordOk(pw, a) {
   } catch (e) { return false; }
 }
 
+/* 로그인 속도 (2026-10-09): ① 로그인 창을 열 때 앱이 {ping:1} 로 미리 깨움(콜드 스타트 3~5초를 PIN 입력 시간에 숨김)
+   ② 1GB — 1세대 함수는 메모리에 비례해 CPU가 커져 PIN 확인(PBKDF2 15만 회)이 약 3배 빨라짐(로그인 때만 써서 비용 차이 미미)
+   ③ IP 차단·잠금·state 읽기를 동시에 */
 exports.memberLogin = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 20, memory: '256MB' })
+  .runWith({ timeoutSeconds: 20, memory: '1GB' })
   .https.onCall(async (data, context) => {
+    if (data && data.ping) return { ok: true };
     const entryId = String((data && data.entryId) || '');
     const pin = String((data && data.pin) || '');
     if (!entryId || !pin || pin.length > 64) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.');
     const ip = clientIp(context);
-    await ipBlockedCheck(ip);
     const gk = guardKey('m_', entryId);
-    const guard = await loginGuardCheck(gk);
-    const state = (await db.doc('app/state').get()).data() || {};
+    const [, guard, stSnap] = await Promise.all([ipBlockedCheck(ip), loginGuardCheck(gk), db.doc('app/state').get()]);
+    const state = stSnap.data() || {};
     let entry = (state.entries || []).find((e) => e.id === entryId);
     let pending = false;
     if (!entry) { entry = (state.pendingEntries || []).find((e) => e.id === entryId); pending = !!entry; }
@@ -180,14 +183,14 @@ exports.memberLogin = functions
 
 exports.adminLogin = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 20, memory: '256MB' })
+  .runWith({ timeoutSeconds: 20, memory: '1GB' })
   .https.onCall(async (data, context) => {
+    if (data && data.ping) return { ok: true };   /* 관리자 로그인 창 열 때 미리 깨우기 */
     const pw = String((data && data.password) || '');
     if (!pw || pw.length > 128) throw new HttpsError('invalid-argument', '비밀번호를 확인해주세요.');
     const ip = clientIp(context);
-    await ipBlockedCheck(ip);
-    const guard = await loginGuardCheck('admin');
-    const st = ((await db.doc('app/state').get()).data() || {}).adminAuth;
+    const [, guard, stSnap] = await Promise.all([ipBlockedCheck(ip), loginGuardCheck('admin'), db.doc('app/state').get()]);
+    const st = (stSnap.data() || {}).adminAuth;
     const a = (st && st.wrappedPrivateKey) ? st : (await db.collection('adminKey').doc('main').get()).data();
     const ok = adminPasswordOk(pw, a);
     const fails = await loginGuardResult(guard, ok);
@@ -673,6 +676,7 @@ function buildPublicView(state) {
   /* 티저: 승인 회원 중 명단 노출 대상. 신원 연결 안 되게 닉네임·id·사진 없음, 소개는 앞 18자만 */
   const teaser = entries.filter((e) => !e.isMatchmaker && !e.deactivated && !e.testAccount).map((e, i) => ({
     id: 't' + i, gender: e.gender || '', birthYear: e.birthYear || null, region: clip(e.region, 20),
+    meetZones: (Array.isArray(e.meetZones) && e.meetZones.length) ? e.meetZones.filter((k) => MEET_ZONES.includes(k)) : ['capital'],
     intro: clip(e.intro, 18), idealType: clip(e.idealType, 18),
     submittedAt: e.submittedAt || null, lastSeenAt: roundHour(lastOf(e)), serial: e.serial || null
   }));
@@ -715,6 +719,7 @@ async function syncPublicView(state) {
 /* ── 신청자 쓰기 대행 ── */
 const ENTRY_TEXT_LIMITS = { nickname: 20, region: 40, workplace: 60, height: 10, intro: 1000, idealType: 600, dealbreaker: 600, degreeChoice: 20 };
 const ENC_FIELDS = ['realNameEnc', 'contactEnc', 'referrerEnc', 'contactSelfEnc'];
+const MEET_ZONES = ['capital', 'yeongnam', 'honam'];   /* 수도권(충청·강원 포함)·경상도·전라도 */
 function isSmallObj(v, max) { return !!v && typeof v === 'object' && JSON.stringify(v).length <= (max || 8000); }
 function cleanPinAuth(p) {
   if (!p || typeof p !== 'object') return null;
@@ -730,6 +735,10 @@ function pickProfile(src, kind) {
   ['region', 'workplace', 'height', 'intro', 'idealType', 'dealbreaker', 'degreeChoice'].forEach((k) => {
     if (typeof src[k] === 'string') out[k] = src[k].trim().slice(0, ENTRY_TEXT_LIMITS[k]);
   });
+  if (Array.isArray(src.meetZones)) {   /* 만나고 싶은 지역 (2026-10-09) — 허용 값만, 비면 수도권 */
+    const z = src.meetZones.filter((k, i, a) => MEET_ZONES.includes(k) && a.indexOf(k) === i);
+    out.meetZones = z.length ? z : ['capital'];
+  }
   if (src.gender === 'male' || src.gender === 'female') out.gender = src.gender;
   const by = parseInt(src.birthYear, 10);
   if (by >= 1900 && by <= new Date().getFullYear() - 19) out.birthYear = by;
@@ -1212,6 +1221,12 @@ exports.chatAction = functions
       return { ok: true, msg: m };
     }
 
+    if (op === 'read') {   /* 읽음 기록 (2026-10-10) — 상대 화면의 '1' 지우기·내 다른 기기 안 읽음 정리 */
+      const now = new Date().toISOString();
+      await ref.update(new admin.firestore.FieldPath('readAt', asId), now).catch(() => {});   /* 방이 있을 때만 (없으면 만들지 않음) */
+      return { ok: true, at: now };
+    }
+
     if (op === 'clear') {
       let deleted = false;
       await db.runTransaction(async (tx) => {
@@ -1466,7 +1481,50 @@ exports.betaSeed = functions
       await b.commit();
     }
     st._w = 'beta-seed'; st._wn = String(Date.now());
+    await db.doc('app/state').delete().catch(() => {});   /* 지우고 새로 만들기 — 덮어쓰면 onStateChange(onUpdate)가 '이상 변경'으로 오탐 */
     await db.doc('app/state').set(st);
     await syncPublicView(st);   /* 손님 화면용 공개 요약도 바로 (state 첫 생성은 onStateChange(onUpdate) 가 안 잡음) */
     return { ok: true, entries: st.entries.length, photos: ids.length, wiped };
+  });
+
+/* ══ 관리자: 인앱 채팅 사용 통계 (2026-10-10) — 개수·시각만 집계, 대화 내용은 읽어 돌려주지 않음 ══ */
+exports.chatStats = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 60, memory: '512MB' })
+  .https.onCall(async (data, context) => {
+    if (!(context.auth && context.auth.token && context.auth.token.admin === 1)) throw new HttpsError('permission-denied', '관리자만 볼 수 있어요.');
+    const now = Date.now(), D = 86400000;
+    const qs = await db.collection('chats').get();
+    const st = (await db.doc('app/state').get()).data() || {};
+    const conn = (st.dateRequests || []).filter((r) => (r.type || 'contact') === 'contact' && r.approved).length;
+    let rooms = 0, withMsgs = 0, total = 0, m7 = 0, m30 = 0, act7 = 0, act30 = 0, viaMm = 0, cleared = 0, reported = 0, bothSides = 0, oneSided = 0;
+    const sizes = [], daily = {}, hours = new Array(24).fill(0), gaps = [];
+    qs.forEach((d) => {
+      const r = d.data(); rooms++;
+      const msgs = r.msgs || [];
+      if (r.reportedAt) reported++;
+      if (r.clearedAt && Object.keys(r.clearedAt).length) cleared++;
+      if (!msgs.length) return;
+      withMsgs++; total += msgs.length; sizes.push(msgs.length);
+      const senders = new Set(msgs.map((m) => m.fromId));
+      if (senders.size >= 2) bothSides++; else oneSided++;
+      let last = 0, a7 = false, a30 = false;
+      msgs.forEach((m) => {
+        const t = new Date(m.at).getTime(); if (!t) return;
+        if (m.viaMm) viaMm++;
+        if (now - t < 7 * D) { m7++; a7 = true; }
+        if (now - t < 30 * D) { m30++; a30 = true; }
+        if (now - t < 14 * D) { const k = new Date(t + 9 * 3600000).toISOString().slice(5, 10); daily[k] = (daily[k] || 0) + 1; }
+        hours[new Date(t + 9 * 3600000).getUTCHours()]++;
+      });
+      for (let i = 1; i < msgs.length; i++) {   /* 답장 간격(상대가 바뀔 때) */
+        if (msgs[i].fromId !== msgs[i - 1].fromId) { const g = new Date(msgs[i].at) - new Date(msgs[i - 1].at); if (g > 0) gaps.push(g); }
+      }
+      if (a7) act7++; if (a30) act30++;
+    });
+    sizes.sort((x, y) => x - y); gaps.sort((x, y) => x - y);
+    const med = (a) => (a.length ? a[Math.floor(a.length / 2)] : 0);
+    return { rooms, connections: conn, withMsgs, bothSides, oneSided, total, m7, m30, act7, act30, viaMm, cleared, reported,
+      medianMsgs: med(sizes), maxMsgs: sizes[sizes.length - 1] || 0, buckets: { '1-5': sizes.filter((x) => x <= 5).length, '6-20': sizes.filter((x) => x > 5 && x <= 20).length, '21-50': sizes.filter((x) => x > 20 && x <= 50).length, '51+': sizes.filter((x) => x > 50).length },
+      medianReplyMin: Math.round(med(gaps) / 60000), daily, hours };
   });
