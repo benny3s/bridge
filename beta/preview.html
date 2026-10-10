@@ -1030,7 +1030,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-436';
+  var APP_VERSION = '2026-10-10-437';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6709,7 +6709,7 @@
       var fold = many && !c.fav && !c.un && shownN >= CONN_SHOW;
       if (!fold) shownN++;
       var st = (c.iSee && c.theySee) ? '📷 서로' : (c.theySee ? '📤 내 사진만' : (c.iSee ? '📥 상대 사진만' : ''));
-      var stLong = ((c.iSee && c.theySee) ? '📷 서로 사진 공개' : (c.theySee ? '📤 내 사진만 공개' : (c.iSee ? '📥 상대 사진만 공개' : ''))) + (c.chat ? ((c.iSee || c.theySee) ? ' · ' : '') + '💬 대화 연결' : '');
+      var stLong = ((c.iSee && c.theySee) ? '📷 서로 사진 공개' : (c.theySee ? '📤 내 사진만 공개' : (c.iSee ? '📥 상대 사진만 공개' : ''))) || (c.chat ? '💬 대화만 연결' : '');
       function btn(active, label, action, extra) {
         var cls = 'card-btn' + (active ? ' approve' : '');
         var style = 'flex:none;padding:4px 9px;font-size:0.78rem;' + (active ? '' : 'opacity:.38;');
@@ -6724,7 +6724,6 @@
             '<span class="conn-txt"><span class="conn-nick"><span class="conn-nm">' + escapeHtml(x.nickname) + '</span>' +
               (c.at && c.at > newSince ? '<span class="conn-new" title="3일 안에 새로 연결됐어요">새</span>' : '') + '</span>' +
               '<span class="conn-st">' + stLong + '</span></span>' +
-            '<span class="conn-caret">▾</span>' +
           '</button>' +
           '<button type="button" class="conn-fav' + (c.fav ? ' on' : '') + '" data-action="conn-fav" data-id="' + id + '" title="즐겨찾기 (맨 위에 고정)">' + (c.fav ? '★' : '☆') + '</button>' +
           (c.chat ? '<button type="button" class="conn-chat" data-action="dm-chat" data-id="' + id + '" title="대화하기">💬' + (c.un ? '<span class="count blink">' + c.un + '</span>' : '') + '</button>' : '') +
