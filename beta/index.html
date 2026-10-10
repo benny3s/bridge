@@ -878,6 +878,23 @@
   .chat-item { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 8px 2px; font: inherit; color: var(--ink); cursor: pointer; }
   .chat-item:last-child { border-bottom: 0; }
   .chat-list .chat-item.fold { display: none; }
+  .conn-search { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; font: inherit; font-size: 16px; background: var(--paper); color: var(--ink); margin-bottom: 6px; }
+  .conn-list { display: flex; flex-direction: column; }
+  .conn-row { border-bottom: 1px solid var(--line); }
+  .conn-row:last-child { border-bottom: 0; }
+  .conn-list:not(.all):not(.searching) .conn-row.fold, .conn-row.nomatch { display: none; }
+  .conn-line { display: flex; align-items: center; gap: 4px; min-height: 42px; }
+  .conn-fav { flex: none; border: 0; background: none; font-size: 1.1rem; color: var(--muted); opacity: .45; padding: 4px 6px; cursor: pointer; }
+  .conn-fav.on { color: var(--gold); opacity: 1; }
+  .conn-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: 0; background: none; padding: 6px 2px; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+  .conn-nick { font-weight: 700; font-size: 0.93rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conn-new { flex: none; font-size: 0.68rem; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
+  .conn-st { margin-left: auto; flex: none; font-size: 0.76rem; color: var(--muted); white-space: nowrap; }
+  .conn-caret { flex: none; font-size: 0.7rem; color: var(--muted); transition: transform .15s; }
+  .conn-row.open .conn-caret { transform: rotate(180deg); }
+  .conn-chat { flex: none; border: 1px solid #f6c1d6; background: #ffe3ef; color: #c2185b; border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 0.85rem; cursor: pointer; }
+  .conn-detail { display: none; gap: 5px; flex-wrap: wrap; padding: 0 0 9px 34px; }
+  .conn-row.open .conn-detail { display: flex; }
   .chat-list.open .chat-item.fold { display: flex; }
   .chat-more { display: block; width: 100%; border: 0; border-top: 1px dashed var(--line); background: none; padding: 9px 0 3px; font: inherit; font-size: 0.84rem; color: var(--muted); cursor: pointer; }
   .chat-item-mid { flex: 1; min-width: 0; }
@@ -986,7 +1003,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-430';
+  var APP_VERSION = '2026-10-10-431';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6372,7 +6389,7 @@
     var rows = viewers.length
       ? viewers.map(function (x) {
           return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px dashed var(--line);">' +
-            '<span><b style="font-variant-numeric:tabular-nums;color:var(--muted);font-size:0.8rem;">' + escapeHtml(formatUid(x) || '—') + '</b> ' + escapeHtml(x.nickname) + '</span>' +
+            '<span>' + (isAdminUnlocked ? '<b style="font-variant-numeric:tabular-nums;color:var(--muted);font-size:0.8rem;">' + escapeHtml(formatUid(x) || '—') + '</b> ' : '') + escapeHtml(x.nickname) + '</span>' +
             '<button type="button" class="card-btn danger" data-action="revoke-photo-viewer" data-id="' + escapeHtml(x.id) + '" style="flex:none;padding:4px 12px;">삭제</button>' +
           '</div>';
         }).join('')
@@ -6554,50 +6571,83 @@
       (nFold ? '<button type="button" class="chat-more" data-action="chat-more">' + (chatListOpen ? '▴ 접기' : '▾ 대화 ' + nFold + '개 더 보기') + '</button>' : '') +
       '</div>';
   }
+  var CONN_SHOW = 6, connListOpen = false, connOpen = {}, connSearch = '';   /* 내 연결: 처음 보이는 수 / 펼침 / 펼친 줄 / 검색어 */
+  function connFavs(myId) { try { return JSON.parse(localStorage.getItem('bb-connfav:' + myId) || '{}') || {}; } catch (e) { return {}; } }
+  function toggleConnFav(myId, id) {
+    var f = connFavs(myId);
+    if (f[id]) delete f[id]; else f[id] = 1;
+    try { localStorage.setItem('bb-connfav:' + myId, JSON.stringify(f)); } catch (e) {}
+  }
+  /* 내 연결 검색: 다시 그리지 않고 줄만 숨김/표시 (검색 중엔 접힌 줄도 대상) */
+  function applyConnSearch() {
+    var q = (connSearch || '').toLowerCase().trim();
+    var box = document.querySelector('.conn-list'); if (!box) return;
+    box.classList.toggle('searching', !!q);
+    var nodes = box.querySelectorAll('.conn-row'), shown = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var m = !q || (nodes[i].getAttribute('data-csearch') || '').indexOf(q) >= 0;
+      nodes[i].classList.toggle('nomatch', !m);
+      if (m) shown++;
+    }
+    var more = box.parentNode.querySelector('[data-action="conn-more"]'); if (more) more.style.display = q ? 'none' : '';
+    var empty = box.parentNode.querySelector('.conn-empty'); if (empty) empty.style.display = q && !shown ? '' : 'none';
+  }
   function connectionsSummaryHtml(state, me) {
     if (!me) return '';
     var others = (state.entries || []).filter(function (x) { return x.id !== me.id && !x.isMatchmaker; });
-    var rows = others.map(function (x) {
+    var favs = connFavs(me.id);
+    var linkedAt = {};   /* 상대별 가장 최근 승인 시각 (새 연결이 위로) */
+    (state.dateRequests || []).forEach(function (q) {
+      if (!q.approved) return;
+      var o = q.fromId === me.id ? q.toId : (q.toId === me.id ? q.fromId : null);
+      if (o && (q.decidedAt || '') > (linkedAt[o] || '')) linkedAt[o] = q.decidedAt || '';
+    });
+    var newSince = new Date(Date.now() - 3 * 86400000).toISOString();
+    var list = others.map(function (x) {
       var iSee = canViewPhotoOf(state, me.id, x.id);    /* 상대 사진을 내가 봄 */
       var theySee = canViewPhotoOf(state, x.id, me.id); /* 내 사진을 상대가 봄 */
       var chat = canViewContactOf(state, me.id, x.id);
       if (!iSee && !theySee && !chat) return null;
-      var mutual = iSee && theySee;
-      var mineOnly = theySee && !iSee;
-      var theirsOnly = iSee && !theySee;
-      var unread = dmUnreadFrom(state, me.id, x.id);
+      return { x: x, iSee: iSee, theySee: theySee, chat: chat, fav: !!favs[x.id], un: chat ? dmUnreadFrom(state, me.id, x.id) : 0, at: linkedAt[x.id] || '' };
+    }).filter(Boolean);
+    list.sort(function (a, b) { return (b.fav - a.fav) || ((b.un > 0) - (a.un > 0)) || b.at.localeCompare(a.at); });
+    var many = list.length > CONN_SHOW + 2, shownN = 0;
+    var rows = list.map(function (c) {
+      var x = c.x, id = escapeHtml(x.id);
+      var fold = many && !c.fav && !c.un && shownN >= CONN_SHOW;
+      if (!fold) shownN++;
+      var st = (c.iSee && c.theySee) ? '📷 서로 공개' : (c.theySee ? '📤 내 사진만' : (c.iSee ? '📥 상대 사진만' : ''));
       function btn(active, label, action, extra) {
         var cls = 'card-btn' + (active ? ' approve' : '');
         var style = 'flex:none;padding:4px 9px;font-size:0.78rem;' + (active ? '' : 'opacity:.38;');
-        var attr = (active && action) ? (' data-action="' + action + '" data-id="' + escapeHtml(x.id) + '"') : (active ? '' : ' disabled');
+        var attr = (active && action) ? (' data-action="' + action + '" data-id="' + id + '"') : (active ? '' : ' disabled');
         return '<button type="button" class="' + cls + '"' + attr + ' style="' + style + '">' + label + (extra || '') + '</button>';
       }
-      var chatStyle = 'flex:none;padding:4px 9px;font-size:0.78rem;' + (chat
-        ? 'background:#ffe3ef;color:#c2185b;border-color:#f6c1d6;'
-        : 'opacity:.38;');
-      var chatAttr = chat ? (' data-action="dm-chat" data-id="' + escapeHtml(x.id) + '"') : ' disabled';
-      var chatBtn = '<button type="button" class="card-btn" ' + chatAttr + ' style="' + chatStyle + '">💬 대화' + (chat && unread ? ' <span class="count blink">' + unread + '</span>' : '') + '</button>';
-      var chatRevokeStyle = 'flex:none;padding:4px 9px;font-size:0.78rem;' + (chat ? 'background:#ffe3ef;color:#c2185b;border-color:#f6c1d6;' : 'opacity:.38;');
-      var chatRevokeAttr = chat ? (' data-action="revoke-contact-link" data-id="' + escapeHtml(x.id) + '"') : ' disabled';
-      var chatRevokeBtn = '<button type="button" class="card-btn" ' + chatRevokeAttr + ' style="' + chatRevokeStyle + '">대화 회수</button>';
-      return '<div style="border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin-bottom:8px;background:var(--paper);">' +
-        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">' +
-          '<span style="font-variant-numeric:tabular-nums;color:var(--muted);font-size:0.78rem;">' + escapeHtml(formatUid(x) || '—') + '</span>' +
-          '<button type="button" data-action="card-detail" data-id="' + escapeHtml(x.id) + '" style="display:inline-flex;align-items:center;gap:4px;border:1px solid var(--gold);background:var(--gold-soft);color:var(--ink);border-radius:999px;padding:4px 12px;font-size:0.92rem;font-weight:700;cursor:pointer;font-family:inherit;">👤 ' + escapeHtml(x.nickname) + ' <span style="font-weight:400;font-size:0.78rem;color:var(--muted);">프로필</span></button>' +
+      var pink = 'flex:none;padding:4px 9px;font-size:0.78rem;background:#ffe3ef;color:#c2185b;border-color:#f6c1d6;';
+      return '<div class="conn-row' + (fold ? ' fold' : '') + (connOpen[x.id] ? ' open' : '') + '" data-id="' + id + '" data-csearch="' + escapeHtml((x.nickname || '').toLowerCase()) + '">' +
+        '<div class="conn-line">' +
+          '<button type="button" class="conn-fav' + (c.fav ? ' on' : '') + '" data-action="conn-fav" data-id="' + id + '" title="즐겨찾기 (맨 위에 고정)">' + (c.fav ? '★' : '☆') + '</button>' +
+          '<button type="button" class="conn-main" data-action="conn-toggle" data-id="' + id + '">' +
+            '<span class="conn-nick">' + escapeHtml(x.nickname) + '</span>' +
+            (c.at && c.at > newSince ? '<span class="conn-new">새 연결</span>' : '') +
+            '<span class="conn-st">' + st + (c.chat ? (st ? ' · ' : '') + '💬' : '') + '</span>' +
+            '<span class="conn-caret">▾</span>' +
+          '</button>' +
+          (c.chat ? '<button type="button" class="conn-chat" data-action="dm-chat" data-id="' + id + '" title="대화하기">💬' + (c.un ? '<span class="count blink">' + c.un + '</span>' : '') + '</button>' : '') +
         '</div>' +
-        '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:5px;">' +
-          btn(mineOnly, '📤 내 사진만 공개', 'revoke-photo-link') +
-          btn(theirsOnly, '📥 상대 사진만 공개', 'revoke-photo-link') +
-        '</div>' +
-        '<div style="display:flex;gap:5px;flex-wrap:wrap;">' +
-          btn(mutual, '📷 서로 사진 공개', 'revoke-photo-link') +
-          chatBtn +
-          chatRevokeBtn +
+        '<div class="conn-detail">' +
+          '<button type="button" class="card-btn" data-action="card-detail" data-id="' + id + '" style="flex:none;padding:4px 9px;font-size:0.78rem;">👤 프로필</button>' +
+          (c.theySee || c.iSee ? btn(true, st + ' · 회수', 'revoke-photo-link') : '') +
+          (c.chat ? '<button type="button" class="card-btn" data-action="revoke-contact-link" data-id="' + id + '" style="' + pink + '">💬 대화 회수</button>' : '') +
         '</div>' +
       '</div>';
-    }).filter(Boolean);
+    });
+    var nFold = list.filter(function (c, i) { return /conn-row fold/.test(rows[i]); }).length;
     var body = rows.length
-      ? (rows.length > 5 ? '<div style="max-height:340px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + rows.join('') + '</div>' : rows.join(''))
+      ? ((list.length > CONN_SHOW + 2 ? '<input type="search" id="conn-search" class="conn-search" value="' + escapeHtml(connSearch) + '" placeholder="🔍 닉네임으로 찾기" autocomplete="off">' : '') +
+        '<div class="conn-list' + (connListOpen ? ' all' : '') + '">' + rows.join('') + '</div>' +
+        (nFold ? '<button type="button" class="chat-more" data-action="conn-more">' + (connListOpen ? '▴ 접기' : '▾ ' + nFold + '명 더 보기') + '</button>' : '') +
+        '<p class="conn-empty sub" style="display:none;margin:6px 0 0;">찾는 닉네임이 없어요.</p>')
       : '<p class="sub" style="margin:0;">아직 연결된 사람이 없어요. 사진·대화 요청이 승인되면 여기 표시돼요.</p>';
     /* 지금은 연결이 없지만 대화 기록이 남은 방 (연결 해제·탈퇴): 읽기 전용으로 열기 */
     var pastRooms = myChatRooms(me.id).filter(function (r) {
@@ -6617,7 +6667,7 @@
     }
     return '<div class="mine-section">' +
         '<h3>🔗 내 연결<span class="count">' + rows.length + '</span></h3>' +
-        '<p class="sub" style="margin:0 0 6px;">사진·대화 권한이 있는 상대예요. 이름=프로필 · 파란 버튼이 현재 상태(누르면 회수) · 💬 대화는 채팅으로 이어져요.</p>' +
+        '<p class="sub" style="margin:0 0 6px;">사진·대화 권한이 있는 상대예요. 줄을 누르면 프로필·회수 버튼, ☆는 즐겨찾기(맨 위 고정, 이 기기에만 저장).</p>' +
         body +
       '</div>';
   }
@@ -8271,7 +8321,9 @@
       var _ae = (state.entries || []).find(function (e) { return e.id === currentUser.id; });
       if (_ae && _ae.pinMustChange) { _pinForceAsked = true; setTimeout(function () { handleChangeMyPin({ forced: true }); }, 900); }
     }
+    var _connFocus = document.activeElement && document.activeElement.id === 'conn-search';
     document.getElementById('app').innerHTML = renderApp(state);
+    try { applyConnSearch(); if (_connFocus) { var _cs = document.getElementById('conn-search'); if (_cs) { _cs.focus(); _cs.setSelectionRange(_cs.value.length, _cs.value.length); } } } catch (e) {} /* 내 연결 검색 재적용·포커스 유지 */
     try { applyListSearch(); } catch (e) {} /* 검색어가 있으면 재적용 */
     try { applySeenSearch(); } catch (e) {} /* 회원 명단 검색 재적용 */
     try { applyMmSearch(); } catch (e) {} /* 주선자 탭 검색 재적용 */
@@ -11460,6 +11512,21 @@
       }
       else if (action === 'reveal-mine') handleRevealMine(id);
       else if (action === 'dm-chat') openDmChat(id);
+      else if (action === 'conn-toggle') {
+        var crow = actionBtn.closest('.conn-row');
+        if (crow) { connOpen[id] = !connOpen[id]; crow.classList.toggle('open', !!connOpen[id]); }
+      }
+      else if (action === 'conn-fav') {
+        var cme = currentUser ? findMyEntry(currentState) : null;
+        if (cme) { toggleConnFav(cme.id, id); paint(currentState); }
+      }
+      else if (action === 'conn-more') {
+        connListOpen = !connListOpen;
+        var clist = actionBtn.parentNode && actionBtn.parentNode.querySelector('.conn-list');
+        if (clist) clist.classList.toggle('all', connListOpen);
+        var cnf = clist ? clist.querySelectorAll('.conn-row.fold').length : 0;
+        actionBtn.textContent = connListOpen ? '▴ 접기' : '▾ ' + cnf + '명 더 보기';
+      }
       else if (action === 'chat-more') {
         chatListOpen = !chatListOpen;
         var cl = actionBtn.parentNode && actionBtn.parentNode.querySelector('.chat-list');
@@ -11571,6 +11638,7 @@
     if (e.target.id === 'seen-search') { seenSearch = e.target.value; applySeenSearch(); return; } /* 회원 명단 검색: paint 없이 즉시 */
     if (e.target.id === 'mm-search') { mmSearch = e.target.value; applyMmSearch(); return; } /* 주선자 탭 검색: paint 없이 즉시 */
     if (e.target.id === 'admin-req-search') { adminReqSearch = e.target.value; applyReqSearch(); return; } /* 요청함 검색: paint 없이 즉시 */
+    if (e.target.id === 'conn-search') { connSearch = e.target.value; applyConnSearch(); return; } /* 내 연결 검색: paint 없이 즉시 */
     if (e.target.hasAttribute && e.target.hasAttribute('data-numeric')) stripNonDigits(e.target);
     if (e.target.closest && e.target.closest('#entry-form')) saveDraft();
     if (e.target.id === 'f-intro' || e.target.id === 'f-idealtype' || e.target.id === 'f-dealbreaker') updateCharCounts();
