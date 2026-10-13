@@ -1029,7 +1029,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-10-438';
+  var APP_VERSION = '2026-10-13-439';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1041,7 +1041,8 @@
   var ROOT_NAME = '베니';
   var listFilter = 'all';
   /* ── 만나고 싶은 지역 (2026-10-09 Benny: 지방 친구부터 늘리기) ──
-     entry.meetZones = ['capital'|'yeongnam'|'honam'] 복수. 없으면 수도권(기존 회원 전부 수도권 — 따로 저장 안 함).
+     entry.meetZones = 이 회원이 나오는 지역 채널. 없으면 전체 지역(2026-10-13 Benny: 기본은 지금처럼 전부, 필요한 사람만 관리자가 지정).
+     회원은 프로필 설정 없이 '베니브릿지' 옆 채널 버튼으로 보고 싶은 지역만 켜고 끔(기기에 기억, 다 켜면 전체 지역).
      수도권엔 충청·강원 포함. 명단은 내 지역과 겹치는 사람 먼저(내 지역 이성이 ZONE_MIN_OPPOSITE 명 미만이면 전체), 다른 지역 카드엔 📍 칩 */
   var ZONES = [['capital', '수도권'], ['yeongnam', '경상도'], ['honam', '전라도']];
   var ZONE_LABEL = { capital: '수도권', yeongnam: '경상도', honam: '전라도' };
@@ -1050,24 +1051,34 @@
   var zoneView = 'auto';        /* 회원 채널: auto | mine(고른 지역 전부) | capital·yeongnam·honam(한 곳) | all(전체 지역) */
   var adminZone = 'all';        /* 관리자 명단 지역 필터: all | capital | yeongnam | honam */
   var _zoneViewFor = null;
-  function zonesOf(e) { var z = (e && Array.isArray(e.meetZones)) ? e.meetZones.filter(function (k) { return ZONE_LABEL[k]; }) : []; return z.length ? z : ['capital']; }
-  function zonesText(z) { return z.map(function (k) { return ZONE_LABEL[k]; }).join('·'); }
+  var ZONE_ALL = ZONES.map(function (z) { return z[0]; });
+  function zonesOf(e) { var z = (e && Array.isArray(e.meetZones)) ? e.meetZones.filter(function (k) { return ZONE_LABEL[k]; }) : []; return z.length ? z : ZONE_ALL.slice(); }
+  function zonesAll(z) { return ZONE_ALL.every(function (k) { return z.indexOf(k) >= 0; }); }
+  function zonesText(z) { return zonesAll(z) ? '전체 지역' : z.map(function (k) { return ZONE_LABEL[k]; }).join('·'); }
+  /* 회원 채널 (보고 싶은 지역): 기기에 기억, 없으면 전체 */
+  function zoneChannelFor(me) {
+    if (_zoneViewFor !== me.id) {
+      _zoneViewFor = me.id; zoneView = 'auto';
+      try { var v = JSON.parse(localStorage.getItem('bb-zch:' + me.id) || 'null'); if (Array.isArray(v)) { v = v.filter(function (k) { return ZONE_LABEL[k]; }); if (v.length && !zonesAll(v)) zoneView = v; } } catch (e) {}
+    }
+    return Array.isArray(zoneView) && zoneView.length ? zoneView.slice() : ZONE_ALL.slice();
+  }
+  function setZoneChannel(id, ch) {
+    ch.sort(function (a, b) { return ZONE_ALL.indexOf(a) - ZONE_ALL.indexOf(b); });
+    zoneView = zonesAll(ch) ? 'auto' : ch.slice();
+    try { if (zonesAll(ch)) localStorage.removeItem('bb-zch:' + id); else localStorage.setItem('bb-zch:' + id, JSON.stringify(ch)); } catch (e) {}
+  }
   function zonesOverlap(a, b) { return a.some(function (k) { return b.indexOf(k) >= 0; }); }
   /* 지금 채널 계산 (명단·머리글 버튼 공용): auto 면 내 지역 이성이 ZONE_MIN_OPPOSITE 명 이상일 때만 '내 지역', 아니면 전체(내 지역 먼저) */
   function zoneModeFor(state, me, teaser, entries) {
-    if (me && _zoneViewFor !== me.id) { zoneView = 'auto'; _zoneViewFor = me.id; }  /* 프로필이 바뀌면 자동으로 (앞 사람 선택이 남지 않게) */
-    var myZones = (ZONES_ON && me && !teaser && !me.isMatchmaker) ? zonesOf(me) : null;   /* 주선자 본인(소개 프로필 없음)은 지역 없이 전체 */
-    var mode = 'all', mineOpp = 0;
-    if (myZones) {
+    var ch = (ZONES_ON && me && !teaser && !me.isMatchmaker) ? zoneChannelFor(me) : null;   /* 주선자 본인(소개 프로필 없음)은 지역 없이 전체 */
+    var mode = (ch && !zonesAll(ch)) ? 'sel' : 'all', mineOpp = 0;
+    if (mode === 'sel') {
       entries = entries || profileEntries(state).filter(function (e) { return listMemberVisible(e); });
       var opp = me.gender === 'male' ? 'female' : (me.gender === 'female' ? 'male' : null);
-      mineOpp = entries.filter(function (e) { return e.id !== me.id && (!opp || e.gender === opp) && zonesOverlap(zonesOf(e), myZones); }).length;
-      var sel = Array.isArray(zoneView) ? zoneView.filter(function (k) { return ZONE_LABEL[k]; }) : [];
-      var sameAsMine = sel.length === myZones.length && sel.every(function (k) { return myZones.indexOf(k) >= 0; });
-      if (sel.length && !sameAsMine) mode = sel.length === ZONES.length ? 'every' : 'sel';   /* 채널에서 지역을 바꿈 (내 설정 밖 지역도 가능) */
-      else mode = mineOpp >= ZONE_MIN_OPPOSITE ? 'mine' : 'all';   /* 다 켬(기본): 내 지역 이성이 적으면 전체를 같이(내 지역 먼저) */
+      mineOpp = entries.filter(function (e) { return e.id !== me.id && (!opp || e.gender === opp) && zonesOverlap(zonesOf(e), ch); }).length;
     }
-    return { myZones: myZones, mode: mode, mineOpp: mineOpp, sel: mode === 'sel' ? sel : null };
+    return { myZones: ch, mode: mode, mineOpp: mineOpp, sel: mode === 'sel' ? ch : null };
   }
   /* 지금 채널에 들어가는 회원 (명단 숫자·탭 숫자용 — 성별·검색 거르기 전) */
   function zoneFilterEntries(state, me, teaser, entries) {
@@ -1085,9 +1096,7 @@
     var me = currentUser ? findMyEntry(state) : null;
     if (me) {
       var zm = zoneModeFor(state, me, false);
-      if (zm.mode === 'sel') return zonesText(zm.sel);
-      if (zm.mode === 'every') return '전체 지역';
-      return zonesText(zm.myZones);   /* 내 지역이 아직 적어 전체를 같이 보여줄 때도 채널 이름은 내 지역 */
+      return zm.myZones ? zonesText(zm.myZones) : '전체 지역';
     }
     return adminZone === 'all' ? '전체 지역' : ZONE_LABEL[adminZone];
   }
@@ -1098,67 +1107,56 @@
     if (!(isAdminUnlocked || (_me && !_me.isMatchmaker))) return '';   /* 손님·주선자 본인 상태엔 없음 */
     return '<button type="button" class="zone-pill" data-action="zone-sheet" title="지역 채널">' + escapeHtml(zoneChannelLabel(state)) + ' <span style="opacity:.7;font-size:0.85em;">▾</span></button>';
   }
-  /* 채널 창: 지금 볼 채널 고르기 + (회원) 내 '만나고 싶은 지역' 바꾸기 */
+  /* 채널 창: 회원은 보고 싶은 지역 켜고 끄기(다 켜면 전체), 관리자는 명단 지역 필터 */
   function openZoneSheet() {
     var me = currentUser ? findMyEntry(currentState) : null;
     if (me && me.isMatchmaker) me = null;
-    var mz = me ? zonesOf(me) : null;
     var opt = function (key, label, on) { return '<button type="button" class="zone-opt' + (on ? ' on' : '') + '" data-zch="' + key + '">' + escapeHtml(label) + '</button>'; };
-    var cur = mz ? zoneModeFor(currentState, me, false) : adminZone;
-    var chHtml;
-    if (mz) {
-      /* '전체'·'모두' 버튼 없음 (2026-10-10 Benny) — 두 곳 이상 고른 사람만, 지역 버튼을 켜고 끄기(다 켜면 모두) */
-      /* 세 지역 모두 고를 수 있음 (2026-10-10 Benny: 내 설정이 수도권·경상도여도 전라도 보기 가능) — 기본은 내 지역 켜짐, 다 켜면 전체 */
-      chHtml = ZONES.map(function (z) { var k = z[0]; return opt(k, z[1], cur.mode === 'every' || (cur.mode === 'sel' ? cur.sel.indexOf(k) >= 0 : mz.indexOf(k) >= 0)); }).join('');
-    } else {
-      chHtml = opt('all', '전체', cur === 'all') + ZONES.map(function (z) { return opt(z[0], z[1], cur === z[0]); }).join('');
-    }
+    var ch = me ? zoneChannelFor(me) : null;
     var ov = openModal(
       '<h3>📍 지역 채널</h3>' +
-      (chHtml ? '<div class="zone-sec-title">👀 지금 보는 채널</div><div class="zone-opts" id="zch-opts">' + chHtml + '</div>' : '') +
-      (mz ? (chHtml ? '<div class="zone-divider"></div>' : '') +
-          '<div class="zone-sec-title">⚙️ ' + (me.managedBy && !me.ownerSelf ? escapeHtml(me.nickname) + '님 프로필 설정' : '내 프로필 설정') + ' · 만나고 싶은 지역</div>' +
-          '<div style="font-size:0.76rem;color:var(--muted);margin:-4px 0 8px;">여러 곳 고를 수 있어요<br>(수도권은 충청·강원도 포함이에요)</div>' +
-          '<div class="zone-opts" id="zmy-opts">' + ZONES.map(function (z) { return '<button type="button" class="zone-opt' + (mz.indexOf(z[0]) >= 0 ? ' on' : '') + '" data-zmy="' + z[0] + '">' + z[1] + '</button>'; }).join('') + '</div>' : '') +
-      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button>' + (mz ? '<button type="button" class="card-btn primary" id="zmy-save" style="display:none;">지역 저장</button>' : '') + '</div>'
+      (me ? '<div style="font-size:0.8rem;color:var(--muted);margin:-4px 0 10px;">보고 싶은 지역을 켜고 끄세요. 다 켜면 전체 지역이에요.<br>(수도권은 충청·강원 포함)</div>' +
+          '<div class="zone-opts" id="zch-opts">' + ZONES.map(function (z) { return opt(z[0], z[1], ch.indexOf(z[0]) >= 0); }).join('') + '</div>'
+        : '<div class="zone-sec-title">👀 명단 지역 필터 (관리자)</div><div class="zone-opts" id="zch-opts">' + opt('all', '전체', adminZone === 'all') + ZONES.map(function (z) { return opt(z[0], z[1], adminZone === z[0]); }).join('') + '</div>') +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>'
     );
     ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
-    if (ov.querySelector('#zch-opts')) ov.querySelector('#zch-opts').addEventListener('click', function (e) {
+    ov.querySelector('#zch-opts').addEventListener('click', function (e) {
       var b = e.target.closest('[data-zch]'); if (!b) return;
       var k = b.getAttribute('data-zch');
-      if (mz) {   /* 켜고 끄기 — 적어도 한 곳은 켜 둠, 바로 명단에 반영하고 창은 그대로 */
-        var on = Array.prototype.filter.call(ov.querySelectorAll('#zch-opts [data-zch].on'), function (x) { return true; }).map(function (x) { return x.getAttribute('data-zch'); });
-        var i = on.indexOf(k);
-        if (i >= 0) { if (on.length === 1) return; on.splice(i, 1); } else on.push(k);
-        b.classList.toggle('on', on.indexOf(k) >= 0);
-        var same = on.length === mz.length && on.every(function (x) { return mz.indexOf(x) >= 0; });
-        zoneView = same ? 'auto' : on;
-        if (activeTab !== 'list') activeTab = 'list';
-        paint(currentState);
-        return;
-      }
-      adminZone = k;
-      closeModal(ov);
+      if (me) {   /* 켜고 끄기 — 적어도 한 곳은 켜 둠, 바로 명단에 반영하고 창은 그대로 */
+        var i = ch.indexOf(k);
+        if (i >= 0) { if (ch.length === 1) return; ch.splice(i, 1); } else ch.push(k);
+        b.classList.toggle('on', ch.indexOf(k) >= 0);
+        setZoneChannel(me.id, ch);
+      } else { adminZone = k; closeModal(ov); }
       if (activeTab !== 'list') activeTab = 'list';
       paint(currentState);
     });
-    if (mz) {
-      var picked = mz.slice();
-      var save = ov.querySelector('#zmy-save');
-      ov.querySelector('#zmy-opts').addEventListener('click', function (e) {
-        var b = e.target.closest('[data-zmy]'); if (!b) return;
-        var k = b.getAttribute('data-zmy'), i = picked.indexOf(k);
-        if (i >= 0) { if (picked.length === 1) return; picked.splice(i, 1); b.classList.remove('on'); }
-        else { picked.push(k); b.classList.add('on'); }
-        picked.sort(function (x, y) { return ZONES.map(function (z) { return z[0]; }).indexOf(x) - ZONES.map(function (z) { return z[0]; }).indexOf(y); });
-        save.style.display = (picked.join() === mz.join()) ? 'none' : '';
-      });
-      save.addEventListener('click', function () {
-        save.disabled = true;
-        saveMyZones(me.id, picked).then(function () { closeModal(ov); zoneView = 'auto'; paint(currentState); })
-          .catch(function (err) { save.disabled = false; modalNotice('저장 실패', (err && err.message) || String(err)); });
-      });
-    }
+  }
+  /* 관리자: 회원이 나오는 지역 채널 정하기 (기본 전체 — 예: 부산 회원을 경상도로) */
+  function openAdminZoneSheet(id) {
+    var e = (currentState.entries || []).find(function (x) { return x.id === id; }); if (!e) return;
+    var picked = zonesOf(e).slice(), orig = picked.join();
+    var ov = openModal('<h3>📍 ' + escapeHtml(e.nickname) + '님 지역</h3>' +
+      '<div style="font-size:0.8rem;color:var(--muted);margin:-4px 0 10px;">이 회원이 나오는 지역 채널이에요. 다 켜면 전체 지역(기본).<br>사는 곳: ' + escapeHtml(e.region || '—') + '</div>' +
+      '<div class="zone-opts" id="az-opts">' + ZONES.map(function (z) { return '<button type="button" class="zone-opt' + (picked.indexOf(z[0]) >= 0 ? ' on' : '') + '" data-az="' + z[0] + '">' + z[1] + '</button>'; }).join('') + '</div>' +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button><button type="button" class="card-btn primary" id="az-save" style="display:none;">저장</button></div>');
+    var save = ov.querySelector('#az-save');
+    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+    ov.querySelector('#az-opts').addEventListener('click', function (ev) {
+      var b = ev.target.closest('[data-az]'); if (!b) return;
+      var k = b.getAttribute('data-az'), i = picked.indexOf(k);
+      if (i >= 0) { if (picked.length === 1) return; picked.splice(i, 1); } else picked.push(k);
+      b.classList.toggle('on', picked.indexOf(k) >= 0);
+      picked.sort(function (a, c) { return ZONE_ALL.indexOf(a) - ZONE_ALL.indexOf(c); });
+      save.style.display = picked.join() === orig ? 'none' : '';
+    });
+    save.addEventListener('click', function () {
+      save.disabled = true;
+      saveMyZones(id, picked.slice()).then(function () { closeModal(ov); paint(currentState); })
+        .catch(function (err) { save.disabled = false; modalNotice('저장 실패', (err && err.message) || String(err)); });
+    });
   }
   /* 내(또는 내가 관리하는 친구) 프로필의 만나고 싶은 지역만 바로 저장 — 서버 최신값 기준 트랜잭션 */
   function saveMyZones(entryId, zones) {
@@ -1169,13 +1167,13 @@
         var list = (st.entries || []).map(function (e) {
           if (e.id !== entryId) return e;
           before = zonesText(zonesOf(e));
-          var u = JSON.parse(JSON.stringify(e)); u.meetZones = zones; return u;
+          var u = JSON.parse(JSON.stringify(e)); if (zonesAll(zones)) delete u.meetZones; else u.meetZones = zones; return u;   /* 전체(기본)는 저장 안 함 */
         });
         tx.update(stateRef, { entries: list });
       });
     }).then(function () {
       var e = (currentState.entries || []).find(function (x) { return x.id === entryId; });
-      appendLog('profile', (e && e.nickname) || '회원', '만나고 싶은 지역 ' + before + ' → ' + zonesText(zones));
+      appendLog('profile', (e && e.nickname) || '회원', '지역 채널 ' + before + ' → ' + zonesText(zones));
       return refreshNow();
     });
   }
@@ -1185,12 +1183,12 @@
   document.addEventListener('change', function (e) {
     if (e.target && e.target.name === 'meetZones') { var l = e.target.closest('label'); if (l) l.classList.toggle('on', e.target.checked); }
   });
-  function viewerZonesNow() { var m = currentUser ? findMyEntry(currentState) : null; return (m && !m.isMatchmaker) ? zonesOf(m) : null; }
+  function viewerZonesNow() { return null; }   /* 칩은 보는 사람과 상관없이 '전체 지역'이 아닌 회원에게만 */
   /* 다른 지역 회원 표시 칩: 회원에겐 '나와 안 겹치는' 사람만, 손님·관리자에겐 수도권만이 아닌 사람만 */
   function zoneChipFor(entry, viewerZones) {
     if (!ZONES_ON) return '';
     var z = zonesOf(entry);
-    if (viewerZones ? zonesOverlap(z, viewerZones) : (z.length === 1 && z[0] === 'capital')) return '';
+    if (zonesAll(z)) return '';
     return '<span class="chip" style="background:#EEF5EA;color:#3B6D11;border-color:#97C459;">📍 ' + escapeHtml(zonesText(z)) + '</span>';
   }
   var listFilterInitFor = null; /* 이성 기본 필터를 적용한 활동 프로필 id (프로필당 1회만 자동 적용) */
@@ -5741,10 +5739,10 @@
     entries.forEach(function (e) { zonesOf(e).forEach(function (k) { zoneCnt[k]++; }); });
     var zoneLine = ZONES.map(function (z) { return z[1] + ' ' + (zoneCnt[z[0]] ? '<b>' + zoneCnt[z[0]] + '명</b>' : '모집 중'); }).join(' · ');
     var teaserCta = teaser
-      ? '<div class="readonly-note" style="background:var(--gold-soft);border-color:var(--gold);text-align:center;">🔒 회원 정보는 <b>로그인 후</b> 볼 수 있어요. 현재 <b>' + entries.length + '명</b>이 함께하고 있어요.<br>' + (ZONES_ON ? '📍 ' + zoneLine + '<br>' : '') + '<b>안전한 지인 기반 소개</b> — 가입하고 만나보세요!</div>'
+      ? '<div class="readonly-note" style="background:var(--gold-soft);border-color:var(--gold);text-align:center;">🔒 회원 정보는 <b>로그인 후</b> 볼 수 있어요. 현재 <b>' + entries.length + '명</b>이 함께하고 있어요.<br><b>안전한 지인 기반 소개</b> — 가입하고 만나보세요!</div>'
       : '';
-    var zoneNote = (myZones && zoneMode === 'all' && !(myZones.length === 1 && myZones[0] === 'capital'))
-      ? '<div class="readonly-note" style="background:#EEF5EA;border-color:#97C459;">📍 <b>' + escapeHtml(zonesText(myZones)) + '</b>에서 만날 수 있는 회원이 아직 ' + mineOpp + '명이라 <b>전체 지역</b>을 함께 보여드려요. 다른 지역 회원 카드엔 📍 표시가 있어요. 주변 친구를 초대해 주세요 🙌</div>'
+    var zoneNote = (myZones && zoneMode === 'sel' && mineOpp < 5)
+      ? '<div class="readonly-note" style="background:#EEF5EA;border-color:#97C459;">📍 <b>' + escapeHtml(zonesText(myZones)) + '</b> 채널에서 만날 수 있는 이성 회원이 아직 ' + mineOpp + '명이에요. 위 지역 버튼에서 다른 지역도 켤 수 있어요. 주변 친구를 초대해 주세요 🙌</div>'
       : '';
     var guide = '';
     if (isPermFilter) {
@@ -6247,11 +6245,6 @@
             '</div>' +
             '<div class="field"><label for="f-region">사는 곳 <span class="req">필수</span></label>' +
               '<input type="text" id="f-region" name="region" maxlength="40" placeholder="예: 서울 마포구" required></div>' +
-            (!ZONES_ON ? '' : '<div class="field"><label>만나고 싶은 지역 <span class="opt">(여러 개 선택 가능)</span></label>' +
-              '<div class="zone-opts" style="padding:4px 0;">' +
-                ZONES.map(function (z) { return '<label class="zone-opt zone-check' + (z[0] === 'capital' ? ' on' : '') + '"><input type="checkbox" name="meetZones" value="' + z[0] + '"' + (z[0] === 'capital' ? ' checked' : '') + '>' + z[1] + '</label>'; }).join('') +
-              '</div>' +
-              '<span class="hint">수도권은 서울·경기·인천·충청·강원이에요. 고른 지역 회원이 명단에 먼저 보여요.</span></div>') +
             '<div class="field"><label for="f-workplace">직장 위치 <span class="opt">(회사명/직업 공개는 자유)</span> <span class="req">필수</span></label>' +
               '<input type="text" id="f-workplace" name="workplace" maxlength="60" placeholder="예: 강남 (아모레/연구원)" required></div>' +
             (ownerMMForm
@@ -8788,8 +8781,7 @@
     var gender = genderEl ? genderEl.value : '';
     var birthYear = parseInt(form.querySelector('[name="birthYear"]').value, 10);
     var region = (form.querySelector('[name="region"]').value || '').trim();
-    var meetZones = Array.prototype.map.call(form.querySelectorAll('[name="meetZones"]:checked'), function (x) { return x.value; });
-    if (!meetZones.length) meetZones = ['capital'];
+    var meetZones = null;   /* 지역은 관리자만 정함 (2026-10-13) — 프로필 수정·가입이 관리자 지정값을 덮지 않게 */
     var workplace = (form.querySelector('[name="workplace"]').value || '').trim();
     var referrerText = (form.querySelector('[name="referrerText"]').value || '').trim();
     var degreeEl = form.querySelector('[name="degreeChoice"]:checked');
@@ -8924,7 +8916,7 @@
       var thumb = results[5] || null;
       if (viaServer) {
         /* 손님 신규 가입 · 승인 대기 본인 수정 → 서버(applicantAction)가 검증 후 저장 */
-        var fields = { nickname: nickname, gender: gender, birthYear: birthYear, region: region, meetZones: meetZones, workplace: workplace,
+        var fields = { nickname: nickname, gender: gender, birthYear: birthYear, region: region, workplace: workplace,
           photoThumb: thumb, photoCount: finalPhotos.length, blurPhoto: blurPhoto && finalPhotos.length > 0,
           height: height, intro: intro, idealType: idealType, dealbreaker: dealbreaker, degreeChoice: degreeChoice };
         if (results[0]) fields.realNameEnc = results[0];
@@ -8964,7 +8956,7 @@
                   u.gender = gender;
                   u.birthYear = birthYear;
                   u.region = region;
-                  u.meetZones = meetZones;
+                  if (meetZones) u.meetZones = meetZones;
                   u.workplace = workplace;
                   u.photoThumb = thumb;
                   u.photoCount = finalPhotos.length;
@@ -9002,7 +8994,7 @@
                     cmp('성별', genderLabel(e.gender), genderLabel(gender));
                     cmp('출생연도', e.birthYear, birthYear);
                     cmp('지역', e.region, region);
-                    cmp('만나고 싶은 지역', zonesText(zonesOf(e)), zonesText(meetZones));
+                    if (meetZones) cmp('지역 채널', zonesText(zonesOf(e)), zonesText(meetZones));
                     cmp('직장', e.workplace, workplace);
                     cmp('키', e.height, height);
                     cmp('소개', e.intro, intro);
@@ -9029,7 +9021,6 @@
             gender: gender,
             birthYear: birthYear,
             region: region,
-            meetZones: meetZones,
             workplace: workplace,
             photoThumb: thumb,
             photoCount: finalPhotos.length,
@@ -10122,11 +10113,13 @@
       '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
         '<button type="button" class="card-btn primary" id="am-hold" style="width:100%;">📌 보류 (명단에서 내림 · 되돌릴 수 있음)</button>' +
         '<button type="button" class="card-btn danger" id="am-del" style="width:100%;">🗑 완전 삭제 (되돌릴 수 없음)</button>' +
+        (ZONES_ON ? '<button type="button" class="card-btn" id="am-zone" style="width:100%;">📍 지역 채널: ' + escapeHtml(zonesText(zonesOf(e))) + ' (바꾸기)</button>' : '') +
         '<button type="button" class="card-btn" id="modal-cancel" style="width:100%;">취소</button>' +
       '</div>'
     );
     ov.querySelector('#am-hold').addEventListener('click', function () { closeModal(ov); handleHoldApproved(id); });
     ov.querySelector('#am-del').addEventListener('click', function () { closeModal(ov); handleDelete(id); });
+    if (ov.querySelector('#am-zone')) ov.querySelector('#am-zone').addEventListener('click', function () { closeModal(ov); openAdminZoneSheet(id); });
     ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
     ov.addEventListener('click', function (ev) { if (ev.target === ov) closeModal(ov); });
   }
@@ -11014,7 +11007,7 @@
     rows += '<div class="detail-row"><div class="detail-label">성별</div><div class="detail-value">' + genderLabel(entry.gender) + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">생년</div><div class="detail-value">' + (entry.birthYear || '-') + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">지역</div><div class="detail-value">' + escapeHtml(entry.region || '-') + '</div></div>';
-    if (ZONES_ON) rows += '<div class="detail-row"><div class="detail-label">만나고 싶은 지역</div><div class="detail-value">' + escapeHtml(zonesText(zonesOf(entry))) + '</div></div>';
+    if (ZONES_ON && isAdminUnlocked) rows += '<div class="detail-row"><div class="detail-label">지역 채널</div><div class="detail-value">' + escapeHtml(zonesText(zonesOf(entry))) + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">직장</div><div class="detail-value">' + escapeHtml(entry.workplace || '-') + '</div></div>';
     if (entry.height) rows += '<div class="detail-row"><div class="detail-label">키</div><div class="detail-value">' + escapeHtml(entry.height) + 'cm</div></div>';
     var degTxt = degreeLabel(entry.degreeChoice || entry.degree);
@@ -11094,7 +11087,7 @@
       rows += '<div class="detail-row"><div class="detail-label">성별</div><div class="detail-value">' + genderLabel(entry.gender) + '</div></div>';
       rows += '<div class="detail-row"><div class="detail-label">생년</div><div class="detail-value">' + (entry.birthYear || '-') + '</div></div>';
       rows += '<div class="detail-row"><div class="detail-label">지역</div><div class="detail-value">' + escapeHtml(entry.region || '-') + '</div></div>';
-    if (ZONES_ON) rows += '<div class="detail-row"><div class="detail-label">만나고 싶은 지역</div><div class="detail-value">' + escapeHtml(zonesText(zonesOf(entry))) + '</div></div>';
+    if (ZONES_ON && isAdminUnlocked) rows += '<div class="detail-row"><div class="detail-label">지역 채널</div><div class="detail-value">' + escapeHtml(zonesText(zonesOf(entry))) + '</div></div>';
       rows += '<div class="detail-row"><div class="detail-label">직장</div><div class="detail-value">' + escapeHtml(entry.workplace || '-') + '</div></div>';
       if (entry.height) rows += '<div class="detail-row"><div class="detail-label">키</div><div class="detail-value">' + escapeHtml(entry.height) + 'cm</div></div>';
     }
