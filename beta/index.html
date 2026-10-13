@@ -1031,7 +1031,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-13-439';
+  var APP_VERSION = '2026-10-14-440';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1188,7 +1188,7 @@
   function viewerZonesNow() { return null; }   /* 칩은 보는 사람과 상관없이 '전체 지역'이 아닌 회원에게만 */
   /* 다른 지역 회원 표시 칩: 회원에겐 '나와 안 겹치는' 사람만, 손님·관리자에겐 수도권만이 아닌 사람만 */
   function zoneChipFor(entry, viewerZones) {
-    if (!ZONES_ON) return '';
+    if (!ZONES_ON || !isAdminUnlocked) return '';   /* 관리자가 정한 지역 표시 — 회원은 카드의 '사는 곳'으로 충분해 안 보임 (2026-10-14 Benny) */
     var z = zonesOf(entry);
     if (zonesAll(z)) return '';
     return '<span class="chip" style="background:#EEF5EA;color:#3B6D11;border-color:#97C459;">📍 ' + escapeHtml(zonesText(z)) + '</span>';
@@ -4280,7 +4280,7 @@
   var LOG_LIMIT = 1500;                 /* (구) 참고용 */
   var LOG_RECENT_MAX = 400;             /* app/state 에 유지하는 최근 로그 수 (실시간·검색용) */
   var LOG_ARCHIVE_TRIGGER = 600;        /* 최근 로그가 이 수를 넘으면 오래된 것을 app/logs 로 배치 이동 */
-  var LOG_ARCHIVE_MAX = 8000;           /* app/logs(아카이브) 보관 상한 (1MiB 안전) */
+  var LOG_ARCHIVE_MAX = 5000;           /* app/logs(아카이브) 보관 상한 — 한 줄 약 150B라 8000이면 1MiB 넘음 → 5000(약 740KB) (2026-10-14) */
   var logsRef = db.doc('app/logs');     /* 활동 기록 아카이브(별도 문서) */
   function appendLog(type, actor, detail) {
     if (dataMode !== 'full') return; /* 손님·승인 대기 기록은 서버(applicantAction)가 남김 */
