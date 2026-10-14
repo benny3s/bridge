@@ -441,6 +441,7 @@ exports.onStateChange = functions
     const jobs = [];
     jobs.push(syncPublicView(after).catch((e) => console.error('syncPublicView', e)));
     jobs.push(sweepSecrets(before, after).catch((e) => console.error('sweepSecrets', e)));
+    jobs.push(sweepThumbs(before, after).catch((e) => console.error('sweepThumbs', e)));
     jobs.push(migrateDmToChats(after).catch((e) => console.error('migrateDmToChats', e)));
     jobs.push(refreshChatViewers(before, after).catch((e) => console.error('refreshChatViewers', e)));
     jobs.push(syncPhotoAcl(after, false).catch((e) => console.error('syncPhotoAcl', e)));
@@ -885,6 +886,7 @@ exports.applicantAction = functions
         return { entry: null, messages: [], approved };
       }
       const entry = Object.assign({}, me); delete entry.pinAuth; delete entry.pinHash;
+      if (!entry.photoThumb) { const th = ((await db.doc('app/thumbs').get()).data() || {}).t || {}; if (th[uid]) entry.photoThumb = th[uid]; }   /* 썸네일은 app/thumbs 로 분리됨 */
       const messages = (s.messages || []).filter((m) => m.entryId === uid);
       return { entry, messages };
     }
@@ -983,6 +985,33 @@ function stableJson(v) {
   return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
 }
 function hasPinInline(e) { return !!(e && (e.pinAuth || e.pinHash)); }
+/* 명단용 작은 사진(photoThumb)을 app/thumbs 로 옮기고 state 에서 지움 (2026-10-14: 메인 문서 1MB 한도 — 174KB 차지).
+   앱은 예전처럼 state 에 써도 됨. 회원·관리자 화면은 app/thumbs 를 구독해 메모리에서만 덧붙임. 사라진 계정의 썸네일은 같이 지움 */
+async function sweepThumbs(before, after) {
+  const FV = admin.firestore.FieldValue;
+  const moved = {};
+  allOf(after).forEach((e) => { if (typeof e.photoThumb === 'string' || e.photoThumb === null) moved[e.id] = e.photoThumb; });
+  const afterIds = {}; allOf(after).forEach((e) => { afterIds[e.id] = 1; });
+  const removed = allOf(before).map((e) => e.id).filter((id) => !afterIds[id]);
+  if (!Object.keys(moved).length && !removed.length) return;
+  const put = {};
+  Object.keys(moved).forEach((id) => { put[id] = moved[id] ? moved[id] : FV.delete(); });
+  removed.forEach((id) => { put[id] = FV.delete(); });
+  await db.doc('app/thumbs').set({ t: put, at: new Date().toISOString() }, { merge: true });
+  if (!Object.keys(moved).length) return;
+  const ref = db.doc('app/state');
+  await db.runTransaction(async (tx) => {
+    const s = (await tx.get(ref)).data() || {};
+    let changed = false;
+    const strip = (list) => (list || []).map((e) => {
+      if (!(e.id in moved) || e.photoThumb !== moved[e.id]) return e;   /* 그사이 새 사진이 들어왔으면 다음 차례에 */
+      const u = Object.assign({}, e); delete u.photoThumb; changed = true; return u;
+    });
+    const upd = { entries: strip(s.entries), pendingEntries: strip(s.pendingEntries) };
+    if (changed) tx.update(ref, upd);
+  });
+}
+
 async function sweepSecrets(before, after) {
   const FV = admin.firestore.FieldValue;
   const beforeMap = {}; allOf(before).forEach((e) => { beforeMap[e.id] = e; });
