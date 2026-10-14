@@ -442,6 +442,7 @@ exports.onStateChange = functions
     jobs.push(syncPublicView(after).catch((e) => console.error('syncPublicView', e)));
     jobs.push(sweepSecrets(before, after).catch((e) => console.error('sweepSecrets', e)));
     jobs.push(sweepThumbs(before, after).catch((e) => console.error('sweepThumbs', e)));
+    jobs.push(bumpMemberEver(after).catch((e) => console.error('bumpMemberEver', e)));
     jobs.push(migrateDmToChats(after).catch((e) => console.error('migrateDmToChats', e)));
     jobs.push(refreshChatViewers(before, after).catch((e) => console.error('refreshChatViewers', e)));
     jobs.push(syncPhotoAcl(after, false).catch((e) => console.error('syncPhotoAcl', e)));
@@ -704,9 +705,19 @@ function buildPublicView(state) {
     teaser, loginDir, reviews,
     connCount: Array.isArray(state.connLog) ? state.connLog.length : Math.max(typeof state.connEver === 'number' ? state.connEver : 0, connNow),
     coupleCount: reports.filter((r) => r.confirmed).length,
-    /* 누적 가입 = 승인된 계정(주선자·보관 포함, 테스트 제외). 주선자의 본인 프로필(ownerSelf)은 같은 사람이라 중복 제외 */
-    memberTotal: entries.filter((e) => !e.testAccount && !(e.managedBy && e.ownerSelf)).length
+    memberTotal: memberEverOf(state)
   };
+}
+/* 누적 가입 = 지금 승인된 계정(주선자·보관 포함, 테스트·주선자 본인 프로필 중복 제외) + 삭제된 계정(삭제 이력, QA_ 제외).
+   삭제 이력이 정리돼도 줄지 않게 지금까지 최고값(state.memberEver)과 비교 (2026-10-14 Benny: 누적은 줄면 안 됨) */
+function memberEverOf(state) {
+  const now = (state.entries || []).filter((e) => !e.testAccount && !(e.managedBy && e.ownerSelf)).length
+    + (state.deletedLog || []).filter((d) => !/^QA_/i.test(d.nickname || '')).length;
+  return Math.max(typeof state.memberEver === 'number' ? state.memberEver : 0, now);
+}
+async function bumpMemberEver(after) {
+  const n = memberEverOf(after);
+  if (n > (typeof after.memberEver === 'number' ? after.memberEver : 0)) await db.doc('app/state').update({ memberEver: n });
 }
 async function syncPublicView(state) {
   const view = buildPublicView(state);
