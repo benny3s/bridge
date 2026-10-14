@@ -1031,7 +1031,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-14-440';
+  var APP_VERSION = '2026-10-14-441';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -8076,10 +8076,23 @@
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
     return (n / 1024 / 1024).toFixed(2) + ' MB';
   }
+  function stateDocBytes(state) {
+    var c = Object.assign({}, state);
+    ['entries', 'pendingEntries'].forEach(function (k) {
+      c[k] = (state[k] || []).map(function (e) {
+        var p = _adminPriv[e.id]; if (!p) return e;
+        var o = Object.assign({}, e);
+        ADMIN_PRIV_KEYS.forEach(function (f) { if (p[f] && o[f] === p[f]) delete o[f]; });
+        return o;
+      });
+    });
+    if (_adminKeyDoc && state.adminAuth && state.adminAuth.wrappedPrivateKey === _adminKeyDoc.wrappedPrivateKey) c.adminAuth = { publicKeyJwk: state.adminAuth.publicKeyJwk };
+    return byteLen(c);
+  }
   function capacityHtml(state) {
     /* 사진은 photos/{id} 별도 문서로 분리됨. 이 표는 1MB 한계가 걸리는
        메인 문서(app/state = 회원 텍스트+썸네일+요청+로그)만 측정 */
-    var total = byteLen(state);
+    var total = stateDocBytes(state);   /* 관리자 화면이 덧붙인 암호문(adminOnly)·관리자 키는 빼고 실제 문서 크기만 (2026-10-14: 약 210KB 부풀려 보이던 문제) */
     var thumbBytes = 0, thumbCount = 0;
     (state.entries || []).concat(state.pendingEntries || []).forEach(function (e) {
       if (e.photoThumb) { thumbBytes += byteLen(e.photoThumb); thumbCount++; }
