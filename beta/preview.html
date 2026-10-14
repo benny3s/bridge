@@ -1031,7 +1031,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-14-441';
+  var APP_VERSION = '2026-10-14-442';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1430,6 +1430,26 @@
      실명·번호·경로 암호문은 adminOnly/{id}, 관리자 개인키는 adminKey/main 에 있음(관리자만 읽기).
      관리자 화면 코드는 예전처럼 entry.contactEnc 등을 읽으므로, 받아온 값을 메모리 state 에만 덧붙임. */
   var adminOnlyRef = db.collection('adminOnly');
+  var thumbsRef = db.collection('app').doc('thumbs');   /* 명단용 작은 사진 { t: { entryId: dataUrl } } — 서버만 씀 (2026-10-14) */
+  var _thumbs = {}, _thumbsUnsub = null;
+  function overlayThumbs(state) {
+    if (!state || state._public) return state;
+    ['entries', 'pendingEntries'].forEach(function (k) {
+      (state[k] || []).forEach(function (e) { if (!e.photoThumb && _thumbs[e.id]) e.photoThumb = _thumbs[e.id]; });
+    });
+    return state;
+  }
+  function stopThumbs() { if (_thumbsUnsub) { try { _thumbsUnsub(); } catch (e) {} } _thumbsUnsub = null; _thumbs = {}; }
+  function startThumbs() {
+    if (_thumbsUnsub) return Promise.resolve();
+    return new Promise(function (resolve) {
+      _thumbsUnsub = thumbsRef.onSnapshot(function (d) {
+        _thumbs = (d.exists && d.data().t) || {};
+        if (currentState && dataMode === 'full') { overlayThumbs(currentState); schedulePaint(); }
+        resolve();
+      }, function (err) { try { console.warn('thumbs', err && err.code); } catch (e) {} resolve(); });
+    });
+  }
   var adminKeyRef = db.collection('adminKey').doc('main');
   var _adminPriv = {};
   var _adminKeyDoc = null;
@@ -1737,6 +1757,7 @@
   function onDataArrived(state, first) {
     _lastDataAt = Date.now();
     overlayAdminPriv(state);
+    overlayThumbs(state);
     if (!currentUser) restoreSession(state);
     checkVersion(state);
     currentState = state;
@@ -1781,7 +1802,8 @@
       /* 회원이면 채팅 서버 함수를 뒤에서 미리 깨워 둠(첫 메시지 전송이 콜드 스타트로 5초 걸리던 문제) */
       if (c.m === 1 && !_chatWarmed) { _chatWarmed = true; setTimeout(function () { callFn('chatAction', { op: 'ping' }).catch(function () {}); }, 2500); }
       var privReady = _authIsAdmin ? startAdminPriv() : (stopAdminPriv(), Promise.resolve());
-      return privReady.then(function () { return subscribeData(mode); }).then(function (s) {
+      var thumbsReady = mode === 'full' ? startThumbs() : (stopThumbs(), Promise.resolve());
+      return Promise.all([privReady, thumbsReady]).then(function () { return subscribeData(mode); }).then(function (s) {
         if (mode === 'public' && c.p === 1) return refreshPendingView().then(function () { return currentState; });
         return s;
       });
@@ -8080,9 +8102,11 @@
     var c = Object.assign({}, state);
     ['entries', 'pendingEntries'].forEach(function (k) {
       c[k] = (state[k] || []).map(function (e) {
-        var p = _adminPriv[e.id]; if (!p) return e;
+        var p = _adminPriv[e.id], th = _thumbs[e.id];
+        if (!p && !th) return e;
         var o = Object.assign({}, e);
-        ADMIN_PRIV_KEYS.forEach(function (f) { if (p[f] && o[f] === p[f]) delete o[f]; });
+        if (p) ADMIN_PRIV_KEYS.forEach(function (f) { if (p[f] && o[f] === p[f]) delete o[f]; });
+        if (th && o.photoThumb === th) delete o.photoThumb;   /* app/thumbs 에서 덧붙인 것 */
         return o;
       });
     });
@@ -8095,7 +8119,7 @@
     var total = stateDocBytes(state);   /* 관리자 화면이 덧붙인 암호문(adminOnly)·관리자 키는 빼고 실제 문서 크기만 (2026-10-14: 약 210KB 부풀려 보이던 문제) */
     var thumbBytes = 0, thumbCount = 0;
     (state.entries || []).concat(state.pendingEntries || []).forEach(function (e) {
-      if (e.photoThumb) { thumbBytes += byteLen(e.photoThumb); thumbCount++; }
+      if (e.photoThumb && e.photoThumb !== _thumbs[e.id]) { thumbBytes += byteLen(e.photoThumb); thumbCount++; }   /* 아직 메인 문서에 남은 것만 (옮겨진 건 아래 별도 줄) */
       getPhotos(e).forEach(function (p) { thumbBytes += byteLen(p); }); /* 아직 마이그레이션 안 된 inline */
     });
     var logBytes = byteLen(state.logs || []);
@@ -8117,7 +8141,8 @@
       '<div class="cap-total">' + fmtBytes(total) + ' / 1 MB 사용 중 <b>(' + pct.toFixed(1) + '%)</b> · 남은 용량 ' + fmtBytes(roomLeft) + '</div>' +
       '<table class="seen-table" style="margin-top:12px;">' +
         '<tbody>' +
-          '<tr><td>🖼️ 썸네일/inline 사진 ' + thumbCount + '개</td><td class="seen-date">' + fmtBytes(thumbBytes) + '</td></tr>' +
+          '<tr><td>🖼️ 썸네일/inline 사진 ' + thumbCount + '개 <span style="color:var(--muted);font-size:0.8rem;">· 옮기기 전 남은 것</span></td><td class="seen-date">' + fmtBytes(thumbBytes) + '</td></tr>' +
+          '<tr><td>🖼️ 썸네일 ' + Object.keys(_thumbs).length + '개 <span style="color:var(--muted);font-size:0.8rem;">· 별도 문서(app/thumbs), 메인 문서 용량 아님</span></td><td class="seen-date">' + fmtBytes(byteLen(_thumbs)) + '</td></tr>' +
           '<tr><td>📬 요청 ' + (state.dateRequests || []).length + '건</td><td class="seen-date">' + fmtBytes(reqBytes) + '</td></tr>' +
           '<tr><td>📜 활동 기록(최근) ' + (state.logs || []).length + '건 <span style="color:var(--muted);font-size:0.8rem;">· 오래된 건 별도 문서(app/logs)</span></td><td class="seen-date">' + fmtBytes(logBytes) + '</td></tr>' +
           '<tr><td>그 외 (프로필 텍스트 등)</td><td class="seen-date">' + fmtBytes(otherBytes) + '</td></tr>' +
@@ -8451,6 +8476,7 @@
   var _pinForceAsked = false;
   function paint(state) {
     overlayAdminPriv(state); /* 서버에서 새로 받은 state 로 그릴 때도 관리자 전용 값 유지 */
+    overlayThumbs(state);
     currentState = state;
     /* 저장된 로그인으로 들어왔는데 임시 PIN 상태면 한 번 새 PIN 정하기를 권한다 */
     if (!_pinForceAsked && currentUser && !isAdminUnlocked) {
@@ -9015,7 +9041,7 @@
                     cmp('소개', e.intro, intro);
                     cmp('선호', e.idealType, idealType);
                     cmp('비선호', e.dealbreaker, dealbreaker);
-                    var photoChanged = (e.photoCount || 0) !== finalPhotos.length || (e.photoThumb || '') !== (thumb || '');
+                    var photoChanged = (e.photoCount || 0) !== finalPhotos.length || (e.photoThumb || _thumbs[e.id] || '') !== (thumb || '');
                     if (photoChanged || prevMap['사진']) chg.push({ label: '사진', note: '사진 변경 (' + (e.photoCount || 0) + '장 → ' + finalPhotos.length + '장)' });
                     /* PII(암호화 항목)는 값 비노출 — 변경 여부만 */
                     if (results[0] || prevMap['이름']) chg.push({ label: '이름', note: '변경됨 (값 비공개)' });
