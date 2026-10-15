@@ -1039,7 +1039,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-449';
+  var APP_VERSION = '2026-10-15-450';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6477,7 +6477,7 @@
       (note ? '<div class="mine-note">"' + escapeHtml(note) + '"</div>' : '') +
       replyMsg + actions + chatBtn + revealMine;
     return (
-      '<details class="req-fold' + (needAction ? ' req-need' : '') + '" data-rid="' + escapeHtml(r.id) + '"' + (needAction ? ' open' : '') + '>' +
+      '<details class="req-fold' + (needAction ? ' req-need' : '') + '" data-rid="' + escapeHtml(r.id) + '" data-fk="r:' + escapeHtml(r.id) + '"' + (needAction ? ' open' : '') + '>' +
         '<summary>' +
           '<div class="chat-av md" style="background:' + avatarColor(otherId) + ';">' + escapeHtml(initials(other ? other.nickname : '?')) + '</div>' +
           '<span class="req-mid"><span class="req-sum-who">' + escapeHtml(otherLabel) + '</span>' +
@@ -6916,7 +6916,7 @@
           pendNote +
           friendsNews +
           joinSection +
-          '<details class="mine-section"' + (mmThread.length ? ' open' : '') + '>' +
+          '<details class="mine-section" data-fk="mm-adminmsg"' + (mmThread.length ? ' open' : '') + '>' +
             '<summary style="cursor:pointer;font-weight:700;list-style:revert;">💬 관리자 메시지<span class="count">' + mmThread.length + '</span></summary>' +
             '<div style="margin-top:8px;">' +
               (mmThread.length ? mmThread.map(function (m) { return msgLineHtml(m, 'user'); }).join('') : '<p class="sub" style="margin:0;">아직 없어요.</p>') +
@@ -6986,7 +6986,7 @@
       ? thread.map(function (m) { return msgLineHtml(m, 'user'); }).join('')
       : '<p class="sub" style="margin:0;">아직 관리자와 주고받은 메시지가 없어요.</p>';
     var msgSection =
-      '<details class="mine-section"' + (hasUnreadAdmin ? ' open' : '') + '>' + /* 새 관리자 메시지 있을 때만 펼침, 아니면 접힘(공간 절약) */
+      '<details class="mine-section" data-fk="mine-adminmsg"' + (hasUnreadAdmin ? ' open' : '') + '>' + /* 새 관리자 메시지 있을 때만 펼침, 아니면 접힘(공간 절약) */
         '<summary style="cursor:pointer;font-weight:700;list-style:revert;">💬 관리자 메시지<span class="count' + (hasUnreadAdmin ? ' blink' : '') + '">' + thread.length + '</span></summary>' +
         '<div style="margin-top:8px;">' +
           msgBody +
@@ -7140,7 +7140,7 @@
       var status = on
         ? '<span class="chip" style="background:#e9f6ee;color:#2e8b52;border-color:#cfe9d7;">💬 연결 중</span>'
         : '<span class="chip" style="background:#f1f3f4;color:#888;">🔌 해제됨</span>';
-      return '<details class="req-fold' + (on ? ' req-yesterday' : ' req-old') + '">' +
+      return '<details class="req-fold' + (on ? ' req-yesterday' : ' req-old') + '" data-fk="cl:' + escapeHtml(e.id || '') + '">' +
         '<summary>' + status +
           '<span class="req-sum-who">' + escapeHtml(nick(e.a)) + ' ↔ ' + escapeHtml(nick(e.b)) + '</span>' +
           '<span class="req-sum-when">' + (e.at ? new Date(e.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + (e.approxAt ? ' (추정)' : '') : '') + '</span>' +
@@ -7169,7 +7169,7 @@
     var rows = list.map(function (r) {
       var on = r.confirmed;
       var chip = on ? '<span class="chip" style="background:#e9f6ee;color:#2e8b52;">✅ 확인됨</span>' : '<span class="chip" style="background:#fef7e0;color:#b06000;">미확인</span>';
-      return '<details class="req-fold' + (on ? ' req-yesterday' : '') + '">' +
+      return '<details class="req-fold' + (on ? ' req-yesterday' : '') + '" data-fk="cp:' + escapeHtml(r.id || '') + '">' +
         '<summary>' + chip + '<span class="req-sum-who">💕 ' + escapeHtml(r.byNick || '') + (r.partner ? ' ↔ ' + escapeHtml(r.partner) : '') + '</span>' +
           '<span class="req-sum-when">' + (r.at ? new Date(r.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric' }) : '') + '</span></summary>' +
         '<div class="req-fold-body">' +
@@ -7287,7 +7287,8 @@
     }
     /* 섹션 내 개별 항목도 접기(요청함과 동일한 req-fold 스타일). summary=요약줄, body=상세+버튼 */
     function foldItem(summaryInner, bodyInner) {
-      return '<details class="req-fold">' +
+      var fk = 'fi:' + String(summaryInner).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);   /* 펼침 상태 기억용 (요약줄 글자 기준) */
+      return '<details class="req-fold" data-fk="' + escapeHtml(fk) + '">' +
         '<summary>' + summaryInner + '</summary>' +
         '<div class="req-fold-body">' + bodyInner + '</div>' +
       '</details>';
@@ -7553,7 +7554,7 @@
         (decTime && decLabel ? '<span class="when">' + decLabel + ' ' + decTime + '</span>' : '');
       var searchBlob = (fromName + ' ' + toName + ' ' + uidOf(fromId) + ' ' + uidOf(toId)).toLowerCase();
       return (
-        '<details class="' + foldCls + '" data-reqsearch="' + escapeHtml(searchBlob) + '">' +
+        '<details class="' + foldCls + '" data-reqsearch="' + escapeHtml(searchBlob) + '" data-fk="ar:' + escapeHtml(r.id) + '">' +
           summary +
           '<div class="req-fold-body">' +
             body +
@@ -8498,6 +8499,19 @@
     if (emptyNote) emptyNote.hidden = !(q && rows.length && shown === 0);
   }
   var _pinForceAsked = false;
+  /* 사용자가 접고 펼친 상태 기억 — 다른 회원 활동으로 화면이 다시 그려져도 그대로 (2026-10-15: '펼친 요청이 안 닫혀요') */
+  var foldState = {};
+  document.addEventListener('toggle', function (e) {
+    var d = e.target; if (!d || !d.getAttribute) return;
+    var k = d.getAttribute('data-fk'); if (k && !d._fkApplying) foldState[k] = d.open;
+  }, true);
+  function applyFoldState() {
+    var ds = document.querySelectorAll('details[data-fk]');
+    for (var i = 0; i < ds.length; i++) {
+      var k = ds[i].getAttribute('data-fk');
+      if (k in foldState && ds[i].open !== foldState[k]) { ds[i]._fkApplying = true; ds[i].open = foldState[k]; (function (d) { setTimeout(function () { d._fkApplying = false; }, 0); })(ds[i]); }
+    }
+  }
   function paint(state) {
     overlayAdminPriv(state); /* 서버에서 새로 받은 state 로 그릴 때도 관리자 전용 값 유지 */
     overlayThumbs(state);
@@ -8525,6 +8539,7 @@
     try { adjustSwitcherClip(); } catch (e) {} /* 전환창 친구 2줄 초과 시 접기 */
     try { updateCharCounts(); } catch (e) {} /* 자기소개 등 글자수 카운터 */
     try { maybeFloatThanks(state); } catch (e) {} /* ☕ 최근 후원자 감사 인사 (하루 한 번) */
+    try { applyFoldState(); } catch (e) {}
     maybeRestoreDraft();
   }
 
