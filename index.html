@@ -138,11 +138,10 @@
   }
   .admin-link:hover { opacity: 1; border-color: rgba(251,243,238,0.6); }
   .admin-link.unlocked { background: var(--accent); border-color: var(--accent); opacity: 1; }
-  /* 좁은 화면: 헤더 버튼 줄바꿈 방지 → 우측 정렬 유지한 채 가로 스크롤 */
+  /* 좁은 화면: 헤더 버튼이 잘리지 않게 — 넘치면 다음 줄로 (오른쪽 정렬+가로 스크롤은 왼쪽이 밀어도 안 보여 잘렸음, 2026-10-15) */
   @media (max-width: 480px) {
-    .admin-bar-row { flex-wrap: nowrap; overflow-x: auto; justify-content: flex-end; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-    .admin-bar-row::-webkit-scrollbar { display: none; }
-    .admin-link { flex: none; white-space: nowrap; }
+    .admin-bar-row { flex-wrap: wrap; justify-content: flex-end; row-gap: 6px; }
+    .admin-link { flex: none; white-space: nowrap; font-size: 0.76rem; padding: 5px 10px; }
   }
 
   /* ---------- Tabs ---------- */
@@ -1038,7 +1037,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-447';
+  var APP_VERSION = '2026-10-15-448';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -8405,7 +8404,7 @@
             : '') +
           (currentUser
             ? '<button type="button" class="admin-link unlocked" id="user-logout">' + ICON_UNLOCK + ' 로그아웃</button>' +
-              (canChangePin ? '<button type="button" class="admin-link" id="header-change-pin">&#128273; PIN 변경</button>' : '')
+              ((canChangePin && isMatchmakerEntry(authE)) ? '<button type="button" class="admin-link" id="header-change-pin">&#128273; PIN 변경</button>' : '')   /* 회원은 메시지함 '⚙️ 내 계정' 안으로 (2026-10-15), 주선자 홈엔 계정 창이 없어 여기 유지 */
             : (isAdminUnlocked
                 ? '<button type="button" class="admin-link unlocked" id="admin-toggle">' + ICON_UNLOCK + ' 관리자 해제</button>'
                 : '<button type="button" class="admin-link" id="user-login">' + ICON_LOCK + ' 로그인</button>')) +
