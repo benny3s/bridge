@@ -1038,7 +1038,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-444';
+  var APP_VERSION = '2026-10-15-445';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -9791,7 +9791,7 @@
       (!isSub && !viaMm ? row('id="change-my-pin"', '🔑', 'PIN 변경', '로그인 번호 바꾸기') : '') +
       (!isSub && !viaMm && !me.deleteRequested ? row('data-action="report-couple" data-id="' + id + '"', '💕', '좋은 인연 만났어요', '축하 후기 남기고 명단에서 내리기') : '') +
       (!me.deactivateRequested && !me.deactivated && !me.deleteRequested ? row('data-action="deactivate" data-id="' + id + '"', '💤', '잠시 쉬기', '명단에서 숨기고 나중에 다시 활동') : '') +
-      (!me.deleteRequested ? row('data-action="delete" data-id="' + id + '"', '🗑', '탈퇴하기', '프로필 삭제 · 관리자 확인 후 지워져요', true) : row('data-action="cancel-delete" data-id="' + id + '"', '↩️', '탈퇴 요청 취소', '관리자 확인 중이에요')) +
+      (!me.deleteRequested ? row('data-action="delete" data-id="' + id + '"', '🗑', '탈퇴하기', '프로필 삭제 (관리자 확인 후)', true) : row('data-action="cancel-delete" data-id="' + id + '"', '↩️', '탈퇴 요청 취소', '관리자 확인 중이에요')) +
       (!isSub && !viaMm && !amMM && !iManage ? (myJoinReq ? row('id="cancel-mm-req"', '⏳', '주선자 요청 취소', '승인 대기 중') : row('id="request-mm"', '🤝', '주선자에게 관리 요청', '친구가 내 프로필을 대신 관리')) : '') +
       (!isSub && !viaMm ? row('id="start-proxy"', '🤝', '주선자 계정으로 전환', '친구를 대신 소개하기') : '') +
       '</div><div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>';
