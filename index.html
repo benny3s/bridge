@@ -1045,7 +1045,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-454';
+  var APP_VERSION = '2026-10-15-455';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -7108,7 +7108,7 @@
       var pinBtn = pinOn
         ? '<button type="button" class="card-btn approve" data-action="sub-pin-manage" data-id="' + escapeHtml(me.id) + '" style="flex:none;" title="눌러서 연장/회수">🔑 임시 PIN (' + escapeHtml(subPinUntilText(me)) + ')</button>'
         : '<button type="button" class="card-btn" data-action="sub-pin-issue" data-id="' + escapeHtml(me.id) + '" style="flex:none;">🔑 1일 PIN 발급</button>';
-      headBtns = '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>' +
+      headBtns = '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 친구 프로필 보기</button>' +
         '<button type="button" class="card-btn" data-action="account-sheet" style="flex:none;">⚙️ 친구 계정</button>';   /* 일반 계정 전환·임시 PIN은 계정 창 안으로 (2026-10-15) */
     } else if (isSubProfile) {
       /* 친구(sub)가 임시 PIN으로 직접 로그인한 경우: 프로필 수정 + 만료 시각 표시 */
@@ -9930,7 +9930,7 @@
       row('data-action="edit" data-id="' + id + '"', '✏️', '프로필 수정', '사진·소개·이상형 바꾸기') +
       (!isSub && !viaMm ? row('id="change-my-pin"', '🔑', 'PIN 변경', '로그인 번호 바꾸기') : '') +
       (viaMm ? (pinOn
-        ? row('data-action="sub-pin-manage" data-id="' + id + '"', '🔑', '임시 PIN 연장·회수', '친구가 직접 로그인 중 · ' + escapeHtml(subPinUntilText(me)) + ' (' + escapeHtml(subPinRemainText(me)) + ')')
+        ? row('data-action="sub-pin-manage" data-id="' + id + '"', '🔑', '임시 PIN 연장·회수', (me.pinExpiresAt ? '친구가 직접 로그인 가능 · ' + escapeHtml(subPinUntilText(me)) + ' (' + escapeHtml(subPinRemainText(me)) + ')' : '친구가 직접 로그인 가능 (기한 없음)'))
         : row('data-action="sub-pin-issue" data-id="' + id + '"', '🔑', '임시 PIN 발급 (1일)', '친구가 직접 로그인해서 둘러볼 수 있게')) : '') +
       (viaMm ? row('data-action="sub-detach" data-id="' + id + '"', '🪪', '일반 계정으로 독립', '친구가 직접 관리하는 계정으로 바꾸기') : '') +
       (!isSub && !viaMm && !me.deleteRequested ? row('data-action="report-couple" data-id="' + id + '"', '💕', '좋은 인연 만났어요', '축하 후기 남기고 명단에서 내리기') : '') +
