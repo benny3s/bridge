@@ -857,6 +857,13 @@
   .chat-av.big { width: 40px; height: 40px; font-size: 1rem; }
   .chat-av.md { width: 36px; height: 36px; font-size: 0.95rem; }
   @media (pointer: coarse) { input, textarea, select { font-size: 16px !important; } }   /* 16px 미만이면 아이폰이 확대한 채로 남음 */
+  .admin-room-wrap { margin-bottom: 10px; }
+  .chat-item.admin-room { background: var(--gold-soft); border: 1px solid var(--gold); border-radius: 12px; padding: 8px 10px; }
+  .chat-item.admin-room:last-child { border-bottom: 1px solid var(--gold); }
+  .admin-room-tag { font-size: 0.68rem; font-weight: 400; color: var(--gold); border: 1px solid var(--gold); border-radius: 999px; padding: 0 6px; margin-left: 4px; vertical-align: 1px; }
+  .chat-sec-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 2px 0 2px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .chat-sec-label b { font-size: 0.86rem; color: var(--ink); }
+  .chat-sec-label span { font-size: 0.72rem; color: var(--muted); }
   .qa-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
   .qa-quick span { font-size: 0.76rem; color: var(--muted); margin-right: 2px; }
   .req-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
@@ -1047,7 +1054,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-459';
+  var APP_VERSION = '2026-10-16-460';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6734,9 +6741,9 @@
   function adminRoomHtml(state, me) {
     if (!adminRoomVisible(me)) return '';
     var th = threadFor(state, currentUser.id, 'user'), last = th[th.length - 1], un = adminUnreadFor(state, me);
-    return '<div class="chat-list" style="margin-bottom:4px;"><button type="button" class="chat-item admin-room" id="member-msg-open">' +
+    return '<div class="chat-list admin-room-wrap"><button type="button" class="chat-item admin-room" id="member-msg-open">' +
       '<div class="chat-av md" style="background:var(--gold);font-size:1.1rem;">👑</div>' +
-      '<div class="chat-item-mid"><div class="chat-item-name">베니브릿지 관리자</div>' +
+      '<div class="chat-item-mid"><div class="chat-item-name">베니브릿지 관리자 <span class="admin-room-tag">문의·공지</span></div>' +
         '<div class="chat-item-prev">' + (last ? (last.from === 'admin' ? '' : '나: ') + escapeHtml(last.text) : '궁금한 점·건의·탈퇴 문의는 여기로 보내 주세요') + '</div></div>' +
       '<div class="chat-item-right">' + (last ? '<div class="chat-item-time">' + escapeHtml(chatListTime(last.at)) + '</div>' : '') + (un ? '<div class="chat-item-badge">' + un + '</div>' : '') + '</div>' +
     '</button></div>';
@@ -6760,7 +6767,8 @@
     var nFold = rows.filter(function (x) { return x.fold; }).length;
     return '<div class="mine-section">' +
       (bare ? '' : '<h3>💬 채팅' + (total ? '<span class="count blink">' + total + '</span>' : '<span class="count">' + rows.length + '</span>') + '</h3>') +
-      '<p class="sub" style="margin:-4px 0 4px;font-size:0.76rem;">길게 누르거나(폰) 오른쪽 클릭(PC)하면 대화 지우기</p>' +
+      (bare ? '<div class="chat-sec-label"><b>💬 회원 대화</b><span>꾹 누르거나 오른쪽 클릭하면 지우기</span></div>'   /* 관리자 방과 회원 대화 구분 (2026-10-15) */
+        : '<p class="sub" style="margin:-4px 0 4px;font-size:0.76rem;">길게 누르거나(폰) 오른쪽 클릭(PC)하면 대화 지우기</p>') +
       '<div class="chat-list' + (chatListOpen ? ' open' : '') + '">' + rows.map(function (x) {
         var nick = x.alive ? nickForEntry(state, x.o) : '(탈퇴한 회원)';
         var prev = x.last ? ((x.last.fromId === me.id ? '나: ' : '') + x.last.text) : '대화가 연결됐어요. 먼저 인사해 보세요 👋';
