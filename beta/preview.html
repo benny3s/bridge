@@ -857,6 +857,12 @@
   .chat-av.big { width: 40px; height: 40px; font-size: 1rem; }
   .chat-av.md { width: 36px; height: 36px; font-size: 0.95rem; }
   @media (pointer: coarse) { input, textarea, select { font-size: 16px !important; } }   /* 16px 미만이면 아이폰이 확대한 채로 남음 */
+  .req-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+  .req-chip { border: 1px solid var(--line); background: var(--paper); color: var(--muted); border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 0.8rem; cursor: pointer; }
+  .req-chip b { font-weight: 700; margin-left: 2px; }
+  .req-chip.on { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .conn-row.flash { animation: connflash 1.2s ease; }
+  @keyframes connflash { 0% { background: var(--gold-soft); } 100% { background: transparent; } }
   .acct-list { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 2px; }
   .acct-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); padding: 11px 12px; font: inherit; color: var(--ink); cursor: pointer; }
   .acct-row:active { background: var(--gold-soft); }
@@ -1039,7 +1045,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-451';
+  var APP_VERSION = '2026-10-15-452';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4983,22 +4989,32 @@
   function openMemberMsgCenter() {
     if (!currentUser) { openGuestMsgModal(); return; } /* 비로그인: 이름 + 문의 내용으로 보내기 */
     var thread = threadFor(currentState, currentUser.id, 'user');
-    var body = thread.length ? thread.map(function (m) { return msgLineHtml(m, false); }).join('')
-      : '<p class="modal-msg" style="margin:0 0 4px;">아직 주고받은 메시지가 없어요. 첫 메시지를 남겨보세요!</p>';
+    var bubble = function (m) {   /* 관리자 = 왼쪽(👑), 나 = 오른쪽 — 채팅과 같은 모양 (2026-10-15) */
+      var mine = m.from !== 'admin', t = '<div class="chat-meta"><span>' + escapeHtml(fmtDate(m.at)) + '</span></div>';
+      return '<div class="chat-row first' + (mine ? ' mine' : '') + '">' +
+        (mine ? '' : '<div class="chat-av" style="background:var(--gold);">👑</div>') +
+        '<div class="chat-col">' + (mine ? '' : '<div class="chat-name">베니브릿지 관리자</div>') +
+          '<div class="chat-line">' + (mine ? t : '') + '<div class="chat-bubble' + (mine ? ' mine' : '') + '">' + escapeHtml(m.text) + '</div>' + (mine ? '' : t) + '</div>' +
+        '</div></div>';
+    };
+    var body = thread.length ? thread.map(bubble).join('')
+      : '<p class="modal-msg" style="margin:0 0 4px;">아직 주고받은 메시지가 없어요. 궁금한 점이나 건의를 남겨 주세요!</p>';
+    try { var _meE = findMyEntry(currentState); if (_meE) localStorage.setItem(adminSeenKey(_meE), new Date().toISOString()); } catch (e) {}
     var overlay = openModal(
-      '<h3>💬 Q&amp;A · 관리자에게 문의</h3>' +
+      '<h3>👑 관리자와 대화 · Q&amp;A</h3>' +
       (dataMode === 'full' && findMyEntry(currentState) ? '<button type="button" class="card-btn" data-action="account-sheet" style="width:100%;box-sizing:border-box;margin:2px 0 6px;font-size:0.86rem;">⚙️ 탈퇴·잠시 쉬기·PIN 변경은 여기서 바로 할 수 있어요</button>' : '') +
-      '<div style="max-height:36vh;overflow-y:auto;margin:6px 0 10px;">' + body + '</div>' +
+      '<div id="mc-thread" style="max-height:42vh;overflow-y:auto;margin:6px 0 10px;padding:4px 2px;background:var(--paper);border-radius:12px;">' + body + '</div>' +
       '<textarea class="modal-input" id="mc-text" rows="3" maxlength="300" placeholder="건의사항이나 궁금한 점을 남겨주세요"></textarea>' +
       '<button type="button" class="card-btn" data-kakao="1" style="width:100%;box-sizing:border-box;margin-top:8px;background:#FEE500;border-color:#FEE500;color:#3C1E1E;font-weight:700;">💬 카카오톡으로 문의</button>' +
       '<div class="modal-actions">' +
-        (thread.length ? '<button type="button" class="card-btn" id="mc-delall">전체 삭제</button>' : '') +
+        (thread.length ? '<button type="button" class="card-btn" id="mc-delall" style="font-size:0.8rem;color:var(--muted);">기록 지우기</button>' : '') +
         '<button type="button" class="card-btn" id="modal-cancel">닫기</button>' +
         '<button type="button" class="card-btn primary" id="mc-send">보내기</button>' +
       '</div>'
     );
     overlay.classList.add('wide-modal');
-    function close() { closeModal(overlay); }
+    try { var _th = overlay.querySelector('#mc-thread'); if (_th) _th.scrollTop = _th.scrollHeight; } catch (e) {}   /* 최근 메시지가 보이게 */
+    function close() { closeModal(overlay); paint(currentState); }
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
     overlay.addEventListener('click', function (e) { if (e.target === overlay || (e.target.closest && e.target.closest('[data-action="account-sheet"]'))) close(); });
     overlay.querySelector('#mc-send').addEventListener('click', function () {
@@ -6400,7 +6416,7 @@
     var t = r && r.decidedAt ? new Date(r.decidedAt).getTime() : 0;
     return !!t && (Date.now() - t) < FRESH_DECISION_MS;
   }
-  function reqRowHtml(r, state, incoming) {
+  function reqRowHtml(r, state, incoming, hiddenView) {
     var otherId = incoming ? r.fromId : r.toId;
     var myId = incoming ? r.toId : r.fromId; /* 이 요청 목록의 주인(내 활동 프로필) */
     var other = (state.entries || []).find(function (e) { return e.id === otherId; });
@@ -6456,6 +6472,7 @@
           '<button type="button" class="card-btn" data-action="hide-request" data-id="' + escapeHtml(r.id) + '">🙈 숨기기</button>' +
         '</div>';
     }
+    if (hiddenView) actions = '<div class="mine-actions"><button type="button" class="card-btn primary" data-action="unhide-request" data-id="' + escapeHtml(r.id) + '">↩️ 숨김 취소</button></div>';
     /* 답장 메시지 표시 */
     var replyMsg = '';
     if (st === 'approved' && r.approveMessage) replyMsg = '<div class="mine-note">답장: ' + escapeHtml(r.approveMessage) + '</div>';
@@ -6664,13 +6681,13 @@
     var timer = null, firedAt = 0, sx = 0, sy = 0;
     function fire(id) { if (Date.now() - firedAt < 1000) return; firedAt = Date.now(); chatItemMenu(id); }
     document.addEventListener('contextmenu', function (e) {
-      var it = e.target.closest && e.target.closest('.chat-item'); if (!it) return;
+      var it = e.target.closest && e.target.closest('.chat-item[data-id]'); if (!it) return;
       e.preventDefault();
       if (timer) { clearTimeout(timer); timer = null; }
       fire(it.getAttribute('data-id'));
     });
     document.addEventListener('touchstart', function (e) {
-      var it = e.target.closest && e.target.closest('.chat-item'); if (!it) return;
+      var it = e.target.closest && e.target.closest('.chat-item[data-id]'); if (!it) return;
       sx = e.touches[0].clientX; sy = e.touches[0].clientY;
       timer = setTimeout(function () { timer = null; if (navigator.vibrate) { try { navigator.vibrate(15); } catch (x) {} } fire(it.getAttribute('data-id')); }, 550);
     }, { passive: true });
@@ -6686,6 +6703,23 @@
     }, true);
   })();
   var CHAT_LIST_SHOW = 3, chatListOpen = false;   /* 대화방 목록: 처음 보이는 개수 / 펼침 상태 */
+  /* 💬 대화 탭 맨 위 고정: 관리자와의 대화 (Q&A) */
+  function adminSeenKey(me) { return 'bb-admsg-seen:' + me.id; }
+  function adminUnreadFor(state, me) {
+    if (!me || isProxyEntry(me)) return 0;
+    var seen = ''; try { seen = localStorage.getItem(adminSeenKey(me)) || ''; } catch (e) {}
+    return threadFor(state, me.id, 'user').filter(function (m) { return m.from === 'admin' && (m.at || '') > seen; }).length;
+  }
+  function adminRoomHtml(state, me) {
+    if (!me || isProxyEntry(me)) return '';
+    var th = threadFor(state, me.id, 'user'), last = th[th.length - 1], un = adminUnreadFor(state, me);
+    return '<div class="chat-list" style="margin-bottom:4px;"><button type="button" class="chat-item admin-room" id="member-msg-open">' +
+      '<div class="chat-av md" style="background:var(--gold);font-size:1.1rem;">👑</div>' +
+      '<div class="chat-item-mid"><div class="chat-item-name">베니브릿지 관리자</div>' +
+        '<div class="chat-item-prev">' + (last ? (last.from === 'admin' ? '' : '나: ') + escapeHtml(last.text) : '궁금한 점·건의·탈퇴 문의는 여기로 보내 주세요') + '</div></div>' +
+      '<div class="chat-item-right">' + (last ? '<div class="chat-item-time">' + escapeHtml(chatListTime(last.at)) + '</div>' : '') + (un ? '<div class="chat-item-badge">' + un + '</div>' : '') + '</div>' +
+    '</button></div>';
+  }
   function chatRoomsHtml(state, me, bare) {
     if (!me) return '';
     var ids = {};
@@ -6828,6 +6862,7 @@
   }
   /* 메시지함 탭: 한 번에 하나만 보여 구분이 확실하고 화면이 짧음. 숫자 = 할 일(안 읽은 대화·응답 필요) */
   var mineTab = null, mineTabFor = '';
+  var reqFilter = { 'in': 'all', out: 'all' };   /* 받은·보낸 요청 칩 선택 */
   function showMinePane(k) {
     mineTab = k;
     var ts = document.querySelectorAll('.mine-tab'), ps = document.querySelectorAll('.mine-pane');
@@ -6837,7 +6872,7 @@
   function mineTabsHtml(state, me, pd, restoreHtml) {
     if (mineTabFor !== me.id) { mineTab = null; mineTabFor = me.id; }   /* 프로필 바꾸면 다시 자동 선택 */
     var pin = pd['in'] || { n: 0, need: 0, html: '' }, pout = pd.out || { n: 0, need: 0, html: '' };
-    var chatUn = chatUnreadTotal(state, me);
+    var chatUn = chatUnreadTotal(state, me) + adminUnreadFor(state, me);
     var connHtml = connectionsSummaryHtml(state, me, true);
     var connN = (connHtml.match(/class="conn-row/g) || []).length;
     var cur = mineTab || (pin.need ? 'in' : (chatUn ? 'chat' : (pout.need ? 'out' : 'chat')));
@@ -6849,10 +6884,10 @@
       { k: 'conn', ic: '🔗', t: '내 연결', todo: 0, n: connN }
     ];
     var panes = {
-      chat: chatRoomsHtml(state, me, true),
-      'in': '<div class="mine-section">' + (pin.n ? pin.html : '<p class="sub mine-empty">아직 받은 요청이 없어요.</p>') +
-        '<p class="sub" style="margin:10px 0 0;font-size:0.76rem;">승인한 요청은 3일 뒤 🔗 내 연결로 옮겨져요.</p></div>' + restoreHtml,
-      out: '<div class="mine-section">' + (pout.n ? pout.html : '<p class="sub mine-empty">아직 보낸 요청이 없어요.<br>명단에서 마음에 드는 분께 요청해 보세요.</p>') + '</div>' + restoreHtml,
+      chat: adminRoomHtml(state, me) + chatRoomsHtml(state, me, true),
+      'in': '<div class="mine-section">' + (pin.hasAny ? pin.html : '<p class="sub mine-empty">아직 받은 요청이 없어요.</p>') +
+        '<p class="sub" style="margin:10px 0 0;font-size:0.76rem;">승인한 요청은 3일 뒤 🔗 내 연결로 옮겨져요.</p></div>',
+      out: '<div class="mine-section">' + (pout.hasAny ? pout.html : '<p class="sub mine-empty">아직 보낸 요청이 없어요.<br>명단에서 마음에 드는 분께 요청해 보세요.</p>') + '</div>',
       conn: connHtml
     };
     return '<div class="mine-tabs" role="tablist">' + tabs.map(function (t) {
@@ -6962,6 +6997,8 @@
     }
     var reqs = state.dateRequests || [];
     var paneData = {};   /* 탭용: 받은/보낸 요청 목록·개수·응답 필요 수 */
+    var REQ_F = [['all', '전체'], ['pending', '대기'], ['held', '보류'], ['approved', '승인'], ['rejected', '거절'], ['hidden', '🙈 숨김']];
+    var stKey = function (r) { var st = reqStatus(r); return st === 'user_approved' ? 'approved' : st; };
     var groups = [
       { key: 'in', title: '📥 받은 요청', incoming: true },
       { key: 'out', title: '📤 보낸 요청', incoming: false }
@@ -6986,7 +7023,25 @@
       var inner = items.length
         ? items.map(function (r) { return reqRowHtml(r, state, g.incoming); }).join('')
         : '<p class="sub" style="margin:0;">아직 없어요.</p>';
-      paneData[g.key] = { n: items.length, need: needCnt, html: inner };
+      /* 탭: 상태별 칩으로 거르기 + 숨긴 요청 보기/숨김 취소 (2026-10-15 Benny: 보낸 요청이 많아 필터 필요) */
+      var hiddenItems = reqs.filter(function (r) { return (r.hiddenBy || []).indexOf(me.id) >= 0 && (g.incoming ? r.toId === me.id : r.fromId === me.id); })
+        .sort(function (a, b) { return (b.submittedAt || '').localeCompare(a.submittedAt || ''); });
+      var cnt = { all: items.length, hidden: hiddenItems.length };
+      items.forEach(function (r) { var k = stKey(r); cnt[k] = (cnt[k] || 0) + 1; });
+      var f = reqFilter[g.key] || 'all';
+      if (f !== 'all' && !cnt[f]) f = 'all';
+      var shown = f === 'hidden' ? hiddenItems : (f === 'all' ? items : items.filter(function (r) { return stKey(r) === f; }));
+      var chips = (items.length + hiddenItems.length > 3 || hiddenItems.length)
+        ? '<div class="req-chips">' + REQ_F.filter(function (x) { return x[0] === 'all' || cnt[x[0]]; }).map(function (x) {
+            return '<button type="button" class="req-chip' + (x[0] === f ? ' on' : '') + '" data-action="req-filter" data-g="' + g.key + '" data-f="' + x[0] + '">' + x[1] + ' <b>' + (cnt[x[0]] || 0) + '</b></button>';
+          }).join('') + '</div>'
+        : '';
+      var tabInner = shown.length
+        ? shown.map(function (r) { return reqRowHtml(r, state, g.incoming, f === 'hidden'); }).join('')
+        : '';
+      if (f === 'hidden' && shown.length) tabInner = '<p class="sub" style="margin:2px 0 6px;font-size:0.8rem;">내 목록에서 숨긴 요청이에요. 줄을 눌러 \'↩️ 숨김 취소\'로 되돌릴 수 있어요.</p>' + tabInner;
+      var heldCnt = items.filter(function (r) { return reqStatus(r) === 'held'; }).length;
+      paneData[g.key] = { n: items.length, need: g.incoming ? needCnt : heldCnt, html: chips + tabInner, hasAny: items.length + hiddenItems.length > 0 };   /* 보낸 요청 숫자는 '보류(다시 요청 가능)'만 — 거절은 할 일이 아님 */
       /* 5개 초과면 스크롤 */
       var body = items.length > 5
         ? '<div style="max-height:300px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + inner + '</div>'
@@ -7083,7 +7138,7 @@
         (me.deleteRequested ? '<div class="mine-note reject" style="margin-top:10px;">🗑 삭제 요청이 접수되어 <b>관리자 확인 중</b>이에요. <button type="button" class="card-btn" data-action="cancel-delete" data-id="' + escapeHtml(me.id) + '" style="flex:none;padding:4px 12px;margin-left:8px;">삭제 요청 취소</button></div>' : '') +
         (me.deactivateRequested ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">🗄 비활성화(보관) 요청이 접수되어 <b>관리자 확인 중</b>이에요. <button type="button" class="card-btn" data-action="cancel-deactivate" data-id="' + escapeHtml(me.id) + '" style="flex:none;padding:4px 12px;margin-left:8px;">요청 취소</button></div>' : '') +
         (me.deactivated ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">🗄 <b>보관 상태</b>예요 (명단에 노출되지 않아요). 복구는 상단 <b>💬 Q&amp;A</b>로 문의하거나 카카오톡으로 요청해 주세요.</div>' : '') +
-        (isSubProfile ? '' : msgSection) + /* 관리자 메시지를 맨 위로 */
+        '' + /* 관리자 메시지는 💬 대화 탭 맨 위 '👑 베니브릿지 관리자' 방으로 (2026-10-15) */
         (isSubProfile ? '' : joinRequestSectionHtml(state, false)) + /* 나에게 온 주선자 요청 있으면 표시 */
         tabsHtml +
       '</div>'
@@ -10910,7 +10965,7 @@
     if (!me) return modalNotice('로그인 필요', '먼저 로그인해주세요.');
     var req = (state.dateRequests || []).find(function (r) { return r.id === id; });
     if (!req || (req.fromId !== me.id && req.toId !== me.id)) return;
-    modalConfirm('목록에서 숨기기', '이 내역을 내 목록에서 숨길까요?\n(완전 삭제가 아니라 숨김이라, 아래 "숨긴 내역 복구"로 되돌릴 수 있어요. 상대에게는 아무 알림도 가지 않아요.)', '숨기기').then(function (ok) {
+    modalConfirm('목록에서 숨기기', '이 내역을 내 목록에서 숨길까요?\n(완전 삭제가 아니라 숨김이라, 위쪽 \'🙈 숨김\' 칸에서 되돌릴 수 있어요. 상대에게는 아무 알림도 가지 않아요.)', '숨기기').then(function (ok) {
       if (!ok) return;
       /* 즉시 화면에서 숨김 (서버 재조회 전에 바로 사라지게) */
       try {
@@ -10940,6 +10995,21 @@
         modalNotice('오류', '삭제에 실패했어요: ' + (err.message || err));
       });
     });
+  }
+  /* 숨긴 요청 하나 되돌리기 */
+  function handleUnhideRequest(id) {
+    var me = findMyEntry(currentState); if (!me) return;
+    try { (currentState.dateRequests || []).forEach(function (r) { if (r.id === id && r.hiddenBy) r.hiddenBy = r.hiddenBy.filter(function (x) { return x !== me.id; }); }); paint(currentState); } catch (e) {}
+    db.runTransaction(function (tx) {
+      return tx.get(stateRef).then(function (doc) {
+        var s = doc.data();
+        var reqs = (s.dateRequests || []).map(function (r) {
+          if (r.id !== id || (r.hiddenBy || []).indexOf(me.id) < 0) return r;
+          var c = JSON.parse(JSON.stringify(r)); c.hiddenBy = (c.hiddenBy || []).filter(function (x) { return x !== me.id; }); return c;
+        });
+        tx.update(stateRef, { dateRequests: reqs });
+      });
+    }).then(function () { return refreshNow(); }).catch(function (err) { modalNotice('오류', '되돌리지 못했어요: ' + ((err && err.message) || err)); });
   }
   /* 내가 숨긴(내역 삭제한) 요청을 모두 되돌리기 — hiddenBy에서 내 id 제거 */
   function handleRestoreHidden() {
@@ -11828,7 +11898,18 @@
         if (cme) {
           toggleConnFav(cme.id, id);
           var _on = !!connFavs(cme.id)[id];
-          actionBtn.classList.toggle('on', _on); actionBtn.textContent = _on ? '★' : '☆';   /* 다시 그리지 않음 — 맨 위 고정은 다음에 들어올 때 */
+          actionBtn.classList.toggle('on', _on); actionBtn.textContent = _on ? '★' : '☆';
+          /* 다시 그리지 않고 줄 순서만 바꿈: ★ 줄들을 맨 위로 (나머지는 지금 순서 그대로) */
+          var _list = actionBtn.closest('.conn-list');
+          if (_list) {
+            var _rows = Array.prototype.slice.call(_list.querySelectorAll('.conn-row'));
+            var _favs = connFavs(cme.id);
+            _rows.filter(function (x) { return _favs[x.getAttribute('data-id')]; }).concat(_rows.filter(function (x) { return !_favs[x.getAttribute('data-id')]; }))
+              .forEach(function (x) { _list.appendChild(x); });
+            _connOrder = Array.prototype.map.call(_list.querySelectorAll('.conn-row'), function (x) { return x.getAttribute('data-id'); });
+            var _row = actionBtn.closest('.conn-row');
+            if (_row) { _row.classList.add('flash'); setTimeout(function () { _row.classList.remove('flash'); }, 1200); if (_on) _row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+          }
         }
       }
       else if (action === 'conn-more') {
@@ -11904,6 +11985,8 @@
       else if (action === 'reapply') handleReapplyRequest(id);
       else if (action === 'restore-hidden') { handleRestoreHidden(); return; }
       else if (action === 'hide-request') handleHideRequest(id);
+      else if (action === 'unhide-request') handleUnhideRequest(id);
+      else if (action === 'req-filter') { reqFilter[actionBtn.getAttribute('data-g')] = actionBtn.getAttribute('data-f'); paint(currentState); }
       else if (action === 'reset-pin') handleAdminResetPin(id);
       else if (action === 'admin-msg') openAdminChat(id);
       else if (action === 'admin-msg-reply') openAdminChat(id);
