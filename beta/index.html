@@ -1047,7 +1047,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-457';
+  var APP_VERSION = '2026-10-15-458';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6526,7 +6526,7 @@
       (note ? '<div class="mine-note">"' + escapeHtml(note) + '"</div>' : '') +
       replyMsg + actions + chatBtn + revealMine;
     return (
-      '<details class="req-fold' + (needAction ? ' req-need' : '') + '" data-rid="' + escapeHtml(r.id) + '" data-fk="r:' + escapeHtml(r.id) + '"' + (needAction ? ' open' : '') + '>' +
+      '<details class="req-fold' + (needAction ? ' req-need' : '') + '" data-rid="' + escapeHtml(r.id) + '" data-fk="r:' + escapeHtml(r.id) + '">' +   /* 응답 필요는 색으로만 강조, 처음엔 접힘 (2026-10-15 Benny) */
         '<summary>' +
           '<div class="chat-av md" style="background:' + avatarColor(otherId) + ';">' + escapeHtml(initials(other ? other.nickname : '?')) + '</div>' +
           '<span class="req-mid"><span class="req-sum-who">' + escapeHtml(otherLabel) + '</span>' +
@@ -6717,7 +6717,7 @@
   var CHAT_LIST_SHOW = 3, chatListOpen = false;   /* 대화방 목록: 처음 보이는 개수 / 펼침 상태 */
   /* 💬 대화 탭 맨 위 고정: 관리자와의 대화 (Q&A) */
   function adminSeenKey(me) { return 'bb-admsg-seen:' + me.id; }
-  function adminRoomVisible(me) { return !!(currentUser && me && !(isProxyEntry(me) && !me.ownerSelf)); }   /* 친구(대리) 프로필 화면엔 없음 */
+  function adminRoomVisible(me) { return !!(currentUser && me); }   /* 로그인한 계정의 관리자 대화 — 일반·주선자·친구 화면 모두 대화 탭 맨 위 (2026-10-15) */
   function adminUnreadFor(state, me) {
     if (!adminRoomVisible(me)) return 0;
     var seen = ''; try { seen = localStorage.getItem('bb-admsg-seen:' + currentUser.id) || ''; } catch (e) {}
@@ -6885,7 +6885,7 @@
   function mineTabsHtml(state, me, pd, restoreHtml) {
     if (mineTabFor !== me.id) { mineTab = null; mineTabFor = me.id; }   /* 프로필 바꾸면 다시 자동 선택 */
     var pin = pd['in'] || { n: 0, need: 0, html: '' }, pout = pd.out || { n: 0, need: 0, html: '' };
-    var chatUn = chatUnreadTotal(state, me) + (isMatchmakerEntry(myAuthEntry(state)) ? 0 : adminUnreadFor(state, me));
+    var chatUn = chatUnreadTotal(state, me) + adminUnreadFor(state, me);
     var connHtml = connectionsSummaryHtml(state, me, true);
     var connN = (connHtml.match(/class="conn-row/g) || []).length;
     var cur = mineTab || (pin.need ? 'in' : (chatUn ? 'chat' : (pout.need ? 'out' : 'chat')));
@@ -6897,7 +6897,7 @@
       { k: 'conn', ic: '🔗', t: '내 연결', todo: 0, n: connN }
     ];
     var panes = {
-      chat: (isMatchmakerEntry(myAuthEntry(state)) ? '' : adminRoomHtml(state, me)) + chatRoomsHtml(state, me, true),
+      chat: adminRoomHtml(state, me) + chatRoomsHtml(state, me, true),
       'in': '<div class="mine-section">' + (pin.hasAny ? pin.html : '<p class="sub mine-empty">아직 받은 요청이 없어요.</p>') +
         '<p class="sub" style="margin:10px 0 0;font-size:0.76rem;">승인한 요청은 3일 뒤 🔗 내 연결로 옮겨져요.</p></div>',
       out: '<div class="mine-section">' + (pout.hasAny ? pout.html : '<p class="sub mine-empty">아직 보낸 요청이 없어요.<br>명단에서 마음에 드는 분께 요청해 보세요.</p>') + '</div>',
@@ -6990,13 +6990,14 @@
           pendNote +
           friendsNews +
           joinSection +
-          '<div class="mine-section" style="margin-top:22px;"><h3 style="margin-bottom:6px;">💬 관리자와 대화</h3>' + adminRoomHtml(state, myAuthEntry(state)) + '</div>';
+          '';
+      var mmAdminSec = '<div class="mine-section" style="margin-top:22px;"><h3 style="margin-bottom:6px;">💬 관리자와 대화</h3>' + adminRoomHtml(state, myAuthEntry(state)) + '</div>';
     }
     /* Case A: 주선자 계정 자체로 보고 있음(본인 미전환/미등록) → 관리 홈만 */
     if (isMatchmakerEntry(me)) {
       var ownExists = (state.entries || []).some(function (e) { return e.managedBy === currentUser.id && e.ownerSelf; });
       var selfNote = ownExists ? '' : '<div class="mine-section"><p class="sub" style="margin:0;">🙋 아직 본인 소개팅 프로필이 없어요. 위 <b>⚙️ 주선자 계정 → 내 소개팅 프로필 등록</b>에서 만들 수 있어요.</p></div>';
-      return '<div class="admin-panel">' + mmHome + selfNote + '</div>';
+      return '<div class="admin-panel">' + mmHome + (mmAdminSec || '') + selfNote + '</div>';
     }
     var reqs = state.dateRequests || [];
     var paneData = {};   /* 탭용: 받은/보낸 요청 목록·개수·응답 필요 수 */
