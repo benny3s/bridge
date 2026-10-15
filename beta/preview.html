@@ -1054,7 +1054,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-16-460';
+  var APP_VERSION = '2026-10-16-461';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1960,6 +1960,7 @@
     try { paint(currentState); } catch (e) {}
     setTimeout(function () {
       try {
+        if (focusId && activeTab === 'admin') { var _lz = document.querySelectorAll('details[data-lazy]'); for (var _i = 0; _i < _lz.length; _i++) fillLazyFold(_lz[_i]); }
         var el = focusId ? document.querySelector('[data-rid="' + focusId + '"], [data-id="' + focusId + '"], [data-eid="' + focusId + '"], [data-cid="' + focusId + '"]') : null;
         var _pane = el && el.closest ? el.closest('.mine-pane') : null;
         if (_pane && !_pane.classList.contains('on')) showMinePane(_pane.getAttribute('data-pane'));
@@ -8617,6 +8618,44 @@
       if (k in foldState && ds[i].open !== foldState[k]) { ds[i]._fkApplying = true; ds[i].open = foldState[k]; (function (d) { setTimeout(function () { d._fkApplying = false; }, 0); })(ds[i]); }
     }
   }
+  /* 관리자 탭 가볍게: 접힌 섹션(admin-fold)은 내용을 화면에 넣지 않고 보관했다가 펼칠 때 채움
+     (2026-10-16: 관리자 탭 한 번 그리는 데 약 2초·1.5MB·요소 1.9만 개 → 회원 활동마다 버벅임) */
+  var _lazyFold = {};
+  function lazyAdminFolds(html) {
+    _lazyFold = {};
+    var out = '', pos = 0, n = 0, OPEN = '<details class="admin-fold"', BODY = '<div class="admin-fold-body">';
+    while (true) {
+      var i = html.indexOf(OPEN, pos);
+      if (i < 0) { out += html.slice(pos); break; }
+      var tagEnd = html.indexOf('>', i);
+      var tag = html.slice(i, tagEnd + 1);
+      /* 짝이 맞는 </details> 찾기 (안쪽 details 깊이 계산) */
+      var depth = 1, j = tagEnd + 1;
+      while (depth > 0) {
+        var a = html.indexOf('<details', j), b = html.indexOf('</details>', j);
+        if (b < 0) { depth = -1; break; }
+        if (a >= 0 && a < b) { depth++; j = a + 8; } else { depth--; j = b + 10; }
+      }
+      if (depth < 0) { out += html.slice(pos); break; }
+      var whole = html.slice(i, j);
+      var isOpen = / open[\s>]/.test(tag) || / open$/.test(tag.slice(0, -1));
+      var bi = whole.indexOf(BODY), be = whole.lastIndexOf('</div>');
+      if (isOpen || bi < 0 || be < bi) { out += html.slice(pos, j); pos = j; continue; }
+      var key = 'lz' + (n++);
+      _lazyFold[key] = whole.slice(bi + BODY.length, be);
+      out += html.slice(pos, i) + tag.slice(0, -1) + ' data-lazy="' + key + '">' + whole.slice(tag.length, bi + BODY.length) + whole.slice(be);
+      pos = j;
+    }
+    return out;
+  }
+  function fillLazyFold(d) {
+    var k = d.getAttribute('data-lazy'); if (!k || !(k in _lazyFold)) return;
+    var body = d.querySelector('.admin-fold-body'); if (!body) return;
+    body.innerHTML = _lazyFold[k]; delete _lazyFold[k]; d.removeAttribute('data-lazy');
+    try { applyReqSearch(); } catch (e) {} try { applyContactFilter(); } catch (e) {} try { applyLogFilter(); } catch (e) {} try { applyMmSearch(); } catch (e) {} try { applyFoldState(); } catch (e) {}
+    try { var items = body.querySelectorAll('.admin-msg-item'); for (var i = 0; i < items.length; i++) if (openMsgFolds[items[i].getAttribute('data-eid')]) items[i].open = true; } catch (e) {}
+  }
+  document.addEventListener('toggle', function (e) { var d = e.target; if (d && d.open && d.getAttribute && d.getAttribute('data-lazy')) fillLazyFold(d); }, true);
   function paint(state) {
     overlayAdminPriv(state); /* 서버에서 새로 받은 state 로 그릴 때도 관리자 전용 값 유지 */
     overlayThumbs(state);
@@ -8627,7 +8666,9 @@
       if (_ae && _ae.pinMustChange) { _pinForceAsked = true; setTimeout(function () { handleChangeMyPin({ forced: true }); }, 900); }
     }
     var _connFocus = document.activeElement && document.activeElement.id === 'conn-search';
-    document.getElementById('app').innerHTML = renderApp(state);
+    var _html = renderApp(state);
+    if (activeTab === 'admin' && isAdminUnlocked) { try { _html = lazyAdminFolds(_html); } catch (e) {} }
+    document.getElementById('app').innerHTML = _html;
     try { applyConnSearch(); if (_connFocus) { var _cs = document.getElementById('conn-search'); if (_cs) { _cs.focus(); _cs.setSelectionRange(_cs.value.length, _cs.value.length); } } } catch (e) {} /* 내 연결 검색 재적용·포커스 유지 */
     try { applyListSearch(); } catch (e) {} /* 검색어가 있으면 재적용 */
     try { applySeenSearch(); } catch (e) {} /* 회원 명단 검색 재적용 */
