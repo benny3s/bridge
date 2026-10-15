@@ -1052,7 +1052,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-16-460';
+  var APP_VERSION = '2026-10-16-462';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1958,6 +1958,7 @@
     try { paint(currentState); } catch (e) {}
     setTimeout(function () {
       try {
+        if (focusId && activeTab === 'admin') { var _lz = document.querySelectorAll('details[data-lazy]'); for (var _i = 0; _i < _lz.length; _i++) fillLazyFold(_lz[_i]); }
         var el = focusId ? document.querySelector('[data-rid="' + focusId + '"], [data-id="' + focusId + '"], [data-eid="' + focusId + '"], [data-cid="' + focusId + '"]') : null;
         var _pane = el && el.closest ? el.closest('.mine-pane') : null;
         if (_pane && !_pane.classList.contains('on')) showMinePane(_pane.getAttribute('data-pane'));
@@ -7794,11 +7795,10 @@
 
     /* 회원 명단 (트리): 로그인 계정(주선자/일반)이 최상위, 그 아래 관리 프로필(본인/친구) */
     /* e(이 사람)가 볼 수 있는 사진/번호 수 (e가 "보는 주체") */
-    function permCounts(e) {
-      return {
-        photoN: allEntries.filter(function (x) { return x.id !== e.id && canViewPhotoOf(state, e.id, x.id); }).length,
-        contactN: allEntries.filter(function (x) { return x.id !== e.id && canViewContactOf(state, e.id, x.id); }).length
-      };
+    var _allIds = {}; allEntries.forEach(function (x) { _allIds[x.id] = true; });
+    function permCounts(e) {   /* 색인으로 바로 셈 (예전: 회원마다 전체 회원×전체 요청) */
+      var idx = permIndex(state), cnt = function (m) { return m ? Object.keys(m).filter(function (id) { return id !== e.id && _allIds[id]; }).length : 0; };
+      return { photoN: cnt(idx.photo[e.id]), contactN: cnt(idx.contact[e.id]) };
     }
     var childrenByMgr = {};
     allEntries.forEach(function (e) { if (e.managedBy) { (childrenByMgr[e.managedBy] = childrenByMgr[e.managedBy] || []).push(e); } });
@@ -8615,7 +8615,46 @@
       if (k in foldState && ds[i].open !== foldState[k]) { ds[i]._fkApplying = true; ds[i].open = foldState[k]; (function (d) { setTimeout(function () { d._fkApplying = false; }, 0); })(ds[i]); }
     }
   }
+  /* 관리자 탭 가볍게: 접힌 섹션(admin-fold)은 내용을 화면에 넣지 않고 보관했다가 펼칠 때 채움
+     (2026-10-16: 관리자 탭 한 번 그리는 데 약 2초·1.5MB·요소 1.9만 개 → 회원 활동마다 버벅임) */
+  var _lazyFold = {};
+  function lazyAdminFolds(html) {
+    _lazyFold = {};
+    var out = '', pos = 0, n = 0, OPEN = '<details class="admin-fold"', BODY = '<div class="admin-fold-body">';
+    while (true) {
+      var i = html.indexOf(OPEN, pos);
+      if (i < 0) { out += html.slice(pos); break; }
+      var tagEnd = html.indexOf('>', i);
+      var tag = html.slice(i, tagEnd + 1);
+      /* 짝이 맞는 </details> 찾기 (안쪽 details 깊이 계산) */
+      var depth = 1, j = tagEnd + 1;
+      while (depth > 0) {
+        var a = html.indexOf('<details', j), b = html.indexOf('</details>', j);
+        if (b < 0) { depth = -1; break; }
+        if (a >= 0 && a < b) { depth++; j = a + 8; } else { depth--; j = b + 10; }
+      }
+      if (depth < 0) { out += html.slice(pos); break; }
+      var whole = html.slice(i, j);
+      var isOpen = / open[\s>]/.test(tag) || / open$/.test(tag.slice(0, -1));
+      var bi = whole.indexOf(BODY), be = whole.lastIndexOf('</div>');
+      if (isOpen || bi < 0 || be < bi) { out += html.slice(pos, j); pos = j; continue; }
+      var key = 'lz' + (n++);
+      _lazyFold[key] = whole.slice(bi + BODY.length, be);
+      out += html.slice(pos, i) + tag.slice(0, -1) + ' data-lazy="' + key + '">' + whole.slice(tag.length, bi + BODY.length) + whole.slice(be);
+      pos = j;
+    }
+    return out;
+  }
+  function fillLazyFold(d) {
+    var k = d.getAttribute('data-lazy'); if (!k || !(k in _lazyFold)) return;
+    var body = d.querySelector('.admin-fold-body'); if (!body) return;
+    body.innerHTML = _lazyFold[k]; delete _lazyFold[k]; d.removeAttribute('data-lazy');
+    try { applyReqSearch(); } catch (e) {} try { applyContactFilter(); } catch (e) {} try { applyLogFilter(); } catch (e) {} try { applyMmSearch(); } catch (e) {} try { applyFoldState(); } catch (e) {}
+    try { var items = body.querySelectorAll('.admin-msg-item'); for (var i = 0; i < items.length; i++) if (openMsgFolds[items[i].getAttribute('data-eid')]) items[i].open = true; } catch (e) {}
+  }
+  document.addEventListener('toggle', function (e) { var d = e.target; if (d && d.open && d.getAttribute && d.getAttribute('data-lazy')) fillLazyFold(d); }, true);
   function paint(state) {
+    _permIdx = null;   /* 권한 색인은 그릴 때마다 새로 (화면에서 바로 바꾼 요청도 반영) */
     overlayAdminPriv(state); /* 서버에서 새로 받은 state 로 그릴 때도 관리자 전용 값 유지 */
     overlayThumbs(state);
     currentState = state;
@@ -8625,7 +8664,9 @@
       if (_ae && _ae.pinMustChange) { _pinForceAsked = true; setTimeout(function () { handleChangeMyPin({ forced: true }); }, 900); }
     }
     var _connFocus = document.activeElement && document.activeElement.id === 'conn-search';
-    document.getElementById('app').innerHTML = renderApp(state);
+    var _html = renderApp(state);
+    if (activeTab === 'admin' && isAdminUnlocked) { try { _html = lazyAdminFolds(_html); } catch (e) {} }
+    document.getElementById('app').innerHTML = _html;
     try { applyConnSearch(); if (_connFocus) { var _cs = document.getElementById('conn-search'); if (_cs) { _cs.focus(); _cs.setSelectionRange(_cs.value.length, _cs.value.length); } } } catch (e) {} /* 내 연결 검색 재적용·포커스 유지 */
     try { applyListSearch(); } catch (e) {} /* 검색어가 있으면 재적용 */
     try { applySeenSearch(); } catch (e) {} /* 회원 명단 검색 재적용 */
@@ -10555,22 +10596,27 @@
 
   /* viewerId 가 targetId 의 사진을 볼 수 있는가:
      (1) 내가 보낸 사진 요청을 상대가 승인, 또는 (2) 상대가 나에게 자기 사진을 직접 공개(fromRevealed) */
-  function canViewPhotoOf(state, viewerId, targetId) {
-    return (state.dateRequests || []).some(function (req) {
-      if ((req.type || 'contact') !== 'photo') return false;
-      /* 승인된 사진 요청은 양방향 상호 공개 (요청자·수신자 모두 서로 사진을 봄) — "보고 튀기" 방지 */
-      if (req.approved && ((req.fromId === viewerId && req.toId === targetId) || (req.fromId === targetId && req.toId === viewerId))) return true;
-      if (req.fromRevealed && req.fromId === targetId && req.toId === viewerId) return true;
-      return false;
+  /* 사진·대화 권한 색인: 요청을 한 번만 훑어 {보는 사람: {상대: true}} — 매번 요청 전체를 훑던 것(회원×회원×요청)이
+     관리자 탭을 2초씩 멈추게 했음 (2026-10-16). paint() 마다 새로 만듦(낙관적 변경 반영) */
+  var _permIdx = null, _permIdxFor = null;
+  function permIndex(state) {
+    var reqs = (state && state.dateRequests) || [];
+    if (_permIdx && _permIdxFor === reqs) return _permIdx;
+    var photo = {}, contact = {};
+    var add = function (m, a, b) { (m[a] = m[a] || {})[b] = true; };
+    reqs.forEach(function (req) {
+      if ((req.type || 'contact') === 'photo') {
+        /* 승인된 사진 요청은 양방향 상호 공개 (요청자·수신자 모두 서로 사진을 봄) — "보고 튀기" 방지 */
+        if (req.approved) { add(photo, req.fromId, req.toId); add(photo, req.toId, req.fromId); }
+        if (req.fromRevealed) add(photo, req.toId, req.fromId);   /* 요청자가 자기 사진 공개 → 받은 사람이 봄 */
+      } else if (req.approved) { add(contact, req.fromId, req.toId); add(contact, req.toId, req.fromId); }
     });
+    _permIdxFor = reqs; _permIdx = { photo: photo, contact: contact };
+    return _permIdx;
   }
+  function canViewPhotoOf(state, viewerId, targetId) { var m = permIndex(state).photo[viewerId]; return !!(m && m[targetId]); }
   /* 번호는 승인 시 상호 공개 → 두 사람 사이 승인된 번호 요청이 있으면 서로 볼 수 있음 */
-  function canViewContactOf(state, viewerId, targetId) {
-    return (state.dateRequests || []).some(function (req) {
-      if ((req.type || 'contact') !== 'contact' || !req.approved) return false;
-      return (req.fromId === viewerId && req.toId === targetId) || (req.fromId === targetId && req.toId === viewerId);
-    });
-  }
+  function canViewContactOf(state, viewerId, targetId) { var m = permIndex(state).contact[viewerId]; return !!(m && m[targetId]); }
   /* 관리자: 이 회원이 볼 수 있는 사진/번호 관리 팝업 (주체 = targetId가 "보는 사람") */
   function openPermPopup(targetId, kind) {
     if (!isAdminUnlocked) return;
