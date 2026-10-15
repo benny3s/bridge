@@ -441,6 +441,8 @@ exports.onStateChange = functions
     const jobs = [];
     jobs.push(syncPublicView(after).catch((e) => console.error('syncPublicView', e)));
     jobs.push(sweepSecrets(before, after).catch((e) => console.error('sweepSecrets', e)));
+    jobs.push(sweepThumbs(before, after).catch((e) => console.error('sweepThumbs', e)));
+    jobs.push(bumpMemberEver(after).catch((e) => console.error('bumpMemberEver', e)));
     jobs.push(migrateDmToChats(after).catch((e) => console.error('migrateDmToChats', e)));
     jobs.push(refreshChatViewers(before, after).catch((e) => console.error('refreshChatViewers', e)));
     jobs.push(syncPhotoAcl(after, false).catch((e) => console.error('syncPhotoAcl', e)));
@@ -676,7 +678,7 @@ function buildPublicView(state) {
   /* 티저: 승인 회원 중 명단 노출 대상. 신원 연결 안 되게 닉네임·id·사진 없음, 소개는 앞 18자만 */
   const teaser = entries.filter((e) => !e.isMatchmaker && !e.deactivated && !e.testAccount).map((e, i) => ({
     id: 't' + i, gender: e.gender || '', birthYear: e.birthYear || null, region: clip(e.region, 20),
-    meetZones: (Array.isArray(e.meetZones) && e.meetZones.length) ? e.meetZones.filter((k) => MEET_ZONES.includes(k)) : ['capital'],
+    meetZones: (Array.isArray(e.meetZones) && e.meetZones.length) ? e.meetZones.filter((k) => MEET_ZONES.includes(k)) : MEET_ZONES.slice(),
     intro: clip(e.intro, 18), idealType: clip(e.idealType, 18),
     submittedAt: e.submittedAt || null, lastSeenAt: roundHour(lastOf(e)), serial: e.serial || null
   }));
@@ -703,9 +705,19 @@ function buildPublicView(state) {
     teaser, loginDir, reviews,
     connCount: Array.isArray(state.connLog) ? state.connLog.length : Math.max(typeof state.connEver === 'number' ? state.connEver : 0, connNow),
     coupleCount: reports.filter((r) => r.confirmed).length,
-    /* 누적 가입 = 승인된 계정(주선자·보관 포함, 테스트 제외). 주선자의 본인 프로필(ownerSelf)은 같은 사람이라 중복 제외 */
-    memberTotal: entries.filter((e) => !e.testAccount && !(e.managedBy && e.ownerSelf)).length
+    memberTotal: memberEverOf(state)
   };
+}
+/* 누적 가입 = 지금 승인된 계정(주선자·보관 포함, 테스트·주선자 본인 프로필 중복 제외) + 삭제된 계정(삭제 이력, QA_ 제외).
+   삭제 이력이 정리돼도 줄지 않게 지금까지 최고값(state.memberEver)과 비교 (2026-10-14 Benny: 누적은 줄면 안 됨) */
+function memberEverOf(state) {
+  const now = (state.entries || []).filter((e) => !e.testAccount && !(e.managedBy && e.ownerSelf)).length
+    + (state.deletedLog || []).filter((d) => d.countable !== false && !/^QA_/i.test(d.nickname || '')).length;
+  return Math.max(typeof state.memberEver === 'number' ? state.memberEver : 0, now);
+}
+async function bumpMemberEver(after) {
+  const n = memberEverOf(after);
+  if (n > (typeof after.memberEver === 'number' ? after.memberEver : 0)) await db.doc('app/state').update({ memberEver: n });
 }
 async function syncPublicView(state) {
   const view = buildPublicView(state);
@@ -735,9 +747,9 @@ function pickProfile(src, kind) {
   ['region', 'workplace', 'height', 'intro', 'idealType', 'dealbreaker', 'degreeChoice'].forEach((k) => {
     if (typeof src[k] === 'string') out[k] = src[k].trim().slice(0, ENTRY_TEXT_LIMITS[k]);
   });
-  if (Array.isArray(src.meetZones)) {   /* 만나고 싶은 지역 (2026-10-09) — 허용 값만, 비면 수도권 */
+  if (Array.isArray(src.meetZones)) {   /* 지역 채널 (2026-10-09) — 허용 값만. 비었거나 전체면 저장 안 함(기본 전체, 2026-10-13) */
     const z = src.meetZones.filter((k, i, a) => MEET_ZONES.includes(k) && a.indexOf(k) === i);
-    out.meetZones = z.length ? z : ['capital'];
+    if (z.length && z.length < MEET_ZONES.length) out.meetZones = z;
   }
   if (src.gender === 'male' || src.gender === 'female') out.gender = src.gender;
   const by = parseInt(src.birthYear, 10);
@@ -885,6 +897,7 @@ exports.applicantAction = functions
         return { entry: null, messages: [], approved };
       }
       const entry = Object.assign({}, me); delete entry.pinAuth; delete entry.pinHash;
+      if (!entry.photoThumb) { const th = ((await db.doc('app/thumbs').get()).data() || {}).t || {}; if (th[uid]) entry.photoThumb = th[uid]; }   /* 썸네일은 app/thumbs 로 분리됨 */
       const messages = (s.messages || []).filter((m) => m.entryId === uid);
       return { entry, messages };
     }
@@ -983,6 +996,33 @@ function stableJson(v) {
   return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
 }
 function hasPinInline(e) { return !!(e && (e.pinAuth || e.pinHash)); }
+/* 명단용 작은 사진(photoThumb)을 app/thumbs 로 옮기고 state 에서 지움 (2026-10-14: 메인 문서 1MB 한도 — 174KB 차지).
+   앱은 예전처럼 state 에 써도 됨. 회원·관리자 화면은 app/thumbs 를 구독해 메모리에서만 덧붙임. 사라진 계정의 썸네일은 같이 지움 */
+async function sweepThumbs(before, after) {
+  const FV = admin.firestore.FieldValue;
+  const isThumb = (e) => typeof e.photoThumb === 'string' || e.photoThumb === null;
+  const afterIds = {}; allOf(after).forEach((e) => { afterIds[e.id] = 1; });
+  const removed = allOf(before).map((e) => e.id).filter((id) => !afterIds[id]);
+  if (!allOf(after).some(isThumb) && !removed.length) return;
+  /* 한 트랜잭션에서 지금 state 값 그대로 옮기고 지움 — 트리거 순서가 뒤바뀌어도 옛 사진이 덮어쓰지 않게 (2026-10-15 검토) */
+  const ref = db.doc('app/state'), tref = db.doc('app/thumbs');
+  await db.runTransaction(async (tx) => {
+    const s = (await tx.get(ref)).data() || {};
+    const nowIds = {}; allOf(s).forEach((e) => { nowIds[e.id] = 1; });
+    const put = {};
+    let changed = false;
+    const strip = (list) => (list || []).map((e) => {
+      if (!isThumb(e)) return e;
+      put[e.id] = e.photoThumb ? e.photoThumb : FV.delete();
+      const u = Object.assign({}, e); delete u.photoThumb; changed = true; return u;
+    });
+    const upd = { entries: strip(s.entries), pendingEntries: strip(s.pendingEntries) };
+    removed.forEach((id) => { if (!nowIds[id]) put[id] = FV.delete(); });
+    if (Object.keys(put).length) tx.set(tref, { t: put, at: new Date().toISOString() }, { merge: true });
+    if (changed) tx.update(ref, upd);
+  });
+}
+
 async function sweepSecrets(before, after) {
   const FV = admin.firestore.FieldValue;
   const beforeMap = {}; allOf(before).forEach((e) => { beforeMap[e.id] = e; });
@@ -1225,6 +1265,17 @@ exports.chatAction = functions
       const now = new Date().toISOString();
       await ref.update(new admin.firestore.FieldPath('readAt', asId), now).catch(() => {});   /* 방이 있을 때만 (없으면 만들지 않음) */
       return { ok: true, at: now };
+    }
+
+    if (op === 'hide') {   /* 메시지 하나 내 화면에서만 지우기 (2026-10-10) — 원본은 보관(신고·분쟁 대비) */
+      const msgId = String(data.msgId || '').slice(0, 64);
+      if (!msgId) throw new HttpsError('invalid-argument', '메시지를 확인해주세요.');
+      const snap = await ref.get();
+      if (!snap.exists) throw new HttpsError('not-found', '대화 내용이 없어요.');
+      const cur = ((snap.data().hiddenFor || {})[asId]) || [];
+      if (cur.length >= 500) throw new HttpsError('resource-exhausted', '더 지우려면 대화 지우기를 써 주세요.');
+      await ref.update(new admin.firestore.FieldPath('hiddenFor', asId), admin.firestore.FieldValue.arrayUnion(msgId));
+      return { ok: true };
     }
 
     if (op === 'clear') {

@@ -42,6 +42,12 @@ service cloud.firestore {
       allow read, write: if isMember() || isAdmin();
     }
 
+    // 명단용 작은 사진(썸네일) — 승인 회원·관리자만 읽기, 서버(onStateChange.sweepThumbs)만 씀 (2026-10-14 메인 문서에서 분리)
+    match /app/thumbs {
+      allow read: if isMember() || isAdmin();
+      allow write: if false;
+    }
+
     // 공개 요약(손님 화면용: 인원·티저·로그인 목록) — 서버(onStateChange)만 씀
     match /app/public {
       allow read: if true;
