@@ -1047,7 +1047,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-458';
+  var APP_VERSION = '2026-10-15-459';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1944,6 +1944,10 @@
     else tab = isAdminUnlocked ? 'admin' : (currentUser ? 'mine' : 'list'); /* route 없으면 로그인 주체 기준 기본값 */
     if (tab === 'admin' && !isAdminUnlocked) tab = currentUser ? 'mine' : 'list';
     if (tab === 'mine' && !currentUser) tab = 'list';
+    if (tab === 'mine') {   /* 보던 안쪽 탭에 갇히지 않게 — 관리자 새 메시지면 💬 대화, 특정 항목이면 그 탭(아래 pane 전환), 아니면 자동 */
+      reqFilter = { 'in': 'all', out: 'all' }; _connOrder = null;
+      try { mineTab = (!focusId && adminUnreadFor(currentState, findMyEntry(currentState))) ? 'chat' : null; } catch (e) { mineTab = null; }
+    }
     activeTab = tab;
     if (tab === 'mine') { try { markMineSeen(); } catch (e) {} } /* 탭 클릭과 동일하게 읽음 처리 → 다음에 새 소식 팝업 반복 안 뜸 */
     try { paint(currentState); } catch (e) {}
@@ -3522,7 +3526,7 @@
   function handleIssueSubPin(subId) {
     if (!currentUser) return;
     var sub = ((currentState && currentState.entries) || []).find(function (e) { return e.id === subId && e.managedBy === currentUser.id; });
-    if (!sub) return modalNotice('안내', '내가 소개한 친구만 임시 PIN을 발급할 수 있어요.');
+    if (!sub || sub.ownerSelf) return modalNotice('안내', '내가 소개한 친구만 임시 PIN을 발급할 수 있어요.');
     modalNumericPinSetup('🔑 1일 임시 로그인 PIN 발급', '주선자(' + currentUser.nickname + ')님이 계속 관리하는 상태는 그대로예요. ' + sub.nickname + '님이 하루 동안 직접 로그인할 수 있는 임시 PIN을 발급해요. 사용할 PIN을 정해 ' + sub.nickname + '님께 알려주세요 (숫자 4~10자리). 로그인 후 ' + sub.nickname + '님이 직접 PIN을 바꿀 수도 있어요.', '발급').then(function (r) {
       if (!r) return;
       if (!/^[0-9]{4,10}$/.test(r.p1)) return modalNotice('입력 오류', 'PIN은 숫자 4~10자리예요.');
@@ -5008,6 +5012,7 @@
       (function () {
         var _m = dataMode === 'full' ? findMyEntry(currentState) : null;
         if (!_m || isMatchmakerEntry(_m)) return '';
+        if (actingAs && currentUser && actingAs !== currentUser.id && !_m.ownerSelf) return '';   /* 친구로 활동 중: 친구 계정은 ⚙️ 친구 계정에서 */
         var _id = escapeHtml(_m.id);
         return '<div class="qa-quick"><span>자주 찾는 것</span>' +
           (!_m.deleteRequested ? '<button type="button" class="req-chip" data-action="delete" data-id="' + _id + '">🗑 탈퇴하기</button>' : '') +
@@ -5026,7 +5031,7 @@
     );
     overlay.classList.add('wide-modal');
     try { var _th = overlay.querySelector('#mc-thread'); if (_th) _th.scrollTop = _th.scrollHeight; } catch (e) {}   /* 최근 메시지가 보이게 */
-    function close() { closeModal(overlay); paint(currentState); }
+    function close() { closeModal(overlay); schedulePaint(); }   /* paint() 직접 호출은 작성 중인 신청서를 비움 → 보호(isEditingForm)가 있는 예약 그리기 */
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
     overlay.addEventListener('click', function (e) { if (e.target === overlay || (e.target.closest && e.target.closest('.qa-quick button'))) close(); });   /* 바로가기는 창을 닫고 그 기능으로 */
     overlay.querySelector('#mc-send').addEventListener('click', function () {
@@ -5798,7 +5803,8 @@
       });
     }
     /* 다른 회원이 접속할 때마다 카드 순서가 바뀌어 엉뚱한 버튼이 눌리지 않게 — 명단 탭에 들어오거나 정렬·필터가 바뀔 때만 다시 정렬 (2026-10-15) */
-    var _ok = [listFilter, ageSort, listOrder, String(zoneView), String(currentUser && currentUser.id), String(actingAs), String(isAdminUnlocked), adminZone].join('|');
+    var _ok = [listFilter, ageSort, listOrder, String(zoneView), String(currentUser && currentUser.id), String(actingAs), String(isAdminUnlocked), adminZone,
+      String(typeof accessFilter !== 'undefined' ? accessFilter : ''), String((typeof myHiddenIds !== 'undefined' && myHiddenIds) ? myHiddenIds.length : 0)].join('|');
     if (_listOrder && _listOrder.key === _ok) {
       var _pos = {}; _listOrder.ids.forEach(function (id, i) { _pos[id] = i; });
       var _fresh = ordered.filter(function (e) { return !(e.id in _pos); });
@@ -6721,6 +6727,8 @@
   function adminUnreadFor(state, me) {
     if (!adminRoomVisible(me)) return 0;
     var seen = ''; try { seen = localStorage.getItem('bb-admsg-seen:' + currentUser.id) || ''; } catch (e) {}
+    var _srv = ((myAuthEntry(state) || {}).mineSeenAt) || '';
+    if (_srv > seen) seen = _srv;   /* 기기 기록이 없거나 오래됐으면 서버 기록 (v429 에서 이미 읽은 메시지) */
     return threadFor(state, currentUser.id, 'user').filter(function (m) { return m.from === 'admin' && (m.at || '') > seen; }).length;
   }
   function adminRoomHtml(state, me) {
@@ -6883,7 +6891,7 @@
     for (var j = 0; j < ps.length; j++) ps[j].classList.toggle('on', ps[j].getAttribute('data-pane') === k);
   }
   function mineTabsHtml(state, me, pd, restoreHtml) {
-    if (mineTabFor !== me.id) { mineTab = null; mineTabFor = me.id; }   /* 프로필 바꾸면 다시 자동 선택 */
+    if (mineTabFor !== me.id) { mineTab = null; mineTabFor = me.id; reqFilter = { 'in': 'all', out: 'all' }; _connOrder = null; }   /* 프로필 바꾸면 다시 자동 선택 */
     var pin = pd['in'] || { n: 0, need: 0, html: '' }, pout = pd.out || { n: 0, need: 0, html: '' };
     var chatUn = chatUnreadTotal(state, me) + adminUnreadFor(state, me);
     var connHtml = connectionsSummaryHtml(state, me, true);
@@ -6996,7 +7004,10 @@
     /* Case A: 주선자 계정 자체로 보고 있음(본인 미전환/미등록) → 관리 홈만 */
     if (isMatchmakerEntry(me)) {
       var ownExists = (state.entries || []).some(function (e) { return e.managedBy === currentUser.id && e.ownerSelf; });
-      var selfNote = ownExists ? '' : '<div class="mine-section"><p class="sub" style="margin:0;">🙋 아직 본인 소개팅 프로필이 없어요. 위 <b>⚙️ 주선자 계정 → 내 소개팅 프로필 등록</b>에서 만들 수 있어요.</p></div>';
+      var ownPending = !ownExists && (state.pendingEntries || []).some(function (e) { return e.managedBy === currentUser.id && e.ownerSelf; });
+      var selfNote = ownExists ? '' : (ownPending
+        ? '<div class="mine-section"><p class="sub" style="margin:0;">🙋 본인 소개팅 프로필이 <b>승인 대기 중</b>이에요. 승인되면 여기서 바로 쓸 수 있어요.</p></div>'
+        : '<div class="mine-section"><p class="sub" style="margin:0;">🙋 아직 본인 소개팅 프로필이 없어요. 위 <b>⚙️ 주선자 계정 → 내 소개팅 프로필 등록</b>에서 만들 수 있어요.</p></div>');
       return '<div class="admin-panel">' + mmHome + (mmAdminSec || '') + selfNote + '</div>';
     }
     var reqs = state.dateRequests || [];
@@ -7032,8 +7043,10 @@
         .sort(function (a, b) { return (b.submittedAt || '').localeCompare(a.submittedAt || ''); });
       var cnt = { all: items.length, hidden: hiddenItems.length };
       items.forEach(function (r) { var k = stKey(r); cnt[k] = (cnt[k] || 0) + 1; });
+      var _showChips = items.length + hiddenItems.length > 3 || hiddenItems.length > 0;
       var f = reqFilter[g.key] || 'all';
-      if (f !== 'all' && !cnt[f]) f = 'all';
+      if (!_showChips || (f !== 'all' && !cnt[f])) f = 'all';
+      reqFilter[g.key] = f;   /* 되돌린 값을 저장 — 나중에 저절로 다시 걸리지 않게 */
       var shown = f === 'hidden' ? hiddenItems : (f === 'all' ? items : items.filter(function (r) { return stKey(r) === f; }));
       var chips = (items.length + hiddenItems.length > 3 || hiddenItems.length)
         ? '<div class="req-chips">' + REQ_F.filter(function (x) { return x[0] === 'all' || cnt[x[0]]; }).map(function (x) {
@@ -8637,7 +8650,7 @@
   document.addEventListener('touchend', function () { _touching = false; _lastTouchAt = Date.now(); }, { passive: true, capture: true });
   document.addEventListener('touchcancel', function () { _touching = false; _lastTouchAt = Date.now(); }, { passive: true, capture: true });
   window.addEventListener('scroll', function () { _lastScrollAt = Date.now(); }, { passive: true });
-  function userBusy() { var n = Date.now(); return _touching || n - _lastTouchAt < 600 || n - _lastScrollAt < 500; }
+  function userBusy() { var n = Date.now(); return (_touching && n - _lastTouchAt < 5000) || n - _lastTouchAt < 600 || n - _lastScrollAt < 500; }   /* 화면이 바뀌어 touchend 를 못 받아도 5초 뒤엔 풀림 */
   function typingInApp() {   /* 화면 안 입력칸(명단 검색 등)에 글을 쓰는 중 */
     var a = document.activeElement, app = document.getElementById('app');
     return !!(a && app && app.contains(a) && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && /^(text|search|tel|number|email|)$/.test(a.type || ''))));
@@ -8648,7 +8661,7 @@
     decryptAllAdminData(st).then(function () {
       if (isEditingForm()) return; /* 폼 작성 중이면 유지 */
       if (typingInApp()) return;   /* 검색어 등 입력 중 — 입력칸을 벗어나면(focusout) 다시 그림 */
-      if (userBusy()) { setTimeout(_doSnapPaint, 400); return; }   /* 누르는 중·스크롤 중엔 미룸 */
+      if (userBusy()) { setTimeout(schedulePaint, 300); return; }   /* 누르는 중·스크롤 중엔 미룸 (예약 타이머로 합쳐 한 번만) */
       paint(st);
     }).catch(function () {});
   }
@@ -9909,7 +9922,7 @@
     var me = currentUser ? (forceMM ? myAuthEntry(currentState) : findMyEntry(currentState)) : null;
     if (!me) { modalNotice('안내', '로그인한 뒤 쓸 수 있어요.'); return; }
     var isSub = isProxyEntry(me);
-    var viaMm = !forceMM && !!actingAs && actingAs !== currentUser.id;
+    var viaMm = !forceMM && !!actingAs && actingAs !== currentUser.id && !(me && me.ownerSelf);   /* 주선자 본인 프로필은 친구 아님 */
     var amMM = isMatchmakerEntry(myAuthEntry(currentState));
     var iManage = entriesManagedByMe(currentState).length > 0;
     var myJoinReq = (currentState.joinRequests || []).find(function (j) { return j.fromId === me.id; });
