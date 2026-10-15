@@ -1045,7 +1045,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-452';
+  var APP_VERSION = '2026-10-15-453';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4991,8 +4991,9 @@
     var thread = threadFor(currentState, currentUser.id, 'user');
     var bubble = function (m) {   /* 관리자 = 왼쪽(👑), 나 = 오른쪽 — 채팅과 같은 모양 (2026-10-15) */
       var mine = m.from !== 'admin', t = '<div class="chat-meta"><span>' + escapeHtml(fmtDate(m.at)) + '</span></div>';
-      return '<div class="chat-row first' + (mine ? ' mine' : '') + '">' +
-        (mine ? '' : '<div class="chat-av" style="background:var(--gold);">👑</div>') +
+      if (mine) return '<div class="chat-row first mine"><div class="chat-line">' + t + '<div class="chat-bubble mine">' + escapeHtml(m.text) + '</div></div></div>';   /* 내 말풍선은 넓게 */
+      return '<div class="chat-row first">' +
+        '<div class="chat-av" style="background:var(--gold);">👑</div>' +
         '<div class="chat-col">' + (mine ? '' : '<div class="chat-name">베니브릿지 관리자</div>') +
           '<div class="chat-line">' + (mine ? t : '') + '<div class="chat-bubble' + (mine ? ' mine' : '') + '">' + escapeHtml(m.text) + '</div>' + (mine ? '' : t) + '</div>' +
         '</div></div>';
