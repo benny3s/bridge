@@ -1045,7 +1045,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-455';
+  var APP_VERSION = '2026-10-15-456';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -9876,10 +9876,10 @@
     if (!(currentUser && (currentUser.id === id || iManageTarget(currentState, id)))) {
       return modalNotice('안내', '본인(또는 내가 소개한 친구) 프로필만 비활성화할 수 있어요.');
     }
-    if (entry.deactivateRequested) { modalNotice('안내', '이미 비활성화 요청됐어요. 관리자 확인 중이에요.'); return; }
-    modalMessage('비활성화(보관)',
-      '개인적인 사정으로 소개팅을 잠시 중단할 경우, 보관 상태로 전환됩니다. 추후 복구는 관리자에게 Q&A로 연락하거나 카카오톡을 통해 가능합니다. 비활성화 사유를 꼭 남겨주세요.',
-      '비활성화 요청', 'primary', '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요', true).then(function (reason) {
+    if (entry.deactivateRequested) { modalNotice('안내', '이미 잠시 쉬기를 요청했어요. 관리자 확인 중이에요.'); return; }
+    modalMessage('💤 잠시 쉬기',
+      '소개팅을 잠시 쉬는 동안 명단에서 내 프로필이 숨겨져요. 다시 활동하고 싶으면 관리자에게 Q&A나 카카오톡으로 알려 주세요. 이유를 짧게 남겨 주세요.',
+      '잠시 쉬기 요청', 'primary', '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요', true).then(function (reason) {
       if (reason === null || reason === undefined) return;
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
