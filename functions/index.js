@@ -712,7 +712,7 @@ function buildPublicView(state) {
    삭제 이력이 정리돼도 줄지 않게 지금까지 최고값(state.memberEver)과 비교 (2026-10-14 Benny: 누적은 줄면 안 됨) */
 function memberEverOf(state) {
   const now = (state.entries || []).filter((e) => !e.testAccount && !(e.managedBy && e.ownerSelf)).length
-    + (state.deletedLog || []).filter((d) => !/^QA_/i.test(d.nickname || '')).length;
+    + (state.deletedLog || []).filter((d) => d.countable !== false && !/^QA_/i.test(d.nickname || '')).length;
   return Math.max(typeof state.memberEver === 'number' ? state.memberEver : 0, now);
 }
 async function bumpMemberEver(after) {
@@ -1000,25 +1000,25 @@ function hasPinInline(e) { return !!(e && (e.pinAuth || e.pinHash)); }
    앱은 예전처럼 state 에 써도 됨. 회원·관리자 화면은 app/thumbs 를 구독해 메모리에서만 덧붙임. 사라진 계정의 썸네일은 같이 지움 */
 async function sweepThumbs(before, after) {
   const FV = admin.firestore.FieldValue;
-  const moved = {};
-  allOf(after).forEach((e) => { if (typeof e.photoThumb === 'string' || e.photoThumb === null) moved[e.id] = e.photoThumb; });
+  const isThumb = (e) => typeof e.photoThumb === 'string' || e.photoThumb === null;
   const afterIds = {}; allOf(after).forEach((e) => { afterIds[e.id] = 1; });
   const removed = allOf(before).map((e) => e.id).filter((id) => !afterIds[id]);
-  if (!Object.keys(moved).length && !removed.length) return;
-  const put = {};
-  Object.keys(moved).forEach((id) => { put[id] = moved[id] ? moved[id] : FV.delete(); });
-  removed.forEach((id) => { put[id] = FV.delete(); });
-  await db.doc('app/thumbs').set({ t: put, at: new Date().toISOString() }, { merge: true });
-  if (!Object.keys(moved).length) return;
-  const ref = db.doc('app/state');
+  if (!allOf(after).some(isThumb) && !removed.length) return;
+  /* 한 트랜잭션에서 지금 state 값 그대로 옮기고 지움 — 트리거 순서가 뒤바뀌어도 옛 사진이 덮어쓰지 않게 (2026-10-15 검토) */
+  const ref = db.doc('app/state'), tref = db.doc('app/thumbs');
   await db.runTransaction(async (tx) => {
     const s = (await tx.get(ref)).data() || {};
+    const nowIds = {}; allOf(s).forEach((e) => { nowIds[e.id] = 1; });
+    const put = {};
     let changed = false;
     const strip = (list) => (list || []).map((e) => {
-      if (!(e.id in moved) || e.photoThumb !== moved[e.id]) return e;   /* 그사이 새 사진이 들어왔으면 다음 차례에 */
+      if (!isThumb(e)) return e;
+      put[e.id] = e.photoThumb ? e.photoThumb : FV.delete();
       const u = Object.assign({}, e); delete u.photoThumb; changed = true; return u;
     });
     const upd = { entries: strip(s.entries), pendingEntries: strip(s.pendingEntries) };
+    removed.forEach((id) => { if (!nowIds[id]) put[id] = FV.delete(); });
+    if (Object.keys(put).length) tx.set(tref, { t: put, at: new Date().toISOString() }, { merge: true });
     if (changed) tx.update(ref, upd);
   });
 }

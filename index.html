@@ -1038,7 +1038,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-445';
+  var APP_VERSION = '2026-10-15-446';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1438,11 +1438,15 @@
      관리자 화면 코드는 예전처럼 entry.contactEnc 등을 읽으므로, 받아온 값을 메모리 state 에만 덧붙임. */
   var adminOnlyRef = db.collection('adminOnly');
   var thumbsRef = db.collection('app').doc('thumbs');   /* 명단용 작은 사진 { t: { entryId: dataUrl } } — 서버만 씀 (2026-10-14) */
-  var _thumbs = {}, _thumbsUnsub = null;
+  var _thumbs = {}, _thumbsUnsub = null, _thumbOver = new WeakSet();   /* _thumbOver: 메모리에서 덧붙인 항목 (저장 문서 크기 계산·재계산용) */
   function overlayThumbs(state) {
     if (!state || state._public) return state;
     ['entries', 'pendingEntries'].forEach(function (k) {
-      (state[k] || []).forEach(function (e) { if (!e.photoThumb && _thumbs[e.id]) e.photoThumb = _thumbs[e.id]; });
+      (state[k] || []).forEach(function (e) {
+        if (e.photoThumb !== undefined && !_thumbOver.has(e)) return;   /* state 에 직접 있는 값(새로 올린 사진·null=삭제)이 우선 */
+        if (_thumbs[e.id]) { e.photoThumb = _thumbs[e.id]; _thumbOver.add(e); }
+        else if (_thumbOver.has(e)) { delete e.photoThumb; _thumbOver.delete(e); }
+      });
     });
     return state;
   }
@@ -1454,7 +1458,7 @@
         _thumbs = (d.exists && d.data().t) || {};
         if (currentState && dataMode === 'full') { overlayThumbs(currentState); schedulePaint(); }
         resolve();
-      }, function (err) { try { console.warn('thumbs', err && err.code); } catch (e) {} resolve(); });
+      }, function (err) { try { console.warn('thumbs', err && err.code); } catch (e) {} _thumbsUnsub = null; resolve(); });   /* 다음 로그인 때 다시 구독 */
     });
   }
   var adminKeyRef = db.collection('adminKey').doc('main');
@@ -1809,8 +1813,8 @@
       /* 회원이면 채팅 서버 함수를 뒤에서 미리 깨워 둠(첫 메시지 전송이 콜드 스타트로 5초 걸리던 문제) */
       if (c.m === 1 && !_chatWarmed) { _chatWarmed = true; setTimeout(function () { callFn('chatAction', { op: 'ping' }).catch(function () {}); }, 2500); }
       var privReady = _authIsAdmin ? startAdminPriv() : (stopAdminPriv(), Promise.resolve());
-      var thumbsReady = mode === 'full' ? startThumbs() : (stopThumbs(), Promise.resolve());
-      return Promise.all([privReady, thumbsReady]).then(function () { return subscribeData(mode); }).then(function (s) {
+      if (mode === 'full') startThumbs(); else stopThumbs();   /* 기다리지 않음 — 오면 덧붙여 다시 그림 (첫 화면 지연 없음) */
+      return privReady.then(function () { return subscribeData(mode); }).then(function (s) {
         if (mode === 'public' && c.p === 1) return refreshPendingView().then(function () { return currentState; });
         return s;
       });
@@ -4693,7 +4697,7 @@
         '<div style="font-size:0.85rem;color:var(--muted);margin:-4px 0 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(text.slice(0, 60)) + '</div>' +
         '<div style="display:flex;flex-direction:column;gap:8px;">' +
           '<button type="button" class="card-btn" id="bm-copy">📋 복사</button>' +
-          '<button type="button" class="card-btn" id="bm-hide">🗑 이 메시지 지우기 (내 화면에서만)</button>' +
+          (_chats[dmPairKey(me.id, otherId)] ? '<button type="button" class="card-btn" id="bm-hide">🗑 이 메시지 지우기 (내 화면에서만)</button>' : '') +
         '</div>' +
         '<p class="modal-msg" style="margin:10px 0 0;font-size:0.76rem;color:var(--muted);">상대 화면에서는 지워지지 않아요. 신고·분쟁에 대비해 서버에는 안전하게 보관돼요.</p>' +
         '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>');
@@ -4704,7 +4708,7 @@
         if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(function () {});
         else { try { var t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); done(); } catch (x) {} }
       });
-      ov.querySelector('#bm-hide').addEventListener('click', function () {
+      if (ov.querySelector('#bm-hide')) ov.querySelector('#bm-hide').addEventListener('click', function () {
         closeModal(ov);
         var room = _chats[dmPairKey(me.id, otherId)];
         if (room) { room.hiddenFor = Object.assign({}, room.hiddenFor || {}); room.hiddenFor[me.id] = (room.hiddenFor[me.id] || []).concat([mid]); }
@@ -8111,11 +8115,11 @@
     var c = Object.assign({}, state);
     ['entries', 'pendingEntries'].forEach(function (k) {
       c[k] = (state[k] || []).map(function (e) {
-        var p = _adminPriv[e.id], th = _thumbs[e.id];
-        if (!p && !th) return e;
+        var p = _adminPriv[e.id];
+        if (!p && !_thumbOver.has(e)) return e;
         var o = Object.assign({}, e);
         if (p) ADMIN_PRIV_KEYS.forEach(function (f) { if (p[f] && o[f] === p[f]) delete o[f]; });
-        if (th && o.photoThumb === th) delete o.photoThumb;   /* app/thumbs 에서 덧붙인 것 */
+        if (_thumbOver.has(e)) delete o.photoThumb;   /* app/thumbs 에서 덧붙인 것 */
         return o;
       });
     });
@@ -8128,7 +8132,7 @@
     var total = stateDocBytes(state);   /* 관리자 화면이 덧붙인 암호문(adminOnly)·관리자 키는 빼고 실제 문서 크기만 (2026-10-14: 약 210KB 부풀려 보이던 문제) */
     var thumbBytes = 0, thumbCount = 0;
     (state.entries || []).concat(state.pendingEntries || []).forEach(function (e) {
-      if (e.photoThumb && e.photoThumb !== _thumbs[e.id]) { thumbBytes += byteLen(e.photoThumb); thumbCount++; }   /* 아직 메인 문서에 남은 것만 (옮겨진 건 아래 별도 줄) */
+      if (e.photoThumb && !_thumbOver.has(e)) { thumbBytes += byteLen(e.photoThumb); thumbCount++; }   /* 아직 메인 문서에 남은 것만 (옮겨진 건 아래 별도 줄) */
       getPhotos(e).forEach(function (p) { thumbBytes += byteLen(p); }); /* 아직 마이그레이션 안 된 inline */
     });
     var logBytes = byteLen(state.logs || []);
@@ -8243,7 +8247,7 @@
     var memberTotal = (typeof state.memberTotal === 'number') ? state.memberTotal
       : Math.max(typeof state.memberEver === 'number' ? state.memberEver : 0,
           (state.entries || []).filter(function (e) { return !e.testAccount && !(e.managedBy && e.ownerSelf); }).length +
-          (state.deletedLog || []).filter(function (d) { return !/^QA_/i.test(d.nickname || ''); }).length);
+          (state.deletedLog || []).filter(function (d) { return d.countable !== false && !/^QA_/i.test(d.nickname || ''); }).length);
     var liveBits = [];
     if (newThisWeek > 0) liveBits.push('이번 주 새 멤버 <b>' + newThisWeek + '</b>명');
     if (connCount > 0) liveBits.push('누적 연결 <b>' + connCount + '</b>쌍');
@@ -9625,6 +9629,7 @@
         joinedAt: entry.submittedAt || '',
         reason: entry.deleteReason || '',
         connectedN: connected.length,
+        countable: !entry.testAccount && !(entry.managedBy && entry.ownerSelf),   /* 누적 가입 집계 대상 (2026-10-15) */
         deletedAt: new Date().toISOString()
       };
       db.runTransaction(function (tx) {
