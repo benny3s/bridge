@@ -855,6 +855,8 @@
   .chat-av.big { width: 40px; height: 40px; font-size: 1rem; }
   .chat-av.md { width: 36px; height: 36px; font-size: 0.95rem; }
   @media (pointer: coarse) { input, textarea, select { font-size: 16px !important; } }   /* 16px 미만이면 아이폰이 확대한 채로 남음 */
+  .qa-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
+  .qa-quick span { font-size: 0.76rem; color: var(--muted); margin-right: 2px; }
   .req-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
   .req-chip { border: 1px solid var(--line); background: var(--paper); color: var(--muted); border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 0.8rem; cursor: pointer; }
   .req-chip b { font-weight: 700; margin-left: 2px; }
@@ -1043,7 +1045,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-453';
+  var APP_VERSION = '2026-10-15-454';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4998,10 +5000,19 @@
     };
     var body = thread.length ? thread.map(bubble).join('')
       : '<p class="modal-msg" style="margin:0 0 4px;">아직 주고받은 메시지가 없어요. 궁금한 점이나 건의를 남겨 주세요!</p>';
-    try { var _meE = findMyEntry(currentState); if (_meE) localStorage.setItem(adminSeenKey(_meE), new Date().toISOString()); } catch (e) {}
+    try { localStorage.setItem('bb-admsg-seen:' + currentUser.id, new Date().toISOString()); } catch (e) {}
     var overlay = openModal(
       '<h3>👑 관리자와 대화 · Q&amp;A</h3>' +
-      (dataMode === 'full' && findMyEntry(currentState) ? '<button type="button" class="card-btn" data-action="account-sheet" style="width:100%;box-sizing:border-box;margin:2px 0 6px;font-size:0.86rem;">⚙️ 탈퇴·잠시 쉬기·PIN 변경은 여기서 바로 할 수 있어요</button>' : '') +
+      (function () {
+        var _m = dataMode === 'full' ? findMyEntry(currentState) : null;
+        if (!_m || isMatchmakerEntry(_m)) return '';
+        var _id = escapeHtml(_m.id);
+        return '<div class="qa-quick"><span>자주 찾는 것</span>' +
+          (!_m.deleteRequested ? '<button type="button" class="req-chip" data-action="delete" data-id="' + _id + '">🗑 탈퇴하기</button>' : '') +
+          (!_m.deactivateRequested && !_m.deactivated ? '<button type="button" class="req-chip" data-action="deactivate" data-id="' + _id + '">💤 잠시 쉬기</button>' : '') +
+          (!isProxyEntry(_m) ? '<button type="button" class="req-chip" id="change-my-pin">🔑 PIN 변경</button>' : '') +
+        '</div>';
+      })() +
       '<div id="mc-thread" style="max-height:42vh;overflow-y:auto;margin:6px 0 10px;padding:4px 2px;background:var(--paper);border-radius:12px;">' + body + '</div>' +
       '<textarea class="modal-input" id="mc-text" rows="3" maxlength="300" placeholder="건의사항이나 궁금한 점을 남겨주세요"></textarea>' +
       '<button type="button" class="card-btn" data-kakao="1" style="width:100%;box-sizing:border-box;margin-top:8px;background:#FEE500;border-color:#FEE500;color:#3C1E1E;font-weight:700;">💬 카카오톡으로 문의</button>' +
@@ -5015,7 +5026,7 @@
     try { var _th = overlay.querySelector('#mc-thread'); if (_th) _th.scrollTop = _th.scrollHeight; } catch (e) {}   /* 최근 메시지가 보이게 */
     function close() { closeModal(overlay); paint(currentState); }
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', function (e) { if (e.target === overlay || (e.target.closest && e.target.closest('[data-action="account-sheet"]'))) close(); });
+    overlay.addEventListener('click', function (e) { if (e.target === overlay || (e.target.closest && e.target.closest('.qa-quick button'))) close(); });   /* 바로가기는 창을 닫고 그 기능으로 */
     overlay.querySelector('#mc-send').addEventListener('click', function () {
       var t = overlay.querySelector('#mc-text').value.trim();
       if (!t) return;
@@ -6704,14 +6715,15 @@
   var CHAT_LIST_SHOW = 3, chatListOpen = false;   /* 대화방 목록: 처음 보이는 개수 / 펼침 상태 */
   /* 💬 대화 탭 맨 위 고정: 관리자와의 대화 (Q&A) */
   function adminSeenKey(me) { return 'bb-admsg-seen:' + me.id; }
+  function adminRoomVisible(me) { return !!(currentUser && me && !(isProxyEntry(me) && !me.ownerSelf)); }   /* 친구(대리) 프로필 화면엔 없음 */
   function adminUnreadFor(state, me) {
-    if (!me || isProxyEntry(me)) return 0;
-    var seen = ''; try { seen = localStorage.getItem(adminSeenKey(me)) || ''; } catch (e) {}
-    return threadFor(state, me.id, 'user').filter(function (m) { return m.from === 'admin' && (m.at || '') > seen; }).length;
+    if (!adminRoomVisible(me)) return 0;
+    var seen = ''; try { seen = localStorage.getItem('bb-admsg-seen:' + currentUser.id) || ''; } catch (e) {}
+    return threadFor(state, currentUser.id, 'user').filter(function (m) { return m.from === 'admin' && (m.at || '') > seen; }).length;
   }
   function adminRoomHtml(state, me) {
-    if (!me || isProxyEntry(me)) return '';
-    var th = threadFor(state, me.id, 'user'), last = th[th.length - 1], un = adminUnreadFor(state, me);
+    if (!adminRoomVisible(me)) return '';
+    var th = threadFor(state, currentUser.id, 'user'), last = th[th.length - 1], un = adminUnreadFor(state, me);
     return '<div class="chat-list" style="margin-bottom:4px;"><button type="button" class="chat-item admin-room" id="member-msg-open">' +
       '<div class="chat-av md" style="background:var(--gold);font-size:1.1rem;">👑</div>' +
       '<div class="chat-item-mid"><div class="chat-item-name">베니브릿지 관리자</div>' +
@@ -6871,7 +6883,7 @@
   function mineTabsHtml(state, me, pd, restoreHtml) {
     if (mineTabFor !== me.id) { mineTab = null; mineTabFor = me.id; }   /* 프로필 바꾸면 다시 자동 선택 */
     var pin = pd['in'] || { n: 0, need: 0, html: '' }, pout = pd.out || { n: 0, need: 0, html: '' };
-    var chatUn = chatUnreadTotal(state, me) + adminUnreadFor(state, me);
+    var chatUn = chatUnreadTotal(state, me) + (isMatchmakerEntry(myAuthEntry(state)) ? 0 : adminUnreadFor(state, me));
     var connHtml = connectionsSummaryHtml(state, me, true);
     var connN = (connHtml.match(/class="conn-row/g) || []).length;
     var cur = mineTab || (pin.need ? 'in' : (chatUn ? 'chat' : (pout.need ? 'out' : 'chat')));
@@ -6883,7 +6895,7 @@
       { k: 'conn', ic: '🔗', t: '내 연결', todo: 0, n: connN }
     ];
     var panes = {
-      chat: adminRoomHtml(state, me) + chatRoomsHtml(state, me, true),
+      chat: (isMatchmakerEntry(myAuthEntry(state)) ? '' : adminRoomHtml(state, me)) + chatRoomsHtml(state, me, true),
       'in': '<div class="mine-section">' + (pin.hasAny ? pin.html : '<p class="sub mine-empty">아직 받은 요청이 없어요.</p>') +
         '<p class="sub" style="margin:10px 0 0;font-size:0.76rem;">승인한 요청은 3일 뒤 🔗 내 연결로 옮겨져요.</p></div>',
       out: '<div class="mine-section">' + (pout.hasAny ? pout.html : '<p class="sub mine-empty">아직 보낸 요청이 없어요.<br>명단에서 마음에 드는 분께 요청해 보세요.</p>') + '</div>',
@@ -6970,23 +6982,13 @@
       mmHome =
           '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
             '<h2 style="margin:0 0 4px;">🤝 주선자 홈</h2>' +
-            '<button type="button" class="card-btn" id="convert-member" style="flex:none;">🙋 일반 계정으로 전환</button>' +
+            '<button type="button" class="card-btn" data-action="account-sheet" data-mm="1" style="flex:none;">⚙️ 주선자 계정</button>' +
           '</div>' +
           '<div class="my-uid">' + escapeHtml(currentUser.nickname) + ' · 주선자</div>' +
           pendNote +
           friendsNews +
           joinSection +
-          '<details class="mine-section" data-fk="mm-adminmsg"' + (mmThread.length ? ' open' : '') + '>' +
-            '<summary style="cursor:pointer;font-weight:700;list-style:revert;">💬 관리자 메시지<span class="count">' + mmThread.length + '</span></summary>' +
-            '<div style="margin-top:8px;">' +
-              (mmThread.length ? mmThread.map(function (m) { return msgLineHtml(m, 'user'); }).join('') : '<p class="sub" style="margin:0;">아직 없어요.</p>') +
-              '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">' +
-                '<button type="button" class="card-btn primary" id="member-msg-open" style="flex:none;">✍️ 관리자에게 메시지</button>' +
-                (mmThread.length ? '<button type="button" class="card-btn" id="member-msg-delall" style="flex:none;">전체 삭제</button>' : '') +
-              '</div>' +
-            '</div></details>' +
-          '<div class="mine-section" style="margin-top:14px;"><button type="button" class="card-btn danger" id="delete-mm" style="flex:none;">🗑 주선자 계정 삭제</button>' +
-            '<p class="sub" style="margin:6px 0 0;">계정과 내 소개팅 프로필을 삭제해요. (관리 중인 친구가 있으면 먼저 정리해야 해요)</p></div>';
+          '<div class="mine-section" style="margin-top:22px;"><h3 style="margin-bottom:6px;">💬 관리자와 대화</h3>' + adminRoomHtml(state, myAuthEntry(state)) + '</div>';
     }
     /* Case A: 주선자 계정 자체로 보고 있음(본인 미전환/미등록) → 관리 홈만 */
     if (isMatchmakerEntry(me)) {
@@ -7107,8 +7109,7 @@
         ? '<button type="button" class="card-btn approve" data-action="sub-pin-manage" data-id="' + escapeHtml(me.id) + '" style="flex:none;" title="눌러서 연장/회수">🔑 임시 PIN (' + escapeHtml(subPinUntilText(me)) + ')</button>'
         : '<button type="button" class="card-btn" data-action="sub-pin-issue" data-id="' + escapeHtml(me.id) + '" style="flex:none;">🔑 1일 PIN 발급</button>';
       headBtns = '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>' +
-        '<button type="button" class="card-btn" data-action="sub-detach" data-id="' + escapeHtml(me.id) + '" style="flex:none;">🪪 일반 계정 전환</button>' +
-        pinBtn + '<button type="button" class="card-btn" data-action="account-sheet" style="flex:none;">⚙️ 내 계정</button>';
+        '<button type="button" class="card-btn" data-action="account-sheet" style="flex:none;">⚙️ 친구 계정</button>';   /* 일반 계정 전환·임시 PIN은 계정 창 안으로 (2026-10-15) */
     } else if (isSubProfile) {
       /* 친구(sub)가 임시 PIN으로 직접 로그인한 경우: 프로필 수정 + 만료 시각 표시 */
       headBtns = '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>' +
@@ -8488,7 +8489,7 @@
             : '') +
           (currentUser
             ? '<button type="button" class="admin-link unlocked" id="user-logout">' + ICON_UNLOCK + ' 로그아웃</button>' +
-              ((canChangePin && isMatchmakerEntry(authE)) ? '<button type="button" class="admin-link" id="header-change-pin">&#128273; PIN 변경</button>' : '')   /* 회원은 메시지함 '⚙️ 내 계정' 안으로 (2026-10-15), 주선자 홈엔 계정 창이 없어 여기 유지 */
+              ''   /* 회원은 메시지함 '⚙️ 내 계정' 안으로 (2026-10-15), 주선자 홈엔 계정 창이 없어 여기 유지 */
             : (isAdminUnlocked
                 ? '<button type="button" class="admin-link unlocked" id="admin-toggle">' + ICON_UNLOCK + ' 관리자 해제</button>'
                 : '<button type="button" class="admin-link" id="user-login">' + ICON_LOCK + ' 로그인</button>')) +
@@ -9901,11 +9902,11 @@
   /* ── 커플 성사 (소개팅 성공 신고) ──
      회원 "좋은 인연을 만났어요" → coupleReports(미확인) + 후기·공개범위 + (선택)보관 요청. 관리자 확인 시 배너 카운트 반영. */
   /* ⚙️ 내 계정: 프로필 수정·PIN·좋은 인연·잠시 쉬기·탈퇴·주선자 — 한곳에 큰 글씨로 (2026-10-15) */
-  function openAccountSheet() {
-    var me = currentUser ? findMyEntry(currentState) : null;
+  function openAccountSheet(forceMM) {
+    var me = currentUser ? (forceMM ? myAuthEntry(currentState) : findMyEntry(currentState)) : null;
     if (!me) { modalNotice('안내', '로그인한 뒤 쓸 수 있어요.'); return; }
     var isSub = isProxyEntry(me);
-    var viaMm = !!actingAs && actingAs !== currentUser.id;
+    var viaMm = !forceMM && !!actingAs && actingAs !== currentUser.id;
     var amMM = isMatchmakerEntry(myAuthEntry(currentState));
     var iManage = entriesManagedByMe(currentState).length > 0;
     var myJoinReq = (currentState.joinRequests || []).find(function (j) { return j.fromId === me.id; });
@@ -9913,9 +9914,25 @@
     var row = function (attrs, ic, t, sub, danger) {
       return '<button type="button" class="acct-row' + (danger ? ' danger' : '') + '" ' + attrs + '><span class="acct-ic">' + ic + '</span><span class="acct-tx"><b>' + t + '</b>' + (sub ? '<small>' + sub + '</small>' : '') + '</span><span class="acct-go">›</span></button>';
     };
-    var html = '<h3>⚙️ ' + (viaMm ? escapeHtml(me.nickname) + '님 계정' : '내 계정') + '</h3><div class="acct-list">' +
+    if (isMatchmakerEntry(me) && !viaMm) {   /* 주선자 계정 자체 */
+      var mmHtml = '<h3>⚙️ 내 계정 (주선자)</h3><div class="acct-list">' +
+        row('id="change-my-pin"', '🔑', 'PIN 변경', '로그인 번호 바꾸기') +
+        row('id="convert-member"', '🙋', '일반 계정으로 전환', '주선자 대신 내 소개팅 계정으로') +
+        row('id="delete-mm"', '🗑', '주선자 계정 삭제', '관리 중인 친구가 있으면 먼저 정리', true) +
+        '</div><div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>';
+      var ovm = openModal(mmHtml);
+      ovm.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ovm); });
+      ovm.addEventListener('click', function (e) { if (e.target.closest && e.target.closest('.acct-row')) closeModal(ovm); });
+      return;
+    }
+    var pinOn = viaMm && hasPin(me) && !subPinExpired(me);
+    var html = '<h3>⚙️ ' + (viaMm ? escapeHtml(me.nickname) + '님(친구) 계정' : '내 계정') + '</h3><div class="acct-list">' +
       row('data-action="edit" data-id="' + id + '"', '✏️', '프로필 수정', '사진·소개·이상형 바꾸기') +
       (!isSub && !viaMm ? row('id="change-my-pin"', '🔑', 'PIN 변경', '로그인 번호 바꾸기') : '') +
+      (viaMm ? (pinOn
+        ? row('data-action="sub-pin-manage" data-id="' + id + '"', '🔑', '임시 PIN 연장·회수', '친구가 직접 로그인 중 · ' + escapeHtml(subPinUntilText(me)) + ' (' + escapeHtml(subPinRemainText(me)) + ')')
+        : row('data-action="sub-pin-issue" data-id="' + id + '"', '🔑', '임시 PIN 발급 (1일)', '친구가 직접 로그인해서 둘러볼 수 있게')) : '') +
+      (viaMm ? row('data-action="sub-detach" data-id="' + id + '"', '🪪', '일반 계정으로 독립', '친구가 직접 관리하는 계정으로 바꾸기') : '') +
       (!isSub && !viaMm && !me.deleteRequested ? row('data-action="report-couple" data-id="' + id + '"', '💕', '좋은 인연 만났어요', '축하 후기 남기고 명단에서 내리기') : '') +
       (!me.deactivateRequested && !me.deactivated && !me.deleteRequested ? row('data-action="deactivate" data-id="' + id + '"', '💤', '잠시 쉬기', '명단에서 숨기고 나중에 다시 활동') : '') +
       (!me.deleteRequested ? row('data-action="delete" data-id="' + id + '"', '🗑', '탈퇴하기', '프로필 삭제 (관리자 확인 후)', true) : row('data-action="cancel-delete" data-id="' + id + '"', '↩️', '탈퇴 요청 취소', '관리자 확인 중이에요')) +
@@ -11859,7 +11876,7 @@
       else if (action === 'withdraw-pending') handleWithdrawPending(id);
       else if (action === 'applicant-inquiry') { openMemberMsgCenter(); return; } /* 대기·보류 신청자도 로그인 상태 → 로그인 Q&A로 바로 남김 (이름·연락처 재입력 없음) */
       else if (action === 'report-couple') handleReportCouple(id);
-      else if (action === 'account-sheet') openAccountSheet();
+      else if (action === 'account-sheet') openAccountSheet(actionBtn.getAttribute('data-mm') === '1');
       else if (action === 'couple-confirm') { if (isAdminUnlocked) handleConfirmCouple(id); return; }
       else if (action === 'couple-vis') { if (isAdminUnlocked) handleSetCoupleVis(id); return; }
       else if (action === 'couple-del') { if (isAdminUnlocked) handleDeleteCoupleReport(id); return; }
