@@ -856,6 +856,15 @@
   .chat-av { width: 34px; height: 34px; border-radius: 50%; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; flex: none; }
   .chat-av.big { width: 40px; height: 40px; font-size: 1rem; }
   .chat-av.md { width: 36px; height: 36px; font-size: 0.95rem; }
+  .acct-list { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 2px; }
+  .acct-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); padding: 11px 12px; font: inherit; color: var(--ink); cursor: pointer; }
+  .acct-row:active { background: var(--gold-soft); }
+  .acct-row.danger { color: #c5221f; border-color: #f3c3bf; }
+  .acct-ic { font-size: 1.25rem; flex: none; width: 28px; text-align: center; }
+  .acct-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .acct-tx b { font-size: 0.98rem; }
+  .acct-tx small { font-size: 0.78rem; color: var(--muted); margin-top: 1px; }
+  .acct-go { color: var(--muted); font-size: 1.2rem; flex: none; }
   .mine-tabs { display: flex; gap: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 4px; margin: 6px 0 12px; }
   .mine-tab { flex: 1; min-width: 0; position: relative; border: 0; background: none; border-radius: 10px; padding: 6px 2px 5px; font: inherit; color: var(--muted); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; }
   .mine-tab .mt-ic { font-size: 1.05rem; line-height: 1.25; }
@@ -1029,7 +1038,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-14-443';
+  var APP_VERSION = '2026-10-15-444';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4954,6 +4963,7 @@
       : '<p class="modal-msg" style="margin:0 0 4px;">아직 주고받은 메시지가 없어요. 첫 메시지를 남겨보세요!</p>';
     var overlay = openModal(
       '<h3>💬 Q&amp;A · 관리자에게 문의</h3>' +
+      (dataMode === 'full' && findMyEntry(currentState) ? '<button type="button" class="card-btn" data-action="account-sheet" style="width:100%;box-sizing:border-box;margin:2px 0 6px;font-size:0.86rem;">⚙️ 탈퇴·잠시 쉬기·PIN 변경은 여기서 바로 할 수 있어요</button>' : '') +
       '<div style="max-height:36vh;overflow-y:auto;margin:6px 0 10px;">' + body + '</div>' +
       '<textarea class="modal-input" id="mc-text" rows="3" maxlength="300" placeholder="건의사항이나 궁금한 점을 남겨주세요"></textarea>' +
       '<button type="button" class="card-btn" data-kakao="1" style="width:100%;box-sizing:border-box;margin-top:8px;background:#FEE500;border-color:#FEE500;color:#3C1E1E;font-weight:700;">💬 카카오톡으로 문의</button>' +
@@ -4966,7 +4976,7 @@
     overlay.classList.add('wide-modal');
     function close() { closeModal(overlay); }
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    overlay.addEventListener('click', function (e) { if (e.target === overlay || (e.target.closest && e.target.closest('[data-action="account-sheet"]'))) close(); });
     overlay.querySelector('#mc-send').addEventListener('click', function () {
       var t = overlay.querySelector('#mc-text').value.trim();
       if (!t) return;
@@ -5677,8 +5687,8 @@
               '<button type="button" class="card-btn danger" data-action="admin-manage" data-id="' + escapeHtml(entry.id) + '">보류·삭제</button>'
             : mineOrManaged
               ? '<button type="button" class="card-btn" data-action="edit" data-id="' + escapeHtml(entry.id) + '">수정</button>' +
-                '<button type="button" class="card-btn" data-action="deactivate" data-id="' + escapeHtml(entry.id) + '">🗄 비활성화</button>' +
-                '<button type="button" class="card-btn danger" data-action="delete" data-id="' + escapeHtml(entry.id) + '">삭제</button>'
+                '<button type="button" class="card-btn" data-action="deactivate" data-id="' + escapeHtml(entry.id) + '">💤 잠시 쉬기</button>' +
+                '<button type="button" class="card-btn danger" data-action="delete" data-id="' + escapeHtml(entry.id) + '">🗑 탈퇴하기</button>'
               : reqBtns) +
         '</div>' +
       '</article>'
@@ -6982,7 +6992,8 @@
           '<hr class="perforation">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
             '<h2 style="margin:12px 0 4px;">🙋 내 소개팅 (본인)</h2>' +
-            '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>' +
+            '<span style="display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>' +
+            '<button type="button" class="card-btn" data-action="account-sheet" style="flex:none;">⚙️ 내 계정</button></span>' +
           '</div>' +
           '<div class="my-uid">고유번호 ' + escapeHtml(formatUid(me) || '—') + '</div>' +
           '<p class="sub">내 소개팅 프로필로 받고 보낸 요청이에요.</p>' +
@@ -7005,10 +7016,11 @@
         : '<button type="button" class="card-btn" data-action="sub-pin-issue" data-id="' + escapeHtml(me.id) + '" style="flex:none;">🔑 1일 PIN 발급</button>';
       headBtns = '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>' +
         '<button type="button" class="card-btn" data-action="sub-detach" data-id="' + escapeHtml(me.id) + '" style="flex:none;">🪪 일반 계정 전환</button>' +
-        pinBtn;
+        pinBtn + '<button type="button" class="card-btn" data-action="account-sheet" style="flex:none;">⚙️ 내 계정</button>';
     } else if (isSubProfile) {
       /* 친구(sub)가 임시 PIN으로 직접 로그인한 경우: 프로필 수정 + 만료 시각 표시 */
-      headBtns = '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>';
+      headBtns = '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>' +
+        '<button type="button" class="card-btn" data-action="account-sheet" style="flex:none;">⚙️ 내 계정</button>';
       if (hasPin(me) && !subPinExpired(me)) {
         headBtns += '<span class="chip" style="background:#e6f4ea;color:#137333;align-self:center;">🔑 임시 로그인 ' + escapeHtml(subPinUntilText(me)) + ' (' + escapeHtml(subPinRemainText(me)) + ')</span>';
       }
@@ -7022,8 +7034,7 @@
             ? '<button type="button" class="card-btn" id="cancel-mm-req" style="flex:none;">⏳ 주선자 승인 대기 (취소)</button>'
             : '<button type="button" class="card-btn" id="request-mm" style="flex:none;">🤝 주선자 요청</button>');
       headBtns = '<button type="button" class="card-btn primary" data-action="card-detail" data-id="' + escapeHtml(me.id) + '" style="flex:none;">👤 내 프로필 보기</button>' +
-        reqBtn + '<button type="button" class="card-btn" id="start-proxy" style="flex:none;">🤝 주선자 계정으로 전환</button>' +
-        (!me.deleteRequested ? '<button type="button" class="card-btn" data-action="report-couple" data-id="' + escapeHtml(me.id) + '" style="flex:none;background:#fce4ec;border-color:#f4a9c7;color:#c2185b;font-weight:700;">💕 좋은 인연 만났어요</button>' : '');
+        '<button type="button" class="card-btn" data-action="account-sheet" style="flex:none;">⚙️ 내 계정</button>';   /* 주선자 요청·전환·좋은 인연·잠시 쉬기·탈퇴·PIN 변경은 계정 창 안으로 (2026-10-15) */
     }
     return (
       '<div class="admin-panel">' +
@@ -9285,7 +9296,7 @@
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
     if (entry.deleteRequested) { modalNotice('안내', '이미 삭제 요청됐어요. 관리자 확인 중이에요.'); return; }
-    modalMessage('삭제 요청', entry.nickname + '님 프로필 삭제를 관리자에게 요청할까요? 삭제 사유를 꼭 남겨주세요. 바로 삭제되지 않고, 관리자 확인 후 삭제돼요.', '삭제 요청', 'danger', '예: 좋은 인연을 만났어요 / 개인 사정', true).then(function (reason) {
+    modalMessage('🗑 탈퇴하기', entry.nickname + '님 프로필 삭제(탈퇴)를 요청할까요? 이유를 짧게 남겨 주세요. 관리자 확인 후 지워지고, 그때까지는 명단에 남아 있어요.\n(잠깐 쉬고 싶은 거라면 \'💤 잠시 쉬기\'로 명단에서만 숨길 수도 있어요)', '탈퇴 요청', 'danger', '예: 좋은 인연을 만났어요 / 개인 사정', true).then(function (reason) {
       if (reason === null || reason === undefined) return;
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
@@ -9301,7 +9312,7 @@
         notifyAdmin('🗑 삭제 요청', entry.nickname + '님이 프로필 삭제를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        modalNotice('삭제 요청 접수', '관리자 확인 후 삭제돼요. 그때까지는 명단에 남아 있어요.');
+        modalNotice('탈퇴 요청 접수', '관리자 확인 후 삭제돼요. 그때까지는 명단에 남아 있어요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
@@ -9762,6 +9773,35 @@
   }
   /* ── 커플 성사 (소개팅 성공 신고) ──
      회원 "좋은 인연을 만났어요" → coupleReports(미확인) + 후기·공개범위 + (선택)보관 요청. 관리자 확인 시 배너 카운트 반영. */
+  /* ⚙️ 내 계정: 프로필 수정·PIN·좋은 인연·잠시 쉬기·탈퇴·주선자 — 한곳에 큰 글씨로 (2026-10-15) */
+  function openAccountSheet() {
+    var me = currentUser ? findMyEntry(currentState) : null;
+    if (!me) { modalNotice('안내', '로그인한 뒤 쓸 수 있어요.'); return; }
+    var isSub = isProxyEntry(me);
+    var viaMm = !!actingAs && actingAs !== currentUser.id;
+    var amMM = isMatchmakerEntry(myAuthEntry(currentState));
+    var iManage = entriesManagedByMe(currentState).length > 0;
+    var myJoinReq = (currentState.joinRequests || []).find(function (j) { return j.fromId === me.id; });
+    var id = escapeHtml(me.id);
+    var row = function (attrs, ic, t, sub, danger) {
+      return '<button type="button" class="acct-row' + (danger ? ' danger' : '') + '" ' + attrs + '><span class="acct-ic">' + ic + '</span><span class="acct-tx"><b>' + t + '</b>' + (sub ? '<small>' + sub + '</small>' : '') + '</span><span class="acct-go">›</span></button>';
+    };
+    var html = '<h3>⚙️ ' + (viaMm ? escapeHtml(me.nickname) + '님 계정' : '내 계정') + '</h3><div class="acct-list">' +
+      row('data-action="edit" data-id="' + id + '"', '✏️', '프로필 수정', '사진·소개·이상형 바꾸기') +
+      (!isSub && !viaMm ? row('id="change-my-pin"', '🔑', 'PIN 변경', '로그인 번호 바꾸기') : '') +
+      (!isSub && !viaMm && !me.deleteRequested ? row('data-action="report-couple" data-id="' + id + '"', '💕', '좋은 인연 만났어요', '축하 후기 남기고 명단에서 내리기') : '') +
+      (!me.deactivateRequested && !me.deactivated && !me.deleteRequested ? row('data-action="deactivate" data-id="' + id + '"', '💤', '잠시 쉬기', '명단에서 숨기고 나중에 다시 활동') : '') +
+      (!me.deleteRequested ? row('data-action="delete" data-id="' + id + '"', '🗑', '탈퇴하기', '프로필 삭제 · 관리자 확인 후 지워져요', true) : row('data-action="cancel-delete" data-id="' + id + '"', '↩️', '탈퇴 요청 취소', '관리자 확인 중이에요')) +
+      (!isSub && !viaMm && !amMM && !iManage ? (myJoinReq ? row('id="cancel-mm-req"', '⏳', '주선자 요청 취소', '승인 대기 중') : row('id="request-mm"', '🤝', '주선자에게 관리 요청', '친구가 내 프로필을 대신 관리')) : '') +
+      (!isSub && !viaMm ? row('id="start-proxy"', '🤝', '주선자 계정으로 전환', '친구를 대신 소개하기') : '') +
+      '</div><div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>';
+    var ov = openModal(html);
+    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+    ov.addEventListener('click', function (e) {
+      if (e.target === ov) { closeModal(ov); return; }
+      if (e.target.closest && e.target.closest('.acct-row')) closeModal(ov);   /* 창을 닫고 원래 버튼 동작(앱 공통 처리)으로 넘김 */
+    });
+  }
   function handleReportCouple(id) {
     var me = findMyEntry(currentState);
     if (!me || me.id !== id) { modalNotice('안내', '본인 프로필에서만 알릴 수 있어요.'); return; }
@@ -9778,7 +9818,12 @@
       '</div>' +
       '<label style="display:block;font-weight:600;margin:10px 0 4px;">상대가 이 앱 회원인가요? <span style="color:var(--muted);font-weight:400;">(선택)</span></label>' +
       '<input type="text" class="modal-input" id="cp-partner" maxlength="30" placeholder="상대 닉네임 (앱 밖이면 비워두세요)">' +
-      '<label style="display:flex;align-items:center;gap:8px;margin:12px 0 4px;font-size:0.92rem;"><input type="checkbox" id="cp-hide" checked> 이제 명단에서 내 프로필을 내려둘게요 (보관)</label>' +
+      '<label style="display:block;font-weight:600;margin:12px 0 4px;">내 프로필은</label>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;font-size:0.92rem;">' +
+        '<label><input type="radio" name="cpafter" value="hide" checked> 💤 명단에서 내리기 <span style="color:var(--muted);">(나중에 다시 활동 가능)</span></label>' +
+        '<label><input type="radio" name="cpafter" value="delete"> 🗑 탈퇴하기 <span style="color:var(--muted);">(프로필 삭제)</span></label>' +
+        '<label><input type="radio" name="cpafter" value="keep"> 그대로 두기</label>' +
+      '</div>' +
       '<div class="modal-actions">' +
         '<button type="button" class="card-btn" id="cp-cancel">취소</button>' +
         '<button type="button" class="card-btn primary" id="cp-ok">보내기</button>' +
@@ -9791,7 +9836,9 @@
       var visEl = overlay.querySelector('input[name="cpvis"]:checked');
       var vis = visEl ? visEl.value : 'private';
       var partner = (overlay.querySelector('#cp-partner').value || '').trim();
-      var hide = overlay.querySelector('#cp-hide').checked;
+      var afterEl = overlay.querySelector('input[name="cpafter"]:checked');
+      var after = afterEl ? afterEl.value : 'hide';
+      var hide = after === 'hide';
       closeModal(overlay);
       var rec = { id: genId(), byId: me.id, byNick: me.nickname || '', partner: partner, review: review, vis: vis, at: new Date().toISOString(), confirmed: false };
       db.runTransaction(function (tx) {
@@ -9801,7 +9848,12 @@
           list.push(rec);
           if (list.length > 1000) list = list.slice(list.length - 1000);
           var patch = { coupleReports: list };
-          if (hide && !me.deactivateRequested && !me.deactivated) {
+          if (after === 'delete' && !me.deleteRequested) {
+            patch.entries = (s.entries || []).map(function (e) {
+              if (e.id !== me.id) return e;
+              var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString(); c.deleteReason = '좋은 인연을 만났어요 (커플 성사)'; return c;
+            });
+          } else if (hide && !me.deactivateRequested && !me.deactivated) {
             patch.entries = (s.entries || []).map(function (e) {
               if (e.id !== me.id) return e;
               var c = JSON.parse(JSON.stringify(e)); c.deactivateRequested = true; c.deactivateReqAt = new Date().toISOString(); c.deactivateReason = '좋은 인연을 만났어요 (커플 성사)'; return c;
@@ -9810,11 +9862,12 @@
           tx.update(stateRef, patch);
         });
       }).then(function () {
-        appendLog('couple', me.nickname || '회원', '커플 성사 신고' + (partner ? ' (상대: ' + partner + ')' : '') + (hide ? ' · 보관 요청' : ''));
+        appendLog('couple', me.nickname || '회원', '커플 성사 신고' + (partner ? ' (상대: ' + partner + ')' : '') + (hide ? ' · 보관 요청' : (after === 'delete' ? ' · 탈퇴 요청' : '')));
+        if (after === 'delete') notifyAdmin('🗑 탈퇴 요청', (me.nickname || '회원') + '님이 좋은 인연을 만나 탈퇴를 요청했어요.');
         notifyAdmin('💕 커플 성사!', (me.nickname || '회원') + '님이 좋은 인연을 만났다고 알려왔어요' + (review ? ': "' + review.slice(0, 40) + '"' : '.'));
         return refreshNow();
       }).then(function () {
-        modalNotice('감사해요 💕', '소식 잘 받았어요. 두 분의 앞날을 진심으로 응원할게요!' + (hide ? ' (명단 보관은 관리자 확인 후 적용돼요.)' : ''));
+        modalNotice('감사해요 💕', '소식 잘 받았어요. 두 분의 앞날을 진심으로 응원할게요!' + (hide ? ' (명단 보관은 관리자 확인 후 적용돼요.)' : (after === 'delete' ? ' (탈퇴는 관리자 확인 후 처리돼요.)' : '')));
       }).catch(function (err) { modalNotice('오류', '전송 실패: ' + ((err && err.message) || err)); });
     });
   }
@@ -11654,6 +11707,7 @@
       else if (action === 'withdraw-pending') handleWithdrawPending(id);
       else if (action === 'applicant-inquiry') { openMemberMsgCenter(); return; } /* 대기·보류 신청자도 로그인 상태 → 로그인 Q&A로 바로 남김 (이름·연락처 재입력 없음) */
       else if (action === 'report-couple') handleReportCouple(id);
+      else if (action === 'account-sheet') openAccountSheet();
       else if (action === 'couple-confirm') { if (isAdminUnlocked) handleConfirmCouple(id); return; }
       else if (action === 'couple-vis') { if (isAdminUnlocked) handleSetCoupleVis(id); return; }
       else if (action === 'couple-del') { if (isAdminUnlocked) handleDeleteCoupleReport(id); return; }
