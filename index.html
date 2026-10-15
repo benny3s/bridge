@@ -1038,7 +1038,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-446';
+  var APP_VERSION = '2026-10-15-447';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -3216,6 +3216,12 @@
       var ok = overlay.querySelector('#modal-ok');
       if (ok) { ok.click(); return; }
       closeModal(overlay);
+    });
+    /* 바깥(어두운 곳)을 누르면 닫힘 — 입력칸이 있는 창은 쓰던 내용이 날아가지 않게 그대로 (2026-10-15 Benny) */
+    overlay.addEventListener('click', function (e) {
+      if (e.target !== overlay || overlay.querySelector('input:not([type=radio]):not([type=checkbox]), textarea, select')) return;
+      var c = overlay.querySelector('#modal-cancel');
+      if (c) c.click(); else closeModal(overlay);
     });
     return overlay;
   }
