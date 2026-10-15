@@ -476,8 +476,7 @@
   .summary, .filter-group {
     max-width: 100%; align-self: stretch;
     display: flex; align-items: center; justify-content: flex-start; gap: 6px;
-    flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+    flex-wrap: wrap; row-gap: 6px;   /* 좁은 화면에서 잘리지 않게 줄바꿈 (가로 스크롤은 다시 그릴 때 위치가 초기화돼 불편) */
   }
   .summary::-webkit-scrollbar, .filter-group::-webkit-scrollbar { display: none; }
   .summary { font-size: 0.9rem; color: var(--muted); }
@@ -857,6 +856,7 @@
   .chat-av { width: 34px; height: 34px; border-radius: 50%; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; flex: none; }
   .chat-av.big { width: 40px; height: 40px; font-size: 1rem; }
   .chat-av.md { width: 36px; height: 36px; font-size: 0.95rem; }
+  @media (pointer: coarse) { input, textarea, select { font-size: 16px !important; } }   /* 16px 미만이면 아이폰이 확대한 채로 남음 */
   .acct-list { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 2px; }
   .acct-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); padding: 11px 12px; font: inherit; color: var(--ink); cursor: pointer; }
   .acct-row:active { background: var(--gold-soft); }
@@ -918,7 +918,7 @@
   .conn-row:last-child { border-bottom: 0; }
   .conn-list:not(.all):not(.searching) .conn-row.fold, .conn-row.nomatch { display: none; }
   .conn-line { display: flex; align-items: center; gap: 4px; min-height: 42px; }
-  .conn-fav { flex: none; border: 0; background: none; font-size: 1.1rem; color: var(--muted); opacity: .45; padding: 4px 6px; cursor: pointer; }
+  .conn-fav { flex: none; border: 0; background: none; font-size: 1.2rem; color: var(--muted); opacity: .45; min-width: 40px; min-height: 40px; padding: 0; margin-left: 4px; cursor: pointer; }
   .conn-fav.on { color: var(--gold); opacity: 1; }
   .conn-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: none; padding: 8px 2px; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
   .conn-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -1039,7 +1039,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-15-450';
+  var APP_VERSION = '2026-10-15-451';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1201,6 +1201,7 @@
     if (zonesAll(z)) return '';
     return '<span class="chip" style="background:#EEF5EA;color:#3B6D11;border-color:#97C459;">📍 ' + escapeHtml(zonesText(z)) + '</span>';
   }
+  var _listOrder = null, _connOrder = null;   /* 명단·내 연결 표시 순서 고정용 */
   var listFilterInitFor = null; /* 이성 기본 필터를 적용한 활동 프로필 id (프로필당 1회만 자동 적용) */
   var listOrder = 'recent'; /* 명단 기본 정렬: recent(최근 접속순) | serial(가입순 · 관리자 전용) */
   var ageSort = 'none'; /* 명단 나이 정렬: none | asc(오름차순·어린 순부터) | desc(내림차순·나이 많은 순부터) */
@@ -3211,6 +3212,8 @@
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.innerHTML = '<div class="modal-box">' + bodyHtml + '</div>';
+    var _openedAt = Date.now();
+    overlay.addEventListener('click', function (e) { if (Date.now() - _openedAt < 350) { e.stopPropagation(); e.preventDefault(); } }, true);
     document.body.appendChild(overlay);
     pushOverlay(overlay, function () {
       var c = overlay.querySelector('#modal-cancel');
@@ -4568,7 +4571,15 @@
     el.className = 'chat-banner';
     el.innerHTML = '<div class="chat-av" style="background:' + avatarColor(otherId) + ';">' + escapeHtml(initials(nick)) + '</div>' +
       '<div style="min-width:0;flex:1;"><b>' + escapeHtml(nick) + '</b><div class="chat-banner-text">' + escapeHtml(String(text || '').slice(0, 60)) + '</div></div>';
-    el.addEventListener('click', function () { if (el.parentNode) el.remove(); openDmChat(otherId); });
+    var _shownAt = Date.now();
+    if (document.querySelector('.chat-screen, .modal-overlay')) el.style.top = '64px';   /* 채팅 상단 '‹ 목록'·⋯ 버튼을 덮지 않게 */
+    el.addEventListener('click', function () {
+      if (Date.now() - _shownAt < 300) return;
+      if (el.parentNode) el.remove();
+      Array.prototype.forEach.call(document.querySelectorAll('.modal-overlay'), function (m) { closeModal(m); });
+      if (_openChatClose && _openChatWith !== otherId) _openChatClose();
+      openDmChat(otherId);
+    });
     document.body.appendChild(el);
     setTimeout(function () { el.classList.add('show'); }, 20);
     setTimeout(function () { el.classList.remove('show'); setTimeout(function () { if (el.parentNode) el.remove(); }, 400); }, 4500);
@@ -4732,6 +4743,7 @@
     function bpStop() { if (bpTimer) { clearTimeout(bpTimer); bpTimer = null; } if (bpEl) { bpEl.classList.remove('pressed'); bpEl = null; } }
     body.addEventListener('contextmenu', function (e) {
       var b = e.target.closest && e.target.closest('.chat-bubble[data-mid]'); if (!b) return;
+      if (Date.now() - bpFired < 1000) { e.preventDefault(); return; }   /* 길게 누르기와 겹쳐 메뉴가 두 개 뜨지 않게 */
       if (window.getSelection && String(window.getSelection())) return;   /* PC에서 글자를 골라 둔 상태면 브라우저 메뉴(복사) 그대로 */
       e.preventDefault(); bpStop(); bpFired = Date.now(); bubbleMenu(b);
     });
@@ -5757,6 +5769,14 @@
         return (b.serial || 0) - (a.serial || 0);
       });
     }
+    /* 다른 회원이 접속할 때마다 카드 순서가 바뀌어 엉뚱한 버튼이 눌리지 않게 — 명단 탭에 들어오거나 정렬·필터가 바뀔 때만 다시 정렬 (2026-10-15) */
+    var _ok = [listFilter, ageSort, listOrder, String(zoneView), String(currentUser && currentUser.id), String(actingAs), String(isAdminUnlocked), adminZone].join('|');
+    if (_listOrder && _listOrder.key === _ok) {
+      var _pos = {}; _listOrder.ids.forEach(function (id, i) { _pos[id] = i; });
+      var _fresh = ordered.filter(function (e) { return !(e.id in _pos); });
+      ordered = ordered.filter(function (e) { return e.id in _pos; }).sort(function (a, b) { return _pos[a.id] - _pos[b.id]; }).concat(_fresh);
+    }
+    _listOrder = { key: _ok, ids: ordered.map(function (e) { return e.id; }) };
     /* 전체 지역을 보여줄 때도 내 지역과 겹치는 사람을 먼저 (그 안의 순서는 그대로) */
     if (myZones && zoneMode === 'all') {
       ordered = ordered.filter(function (e) { return zonesOverlap(zonesOf(e), myZones); })
@@ -6739,6 +6759,11 @@
       return { x: x, iSee: iSee, theySee: theySee, chat: chat, fav: !!favs[x.id], un: chat ? dmUnreadFrom(state, me.id, x.id) : 0, at: linkedAt[x.id] || '' };
     }).filter(Boolean);
     list.sort(function (a, b) { return (b.fav - a.fav) || ((b.un > 0) - (a.un > 0)) || b.at.localeCompare(a.at); });
+    if (bare && _connOrder) {   /* 메시지함에 있는 동안엔 순서 고정 (☆·새 메시지로 줄이 튀지 않게) */
+      var _cp = {}; _connOrder.forEach(function (id, i) { _cp[id] = i; });
+      list = list.filter(function (c) { return !(c.x.id in _cp); }).concat(list.filter(function (c) { return c.x.id in _cp; }).sort(function (a, b) { return _cp[a.x.id] - _cp[b.x.id]; }));
+    }
+    if (bare) _connOrder = list.map(function (c) { return c.x.id; });
     var many = !bare && list.length > CONN_SHOW + 2, shownN = 0;
     var rows = list.map(function (c) {
       var x = c.x, id = escapeHtml(x.id);
@@ -6816,6 +6841,7 @@
     var connHtml = connectionsSummaryHtml(state, me, true);
     var connN = (connHtml.match(/class="conn-row/g) || []).length;
     var cur = mineTab || (pin.need ? 'in' : (chatUn ? 'chat' : (pout.need ? 'out' : 'chat')));
+    mineTab = cur;   /* 다시 그려져도 탭이 저절로 바뀌지 않게 (새 요청이 와도 보던 탭 유지) */
     var tabs = [
       { k: 'chat', ic: '💬', t: '대화', todo: chatUn, n: 0 },
       { k: 'in', ic: '📥', t: '받은 요청', todo: pin.need, n: pin.n },
@@ -8547,10 +8573,24 @@
      ~400ms에 최신 상태로 1회만 다시 그림. (관리자 본인 조작은 핸들러가 직접 paint() 호출 → 즉시)
      잦은 리페인트로 아이폰이 렉 걸리고, <img>가 로드 전에 DOM이 갈려 사진이 안 뜨던 문제 완화. */
   var _paintTimer = null, _firstPainted = false;
+  /* 사용자 동작 중 판단: 터치 중·터치 뒤 0.6초·스크롤 뒤 0.5초 (2026-10-15 모바일 점검) */
+  var _touching = false, _lastTouchAt = 0, _lastScrollAt = 0;
+  document.addEventListener('touchstart', function () { _touching = true; _lastTouchAt = Date.now(); }, { passive: true, capture: true });
+  document.addEventListener('touchend', function () { _touching = false; _lastTouchAt = Date.now(); }, { passive: true, capture: true });
+  document.addEventListener('touchcancel', function () { _touching = false; _lastTouchAt = Date.now(); }, { passive: true, capture: true });
+  window.addEventListener('scroll', function () { _lastScrollAt = Date.now(); }, { passive: true });
+  function userBusy() { var n = Date.now(); return _touching || n - _lastTouchAt < 600 || n - _lastScrollAt < 500; }
+  function typingInApp() {   /* 화면 안 입력칸(명단 검색 등)에 글을 쓰는 중 */
+    var a = document.activeElement, app = document.getElementById('app');
+    return !!(a && app && app.contains(a) && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && /^(text|search|tel|number|email|)$/.test(a.type || ''))));
+  }
+  document.addEventListener('focusout', function () { setTimeout(function () { if (!typingInApp()) schedulePaint(); }, 50); }, true);
   function _doSnapPaint() {
     var st = currentState;
     decryptAllAdminData(st).then(function () {
       if (isEditingForm()) return; /* 폼 작성 중이면 유지 */
+      if (typingInApp()) return;   /* 검색어 등 입력 중 — 입력칸을 벗어나면(focusout) 다시 그림 */
+      if (userBusy()) { setTimeout(_doSnapPaint, 400); return; }   /* 누르는 중·스크롤 중엔 미룸 */
       paint(st);
     }).catch(function () {});
   }
@@ -8562,7 +8602,11 @@
 
   /* 신청서를 작성 중이면(포커스/입력/사진 있음) 배경 갱신으로 화면을 다시 그리지 않음
      — 다른 사람 활동으로 인한 실시간 갱신이 입력 중인 폼을 지우는 문제 방지 */
+  var _formDirty = false, _pickPhotoUntil = 0;   /* 신청서·수정 화면에서 입력함 / 사진 고르는 중 */
+  document.addEventListener('input', function (e) { if (e.target && e.target.closest && e.target.closest('#entry-form')) _formDirty = true; }, true);
+  document.addEventListener('click', function (e) { if (e.target && e.target.closest && e.target.closest('#f-photo, .photo-pick')) _pickPhotoUntil = Date.now() + 60000; }, true);
   function isEditingForm() {
+    if (activeTab === 'form' && Date.now() < _pickPhotoUntil) return true;   /* 사진 고르는 동안 다시 그리면 고른 사진이 무시됨 */
     if (activeTab !== 'form') return false;
     var form = document.getElementById('entry-form');
     if (!form) return false;
@@ -9223,6 +9267,7 @@
   }
 
   function startEditing(entry) {
+    _formDirty = false;
     editingEntryId = entry.id;
     exampleTipDismissed = false; /* 수정 모드에서도 예시 카드 표시 */
     photoDataUrls = [];
@@ -11495,6 +11540,14 @@
     if (e.target.closest('#mm-back')) { formRole = 'matchmaker'; paint(currentState); return; }
     if (e.target.closest('#mm-login')) { handleLogin({ matchmakerOnly: true }); return; }
     var tabBtn = e.target.closest('[data-tab]');
+    if (tabBtn && activeTab === 'form' && editingEntryId && _formDirty && tabBtn.getAttribute('data-tab') !== 'form' && !tabBtn._leaveOk) {
+      var _tb = tabBtn;
+      modalConfirm('수정 중이에요', '고친 내용이 아직 저장되지 않았어요. 저장하지 않고 나갈까요?', '나가기').then(function (ok) {
+        if (!ok) return;
+        _formDirty = false; _tb._leaveOk = true; _tb.click(); _tb._leaveOk = false;
+      });
+      return;
+    }
     if (tabBtn) {
       var destTab = tabBtn.getAttribute('data-tab');
       if (destTab === 'form') {
@@ -11507,6 +11560,8 @@
         window.scrollTo(0, 0);
         return;
       }
+      if (destTab === 'mine') { mineTab = null; _connOrder = null; }   /* 메시지함에 들어올 때만 탭 자동 선택·내 연결 순서 다시 */
+      if (destTab === 'list') _listOrder = null;   /* 명단에 들어올 때만 다시 정렬 */
       activeTab = destTab;
       if (activeTab === 'mine') markMineSeen();
       paint(currentState);
@@ -11770,7 +11825,11 @@
       }
       else if (action === 'conn-fav') {
         var cme = currentUser ? findMyEntry(currentState) : null;
-        if (cme) { toggleConnFav(cme.id, id); paint(currentState); }
+        if (cme) {
+          toggleConnFav(cme.id, id);
+          var _on = !!connFavs(cme.id)[id];
+          actionBtn.classList.toggle('on', _on); actionBtn.textContent = _on ? '★' : '☆';   /* 다시 그리지 않음 — 맨 위 고정은 다음에 들어올 때 */
+        }
       }
       else if (action === 'conn-more') {
         connListOpen = !connListOpen;
@@ -12158,7 +12217,7 @@
     var me = findMyEntry(currentState); if (!me) return;
     var cfg = checkinCfg();
     if (!cfg.enabled) return;                                  /* 예약 팝업 꺼짐 */
-    if (document.querySelector('.modal-overlay, .chat-screen')) { setTimeout(maybeShowCheckin, 4000); return; }
+    if (document.querySelector('.modal-overlay, .chat-screen') || userBusy()) { setTimeout(maybeShowCheckin, 4000); return; }
     if (!autoPopupOk('checkin')) return;                       /* 다른 팝업이 이미 떴으면 이번엔 생략(본 걸로 기록 안 함 → 다음에 표시) */
     /* 1) 관리자가 "지금 발송"한 경우 — 예약과 무관하게 1회 표시 */
     if (cfg.forceVer) {
@@ -12194,7 +12253,7 @@
     if (!currentUser) return;
     var pop = (currentState && currentState.popup) || null;
     if (!pop || !pop.text || !pop.ver) return;
-    if (document.querySelector('.modal-overlay, .chat-screen')) { setTimeout(maybeShowOneOffPopup, 4000); return; }
+    if (document.querySelector('.modal-overlay, .chat-screen') || userBusy()) { setTimeout(maybeShowOneOffPopup, 4000); return; }
     var seen = ''; try { seen = localStorage.getItem('popup-seen') || ''; } catch (e) {}
     if (seen === pop.ver) return;
     if (!autoPopupOk('popup')) return;
@@ -12218,7 +12277,7 @@
     if (!currentUser) return;
     if (!currentState || !currentState.entries) { if ((tries || 0) < 5) setTimeout(function () { maybeShowReqNudge((tries || 0) + 1); }, 3000); return; }
     if (isAdminUnlocked) return;
-    if (document.querySelector('.modal-overlay, .chat-screen')) { setTimeout(maybeShowReqNudge, 4000); return; }
+    if (document.querySelector('.modal-overlay, .chat-screen') || userBusy()) { setTimeout(maybeShowReqNudge, 4000); return; }
     var state = currentState;
     var auth = myAuthEntry(state); if (!auth || auth.deactivated) return;
     var key = 'req-nudge-' + currentUser.id;
