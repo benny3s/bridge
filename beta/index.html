@@ -848,6 +848,7 @@
   .chat-notice { font-size: 0.78rem; color: var(--ink); background: var(--gold-soft); border-bottom: 1px solid var(--line); padding: 6px 12px; }
   .chat-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px 12px 12px; overscroll-behavior: contain; }
   .chat-empty { text-align: center; color: var(--muted); font-size: 0.9rem; margin-top: 40px; line-height: 1.7; }
+  #dm-body .chat-row:not(.mine) .chat-av, #dm-body .chat-row:not(.mine) .chat-name { cursor: pointer; }
   .chat-intro { margin: 10px 4px 4px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 12px; background: var(--card, #fff); font-size: 0.85rem; line-height: 1.55; color: var(--text); }
   .chat-intro-h { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
   .chat-intro-line { white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
@@ -1058,7 +1059,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-20-463';
+  var APP_VERSION = '2026-10-20-464';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4700,6 +4701,8 @@
     drawStatus();
     var whoBtn = scr.querySelector('#chat-who');
     if (otherAlive) whoBtn.addEventListener('click', function () { handleCardDetail(otherId); });
+    /* 상대 동그라미(이니셜)·이름을 누르면 프로필 (카톡처럼, 2026-10-20 회원 요청) */
+    if (otherAlive) scr.querySelector('#dm-body').addEventListener('click', function (e) { var t = e.target.closest && e.target.closest('.chat-row:not(.mine) .chat-av, .chat-row:not(.mine) .chat-name'); if (t) handleCardDetail(otherId); });
     var pendings = [];   /* 아직 서버 확인 전인 내 메시지 */
     function nearBottom() { return body.scrollHeight - body.scrollTop - body.clientHeight < 80; }
     function toBottom() { body.scrollTop = body.scrollHeight; newbar.hidden = true; }
