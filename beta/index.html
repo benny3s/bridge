@@ -848,6 +848,10 @@
   .chat-notice { font-size: 0.78rem; color: var(--ink); background: var(--gold-soft); border-bottom: 1px solid var(--line); padding: 6px 12px; }
   .chat-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px 12px 12px; overscroll-behavior: contain; }
   .chat-empty { text-align: center; color: var(--muted); font-size: 0.9rem; margin-top: 40px; line-height: 1.7; }
+  .chat-intro { margin: 10px 4px 4px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 12px; background: var(--card, #fff); font-size: 0.85rem; line-height: 1.55; color: var(--text); }
+  .chat-intro-h { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+  .chat-intro-line { white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
+  .chat-intro-line b { color: var(--muted); font-weight: 600; margin-right: 2px; }
   .chat-day { text-align: center; margin: 14px 0 10px; }
   .chat-day span { background: var(--line); color: var(--muted); font-size: 0.72rem; padding: 3px 12px; border-radius: 999px; }
   .chat-row { display: flex; gap: 8px; margin-top: 3px; align-items: flex-start; }
@@ -1054,7 +1058,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-16-462';
+  var APP_VERSION = '2026-10-20-463';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4604,9 +4608,24 @@
     setTimeout(function () { el.classList.add('show'); }, 20);
     setTimeout(function () { el.classList.remove('show'); setTimeout(function () { if (el.parentNode) el.remove(); }, 400); }, 4500);
   }
+  function chatIntroHtml(meId, otherId, otherNick) {
+    var reqs = ((currentState && currentState.dateRequests) || []).filter(function (r) {
+      return (r.type || 'contact') === 'contact' && r.approved && ((r.fromId === meId && r.toId === otherId) || (r.fromId === otherId && r.toId === meId));
+    });
+    if (!reqs.length) return '';
+    var r = reqs[reqs.length - 1], note = '', reply = r.approveMessage || '';
+    try { note = reqNote(r) || ''; } catch (e) {}
+    if (!note && !reply) return '';
+    var mineReq = r.fromId === meId, other = otherNick || '상대';
+    var line = function (who, text) { return '<div class="chat-intro-line"><b>' + escapeHtml(who) + '</b> ' + escapeHtml(text) + '</div>'; };
+    return '<div class="chat-intro"><div class="chat-intro-h">💌 대화 신청 때 주고받은 말' + (r.createdAt ? ' · ' + escapeHtml(chatDay(r.createdAt)) : '') + '</div>' +
+      (note ? line(mineReq ? '나' : other, note) : '') +
+      (reply ? line((mineReq ? other : '나') + ' (답장)', reply) : '') + '</div>';
+  }
   function chatBodyHtml(thread, meId, otherId, otherNick, otherReadAt) {
-    if (!thread.length) return '<div class="chat-empty">아직 대화가 없어요.<br>먼저 인사를 건네보세요 👋</div>';
-    var out = '', lastDay = '';
+    var intro = chatIntroHtml(meId, otherId, otherNick);   /* 대화 신청 때 주고받은 말 — 채팅방이 비어 '이전 대화가 사라졌다'로 보이지 않게 (2026-10-20) */
+    if (!thread.length) return intro + '<div class="chat-empty"' + (intro ? ' style="margin-top:18px;"' : '') + '>아직 채팅은 없어요.<br>먼저 인사를 건네보세요 👋</div>';
+    var out = intro, lastDay = '';
     thread.forEach(function (m, i) {
       var day = chatDay(m.at);
       if (day !== lastDay) { out += '<div class="chat-day"><span>' + day + '</span></div>'; lastDay = day; }
