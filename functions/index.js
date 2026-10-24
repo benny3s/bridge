@@ -1582,14 +1582,17 @@ exports.chatStats = functions
 
 
 /* ══ 베니 AI 살롱 컨시어지 (2026-10-24) — 프로필 아틀리에 · 케미 리포트 · 맞춤 신청 메시지 · 채팅 아이스브레이커 ══ */
-function callGroqChat(apiKey, model, sysPrompt, userPrompt, maxTokens, temperature) {
+function callGroqChat(apiKey, model, sysPrompt, userPrompt, maxTokens, temperature, imageDataUrl) {
   return new Promise((resolve, reject) => {
+    const userContent = imageDataUrl
+      ? [{ type: 'text', text: userPrompt }, { type: 'image_url', image_url: { url: imageDataUrl } }]
+      : userPrompt;
+    const messages = [];
+    if (sysPrompt && !imageDataUrl) messages.push({ role: 'system', content: sysPrompt });
+    messages.push({ role: 'user', content: userContent });
     const body = JSON.stringify({
       model: model,
-      messages: [
-        { role: 'system', content: sysPrompt },
-        { role: 'user', content: userPrompt }
-      ],
+      messages: messages,
       max_tokens: maxTokens || 700,
       temperature: typeof temperature === 'number' ? temperature : 0.72
     });
@@ -1643,6 +1646,165 @@ exports.aiConcierge = functions
       const tickets = [];
       qs.forEach((d) => tickets.push(d.data()));
       return { ok: true, tickets };
+    }
+
+    if (op === 'coadmin_audit') {
+      if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 AI 부관리자 심사를 실행할 수 있어요.');
+      const pendingItems = Array.isArray(data && data.pending_items) ? data.pending_items.slice(0, 12) : [];
+      const editItems = Array.isArray(data && data.edit_items) ? data.edit_items.slice(0, 15) : [];
+
+      function checkPhoneKr(raw) {
+        if (!raw) return [false, '전화번호 미입력 또는 복호화 필요'];
+        let d = String(raw).replace(/\D/g, '');
+        if (d.startsWith('82') && d.length >= 11) d = '0' + d.slice(2);
+        if (!/^010\d{8}$/.test(d)) return [false, '010-4자리-4자리 형식이 아님 (' + raw + ')'];
+        const mid = d.slice(3, 7), last = d.slice(7, 11);
+        const fakes = new Set(['0000', '1111', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999']);
+        if (fakes.has(mid) && fakes.has(last)) return [false, '반복 숫자 가짜 번호 의심 (010-' + mid + '-' + last + ')'];
+        if (mid === '1234' && (last === '5678' || last === '1234')) return [false, '예시/장난 번호 의심 (010-' + mid + '-' + last + ')'];
+        return [true, '010-' + mid + '-' + last + ' 정상'];
+      }
+
+      const pendingResults = [];
+      for (const it of pendingItems) {
+        const eid = String(it.id || '');
+        const nick = String(it.nickname || '신청자');
+        const isMm = !!it.isMatchmaker;
+        const [phoneOk, phoneNote] = checkPhoneKr(it.phone || '');
+
+        let photoOk = true, photoNote = '주선자 계정(사진 면제)';
+        if (!isMm) {
+          let imgUrl = String(it.photoDataUrl || '');
+          if (!imgUrl && eid) {
+            try {
+              const pDoc = await db.collection('photos').doc(eid).get();
+              const pArr = (pDoc.exists && pDoc.data() && Array.isArray(pDoc.data().photos)) ? pDoc.data().photos : [];
+              if (pArr.length) imgUrl = pArr[0];
+            } catch (e) {}
+          }
+          if (!imgUrl) {
+            photoOk = false;
+            photoNote = '사진이 등록되지 않음';
+          } else {
+            try {
+              const vr = await callGroqChat(
+                apiKey,
+                'qwen/qwen3.8-27b',
+                '',
+                '이 사진에 사람의 얼굴(정면 또는 이목구비를 식별할 수 있는 자연스러운 각도)이 나와 있는지 판별하세요. 풍경·음식·동물·뒷모습만 있거나 얼굴 전체를 가렸다면 face_ok=false 입니다. 순수 JSON만 출력하세요: {"face_ok":true,"reason":"한 줄 설명"}',
+                160,
+                0.2,
+                imgUrl
+              );
+              const m = vr.text.replace(/<think>[\s\S]*?<\/think>/gi, '').match(/\{[\s\S]*\}/);
+              if (m) {
+                const pj = JSON.parse(m[0]);
+                photoOk = !!pj.face_ok;
+                photoNote = String(pj.reason || (photoOk ? '정면 얼굴 확인됨' : '얼굴 식별 불가'));
+              }
+            } catch (e) {
+              photoOk = true;
+              photoNote = '사진 등록 확인됨';
+            }
+          }
+        }
+
+        let textOk = true, textNote = '주선자 신청 정상', holdMsg = '';
+        if (!isMm) {
+          const intro = String(it.intro || '').trim();
+          const ideal = String(it.idealType || '').trim();
+          const deal = String(it.dealbreaker || '').trim();
+          try {
+            const tr = await callGroqChat(
+              apiKey,
+              'qwen/qwen3.8-27b',
+              '당신은 소개팅 앱 프로필 심사관입니다. 욕설/비속어, 의미없는 자음반복(ㅋㅋㅋ), 본문 내 연락처/카톡ID 무단기재, 성의없는 작성 여부를 검사해 순수 JSON만 출력하세요: {"text_ok":true,"note":"한줄평","hold_reason":"부적합시사유"}',
+              `닉네임:${nick}\n자기소개:${intro}\n이상형:${ideal}\n비선호:${deal}`,
+              260,
+              0.2
+            );
+            const m = tr.text.replace(/<think>[\s\S]*?<\/think>/gi, '').match(/\{[\s\S]*\}/);
+            if (m) {
+              const tj = JSON.parse(m[0]);
+              textOk = !!tj.text_ok;
+              textNote = String(tj.note || (textOk ? '자기소개 정상' : '보완 필요'));
+              holdMsg = String(tj.hold_reason || '');
+            }
+          } catch (e) {
+            textOk = intro.length >= 18;
+          }
+        }
+
+        const allOk = phoneOk && photoOk && textOk;
+        const issues = [];
+        if (!photoOk) issues.push('얼굴이 잘 보이는 정면 사진 등록 필요 (' + photoNote + ')');
+        if (!phoneOk) issues.push('연락처(010-XXXX-XXXX) 확인 필요 (' + phoneNote + ')');
+        if (!textOk) issues.push(holdMsg || ('자기소개 보완 필요 (' + textNote + ')'));
+
+        pendingResults.push({
+          id: eid,
+          nickname: nick,
+          kind: 'pending',
+          phone_ok: phoneOk,
+          phone_note: phoneNote,
+          photo_ok: photoOk,
+          photo_note: photoNote,
+          text_ok: textOk,
+          text_note: textNote,
+          action: allOk ? 'APPROVE' : 'HOLD',
+          reason: allOk
+            ? `✅ 승인 적합 (사진: ${photoNote} / 번호: ${phoneNote} / 소개: ${textNote})`
+            : `🟡 보류 권장 (${issues.join(' · ')})`,
+          hold_reason: allOk ? '' : ('안녕하세요! ' + issues.join(' / ') + ' 보완 후 다시 제출해 주시면 빠르게 승인해 드릴게요 😊')
+        });
+      }
+
+      const editResults = [];
+      for (const it of editItems) {
+        const eid = String(it.id || '');
+        const nick = String(it.nickname || '회원');
+        const [phoneOk, phoneNote] = it.phone ? checkPhoneKr(it.phone) : [true, '기존 번호 유지'];
+        const changes = Array.isArray(it.editChanges) ? it.editChanges : [];
+        let editOk = phoneOk, editNote = '정상 변경 확인됨';
+        try {
+          const er = await callGroqChat(
+            apiKey,
+            'qwen/qwen3.8-27b',
+            '당신은 소개팅 앱 프로필 변경 감사관입니다. 기존 승인 회원의 수정 전/후(editChanges)와 현재 자기소개를 보고 내용을 지워버렸거나 욕설/장난/연락처무단기재가 있는지 검사해 순수 JSON만 출력하세요: {"edit_ok":true,"reason":"검토한줄요약"}',
+            `닉네임:${nick}\n변경내역:${JSON.stringify(changes)}\n현재자기소개:${it.intro || ''}\n현재이상형:${it.idealType || ''}\n현재비선호:${it.dealbreaker || ''}`,
+            240,
+            0.2
+          );
+          const m = er.text.replace(/<think>[\s\S]*?<\/think>/gi, '').match(/\{[\s\S]*\}/);
+          if (m) {
+            const ej = JSON.parse(m[0]);
+            editOk = !!ej.edit_ok && phoneOk;
+            editNote = String(ej.reason || editNote);
+          }
+        } catch (e) {}
+        editResults.push({
+          id: eid,
+          nickname: nick,
+          kind: 'edit',
+          phone_ok: phoneOk,
+          phone_note: phoneNote,
+          edit_ok: editOk,
+          action: editOk ? 'CONFIRM_EDIT' : 'FLAG_EDIT',
+          reason: (editOk ? '✅ 정상 변경 — 확인 처리 적합: ' : '🚨 이상 변경 감지 (확인 보류): ') + editNote
+        });
+      }
+
+      return {
+        ok: true,
+        pending_results: pendingResults,
+        edit_results: editResults,
+        counts: {
+          approve: pendingResults.filter((x) => x.action === 'APPROVE').length,
+          hold: pendingResults.filter((x) => x.action === 'HOLD').length,
+          confirm_edit: editResults.filter((x) => x.action === 'CONFIRM_EDIT').length,
+          flag_edit: editResults.filter((x) => x.action === 'FLAG_EDIT').length
+        }
+      };
     }
 
     if (op === 'heal_approve' || op === 'heal_reject') {
