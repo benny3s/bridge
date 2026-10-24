@@ -1635,6 +1635,89 @@ exports.aiConcierge = functions
     const apiKey = (process.env.GROQ_API_KEY || '').trim();
     if (!apiKey) throw new HttpsError('failed-precondition', 'AI 컨시어지 키가 준비되지 않았어요.');
 
+    const op = String((data && data.op) || '').trim();
+    const isAdmin = !!(context.auth.token && context.auth.token.admin === 1);
+
+    if (op === 'heal_list') {
+      const qs = await db.collection('aiHealTickets').orderBy('created_at', 'desc').limit(25).get();
+      const tickets = [];
+      qs.forEach((d) => tickets.push(d.data()));
+      return { ok: true, tickets };
+    }
+
+    if (op === 'heal_approve' || op === 'heal_reject') {
+      if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 승인·기각할 수 있어요.');
+      const tid = String((data && data.id) || '').trim();
+      if (!tid) throw new HttpsError('invalid-argument', '티켓 ID가 필요해요.');
+      const ref = db.collection('aiHealTickets').doc(tid);
+      const snap = await ref.get();
+      if (!snap.exists) throw new HttpsError('not-found', '티켓을 찾을 수 없어요.');
+      const patch = op === 'heal_approve'
+        ? { status: 'approved_live', heal_log: '[✅ 베니 님 승인 완료 — 운영 반영 허가됨]', updated_at: new Date().toISOString() }
+        : { status: 'rejected', heal_log: '[↩️ 베니 님 기각 처리]', updated_at: new Date().toISOString() };
+      await ref.set(patch, { merge: true });
+      return { ok: true, ticket: Object.assign({}, snap.data(), patch) };
+    }
+
+    if (op === 'heal_submit') {
+      const msg = String((data && data.message) || '').trim().slice(0, 2000);
+      if (!msg) throw new HttpsError('invalid-argument', '불편한 점이나 요청 내용을 입력해 주세요.');
+      const author = String((data && data.author) || (isAdmin ? '관리자(베니)' : '회원')).slice(0, 60);
+      const sctx = (data && typeof data.screen_context === 'object' && data.screen_context) ? data.screen_context : {};
+      const sys = '당신은 프라이빗 지인 소개팅 웹앱 [베니브릿지]의 AI 심사관입니다. ' +
+        '제보 내용을 3단계 헌법으로 분류해 순수 JSON만 출력하세요:\n' +
+        '- Tier 1 (decision:"AUTO_FIX"): 오타, 문구 어색함, 모바일 터치/여백/레이아웃 깨짐, 다크모드 색상 오류, 콘솔 런타임 에러 방어, 또는 관리자(is_admin=true)의 직접 지시\n' +
+        '- Tier 2 (decision:"BETA_AND_ASK"): 매칭 규칙/신청 한도 변경, 새 기능/탭 추가, DB 구조 변경, 보안/인증 변경, 푸시/문자 조건 변경 (베타에만 선반영 후 허락 요청)\n' +
+        '- Tier 3 (decision:"REJECT"): 사진 블러 해제, 비번 요구, 타인 연락처 요구 등 보안 침해\n' +
+        '- Tier 0 (decision:"ADMIN_MSG_ONLY"): 코드 수정과 무관한 일반 운영/가입승인 문의\n' +
+        '출력 JSON 형식: {"tier":1,"decision":"AUTO_FIX","worker":"opus","title":"20자이내제목","reason":"판정사유","user_reply":"제보자에게보여줄친절한안내(2문장)","fix_spec":"기술지시서","css_override":"CSS로즉시해결가능한UI/크기/여백/색상수정이면순수CSS코드(아니면빈문자열)"}';
+      const uPrompt = `[제보자]: ${isAdmin ? '관리자(베니 님 본인 - is_admin=true)' : author}\n[화면맥락]: ${JSON.stringify(sctx)}\n[내용]: ${msg}`;
+      const t0 = Date.now();
+      let parsed = {};
+      let usedModel = 'qwen/qwen3.8-27b';
+      for (const m of ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b']) {
+        try {
+          const r = await callGroqChat(apiKey, m, sys, uPrompt, 600, 0.4);
+          usedModel = r.model;
+          const clean = r.text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+          const jm = clean.match(/\{[\s\S]*\}/);
+          if (jm) { parsed = JSON.parse(jm[0]); break; }
+        } catch (e) {}
+      }
+      const tier = [0, 1, 2, 3].includes(Number(parsed.tier)) ? Number(parsed.tier) : (isAdmin ? 1 : 2);
+      const decision = ['AUTO_FIX', 'BETA_AND_ASK', 'ADMIN_MSG_ONLY', 'REJECT'].includes(parsed.decision)
+        ? parsed.decision
+        : (tier === 1 ? 'AUTO_FIX' : 'BETA_AND_ASK');
+      const worker = parsed.worker === 'argon' ? 'argon' : 'opus';
+      const tid = 'heal-' + Date.now().toString(36);
+      const nowIso = new Date().toISOString();
+      const ticket = {
+        id: tid,
+        created_at: nowIso,
+        updated_at: nowIso,
+        author,
+        is_admin: isAdmin,
+        message: msg,
+        screen_context: sctx,
+        tier,
+        decision,
+        worker,
+        judge_via: 'Groq (' + usedModel + ') → Argon/Opus 큐',
+        title: String(parsed.title || msg.slice(0, 22)).trim(),
+        reason: String(parsed.reason || '3단계 자율 수리 헌법에 따라 자동 분류됨').trim(),
+        user_reply: String(parsed.user_reply || '제보해 주셔서 감사합니다! 현재 화면 상태와 함께 AI 자율 수리 파이프라인에 접수되었습니다.').trim(),
+        fix_spec: String(parsed.fix_spec || msg).trim(),
+        css_override: String(parsed.css_override || '').trim(),
+        status: decision === 'REJECT' ? 'rejected' : (decision === 'ADMIN_MSG_ONLY' ? 'admin_msg' : (decision === 'AUTO_FIX' ? 'auto_fixed' : 'awaiting_approval')),
+        latency_ms: Date.now() - t0,
+        heal_log: decision === 'AUTO_FIX'
+          ? '[🟢 Tier 1 판정] 자율 수리 큐 등록됨 (내 PC 데몬 연결 시 즉시 패치)'
+          : (decision === 'BETA_AND_ASK' ? '[🟡 Tier 2 판정] 베타 선반영 및 베니 님 허락 대기' : '')
+      };
+      await db.collection('aiHealTickets').doc(tid).set(ticket);
+      return { ok: true, ticket };
+    }
+
     const mode = String((data && data.mode) || 'profile_atelier').slice(0, 40);
     const sysPrompt = String((data && data.system) || (
       '당신은 지인 기반 프라이빗 소개팅 살롱 [베니브릿지]의 수석 매칭 컨시어지입니다. ' +

@@ -51,6 +51,15 @@ rep(/var _pushUsable = \(function \(\) \{/, 'var _pushUsable = false && (functio
 /* 4) 상대 경로 이미지 */
 h = h.split('src="coffee-qr.png"').join('src="../coffee-qr.png"');
 
+/* 4-1) AI 자율 수리(Self-Healing) 누적 CSS 패치 (tools/ai-hotfixes.css 존재 시 주입) */
+const hotfixCssPath = path.join(__dirname, 'ai-hotfixes.css');
+if (fs.existsSync(hotfixCssPath)) {
+  const hotfixCss = fs.readFileSync(hotfixCssPath, 'utf8').trim();
+  if (hotfixCss) {
+    h = h.replace('</style>', '\n  /* ── AI Self-Healing Hotfixes ── */\n' + hotfixCss + '\n</style>');
+  }
+}
+
 /* 5) 🧪 베타 패널 + ✦ 베니 AI 살롱 컨시어지 — 앱 코드 안(마지막 })(); 직전)에 넣어 앱 함수·변수를 그대로 씀 */
 const panel = fs.readFileSync(path.join(__dirname, 'beta-panel.js'), 'utf8');
 const aiPath = path.join(__dirname, 'benny-ai-beta.js');

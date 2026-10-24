@@ -1,0 +1,25 @@
+/* 베니 AI 자율 수리(Self-Healing) 누적 CSS 패치 */
+
+/* [heal-9d60d307] 사진 확대 닫기 버튼 터치 영역 확대 (argon) */
+.photo-viewer .close-btn, .gallery-overlay .gallery-close {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+}
+
+.photo-viewer .close-btn::after, .gallery-overlay .gallery-close::after {
+    content: '';
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    bottom: -10px;
+    left: -10px;
+    z-index: -1;
+}
