@@ -1826,14 +1826,19 @@ exports.aiConcierge = functions
       if (!msg) throw new HttpsError('invalid-argument', '불편한 점이나 요청 내용을 입력해 주세요.');
       const author = String((data && data.author) || (isAdmin ? '관리자(베니)' : '회원')).slice(0, 60);
       const sctx = (data && typeof data.screen_context === 'object' && data.screen_context) ? data.screen_context : {};
-      const sys = '당신은 프라이빗 지인 소개팅 웹앱 [베니브릿지]의 AI 심사관입니다. ' +
-        '제보 내용을 3단계 헌법으로 분류해 순수 JSON만 출력하세요:\n' +
-        '- Tier 1 (decision:"AUTO_FIX"): 오타, 문구 어색함, 모바일 터치/여백/레이아웃 깨짐, 다크모드 색상 오류, 콘솔 런타임 에러 방어, 또는 관리자(is_admin=true)의 직접 지시\n' +
-        '- Tier 2 (decision:"BETA_AND_ASK"): 매칭 규칙/신청 한도 변경, 새 기능/탭 추가, DB 구조 변경, 보안/인증 변경, 푸시/문자 조건 변경 (베타에만 선반영 후 허락 요청)\n' +
+      const rawHist = Array.isArray(data && data.history) ? data.history.slice(-6) : [];
+      const histText = rawHist.length
+        ? '\n[이전대화]:\n' + rawHist.map((h) => `- ${h.role === 'ai' ? 'AI' : author}: ${String(h.text || '').slice(0, 250)}`).join('\n')
+        : '';
+      const sys = '당신은 프라이빗 지인 소개팅 웹앱 [베니브릿지]의 대화형 AI 도우미이자 심사관입니다. ' +
+        '메시지를 분류해 순수 JSON만 출력하세요:\n' +
+        '- Tier 1 (decision:"AUTO_FIX"): 오타, 문구 어색함, 모바일 터치/여백/레이아웃 깨짐, 다크모드 색상 오류, 콘솔 에러 방어, 또는 관리자(is_admin=true)의 직접 지시\n' +
+        '- Tier 2 (decision:"BETA_AND_ASK"): 매칭 규칙/신청 한도 변경, 새 기능/탭 추가, DB 구조 변경, 보안/인증 변경 (베타 선반영 후 허락 요청)\n' +
         '- Tier 3 (decision:"REJECT"): 사진 블러 해제, 비번 요구, 타인 연락처 요구 등 보안 침해\n' +
-        '- Tier 0 (decision:"ADMIN_MSG_ONLY"): 코드/UI 버그가 아닌 일반 운영·가입승인·사진/대화 신청 한도(하루 각 3건)·잠시 쉬기/탈퇴·PIN 문의 및 건의사항. 이 경우 시스템이 자동으로 [👑 관리자 Q&A 메시지함]에 전달하므로 user_reply에 친절한 1차 안내 답변과 함께 "남겨주신 문의는 👑 베니브릿지 관리자님께도 바로 전달해 두었어요! 확인 후 답장해 드릴게요 😊"라고 안내하세요.\n' +
-        '출력 JSON 형식: {"tier":1,"decision":"AUTO_FIX","worker":"opus","title":"20자이내제목","reason":"판정사유","user_reply":"제보자에게보여줄친절한안내(2~3문장)","fix_spec":"기술지시서","css_override":"CSS로즉시해결가능한UI/크기/여백/색상수정이면순수CSS코드(아니면빈문자열)"}';
-      const uPrompt = `[제보자]: ${isAdmin ? '관리자(베니 님 본인 - is_admin=true)' : author}\n[화면맥락]: ${JSON.stringify(sctx)}\n[내용]: ${msg}`;
+        '- Tier 0 (decision:"ADMIN_MSG_ONLY"): 일반 인사·대화·이용 질문(사진/대화 신청은 하루 각 3건 한도, 상대 승인 전 사진 블러 및 연락처 비공개)·휴면/탈퇴/PIN 문의·건의사항. 단순 질문이면 forward_admin=false, 관리자가 직접 확인/답장해야 하는 개인 문의·건의·승인 확인이면 forward_admin=true 로 설정하세요.\n' +
+        '- action_chip: 회원이 휴면/쉬기를 원하면 "deactivate", 탈퇴를 원하면 "delete", PIN 변경을 원하면 "pin", 카카오톡 문의를 원하면 "kakao", 그 외엔 ""\n' +
+        '출력 JSON 형식: {"tier":0,"decision":"ADMIN_MSG_ONLY","worker":"argon","forward_admin":false,"action_chip":"","title":"20자이내제목","reason":"판정사유","user_reply":"친근하고간결한대화답변(1~3문장)","fix_spec":"기술지시서","css_override":"CSS로즉시해결가능하면순수CSS코드(아니면빈문자열)"}';
+      const uPrompt = `[제보자]: ${isAdmin ? '관리자(베니 님 본인 - is_admin=true)' : author}\n[화면맥락]: ${JSON.stringify(sctx)}${histText}\n[내용]: ${msg}`;
       const t0 = Date.now();
       let parsed = {};
       let usedModel = 'qwen/qwen3.8-27b';
@@ -1846,11 +1851,15 @@ exports.aiConcierge = functions
           if (jm) { parsed = JSON.parse(jm[0]); break; }
         } catch (e) {}
       }
-      const tier = [0, 1, 2, 3].includes(Number(parsed.tier)) ? Number(parsed.tier) : (isAdmin ? 1 : 2);
+      const tier = [0, 1, 2, 3].includes(Number(parsed.tier)) ? Number(parsed.tier) : (isAdmin ? 1 : 0);
       const decision = ['AUTO_FIX', 'BETA_AND_ASK', 'ADMIN_MSG_ONLY', 'REJECT'].includes(parsed.decision)
         ? parsed.decision
-        : (tier === 1 ? 'AUTO_FIX' : 'BETA_AND_ASK');
+        : (tier === 1 ? 'AUTO_FIX' : 'ADMIN_MSG_ONLY');
       const worker = parsed.worker === 'argon' ? 'argon' : 'opus';
+      const forwardAdmin = !!parsed.forward_admin;
+      const actionChip = ['deactivate', 'delete', 'pin', 'kakao'].includes(String(parsed.action_chip || '').toLowerCase())
+        ? String(parsed.action_chip).toLowerCase()
+        : '';
       const tid = 'heal-' + Date.now().toString(36);
       const nowIso = new Date().toISOString();
       const ticket = {
@@ -1864,19 +1873,23 @@ exports.aiConcierge = functions
         tier,
         decision,
         worker,
-        judge_via: 'Groq (' + usedModel + ') → Argon/Opus 큐',
+        forward_admin: forwardAdmin,
+        action_chip: actionChip,
+        judge_via: 'Groq (' + usedModel + ')',
         title: String(parsed.title || msg.slice(0, 22)).trim(),
-        reason: String(parsed.reason || '3단계 자율 수리 헌법에 따라 자동 분류됨').trim(),
-        user_reply: String(parsed.user_reply || '제보해 주셔서 감사합니다! 현재 화면 상태와 함께 AI 자율 수리 파이프라인에 접수되었습니다.').trim(),
+        reason: String(parsed.reason || '자동 분류됨').trim(),
+        user_reply: String(parsed.user_reply || '말씀해 주셔서 감사합니다! 확인 후 바로 도와드릴게요 😊').trim(),
         fix_spec: String(parsed.fix_spec || msg).trim(),
         css_override: String(parsed.css_override || '').trim(),
         status: decision === 'REJECT' ? 'rejected' : (decision === 'ADMIN_MSG_ONLY' ? 'admin_msg' : (decision === 'AUTO_FIX' ? 'auto_fixed' : 'awaiting_approval')),
         latency_ms: Date.now() - t0,
         heal_log: decision === 'AUTO_FIX'
-          ? '[🟢 Tier 1 판정] 자율 수리 큐 등록됨 (내 PC 데몬 연결 시 즉시 패치)'
+          ? '[🟢 Tier 1 판정] 자율 수리 큐 등록됨'
           : (decision === 'BETA_AND_ASK' ? '[🟡 Tier 2 판정] 베타 선반영 및 베니 님 허락 대기' : '')
       };
-      await db.collection('aiHealTickets').doc(tid).set(ticket);
+      if (decision !== 'ADMIN_MSG_ONLY' || forwardAdmin) {
+        await db.collection('aiHealTickets').doc(tid).set(ticket);
+      }
       return { ok: true, ticket };
     }
 

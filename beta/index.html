@@ -13590,13 +13590,27 @@
       '.bai-heal-btn:hover { background: var(--gold, #C08A34) !important; color: #1C1519 !important; }',
       '.bai-ctx-box { font-size: 0.76rem; color: var(--muted); background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 8px 11px; margin-bottom: 10px; line-height: 1.5; }',
       '.bai-ctx-box b { color: var(--ink); }',
-      '.bai-tier-badge { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }',
+      '.bai-tier-badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }',
       '.bai-tier-1 { background: #e6f4ea; color: #137333; border: 1px solid #81c995; }',
       '.bai-tier-2 { background: var(--gold-soft, #F1E2C4); color: #8a5a10; border: 1px solid var(--gold, #C08A34); }',
       '.bai-tier-3 { background: #fce8e6; color: #c5221f; border: 1px solid #f28b82; }',
       '.bai-tier-0 { background: #e8f0fe; color: #1967d2; border: 1px solid #8ab4f8; }',
       '.bai-step-card { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-top: 10px; font-size: 0.84rem; line-height: 1.55; }',
-      '.bai-ticket-item { background: var(--paper); border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; margin-bottom: 8px; font-size: 0.82rem; }'
+      '.bai-ticket-item { background: var(--paper); border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; margin-bottom: 8px; font-size: 0.82rem; }',
+      '.bai-chat-log { height: 50vh; max-height: 410px; min-height: 250px; overflow-y: auto; padding: 10px 6px; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; gap: 10px; }',
+      '.bai-msg-row { display: flex; align-items: flex-start; gap: 8px; }',
+      '.bai-msg-row.mine { justify-content: flex-end; }',
+      '.bai-av { width: 28px; height: 28px; border-radius: 50%; background: var(--gold-soft, #F1E2C4); border: 1px solid var(--gold, #C08A34); display: flex; align-items: center; justify-content: center; font-size: 0.85rem; flex-shrink: 0; }',
+      '.bai-bubble { max-width: 82%; padding: 9px 13px; border-radius: 15px; font-size: 0.85rem; line-height: 1.5; word-break: break-word; background: var(--card, #fff); color: var(--ink); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(0,0,0,0.03); }',
+      '.bai-msg-row.mine .bai-bubble { background: var(--accent, #7A283B); color: #fff; border-color: var(--accent, #7A283B); border-bottom-right-radius: 4px; }',
+      '.bai-msg-row.ai .bai-bubble { border-top-left-radius: 4px; }',
+      '.bai-ex-list { display: flex; flex-wrap: wrap; gap: 6px; margin-left: 36px; margin-top: -2px; }',
+      '.bai-ex-chip { background: var(--card, #fff); border: 1px solid var(--line); color: var(--ink); border-radius: 999px; padding: 5px 11px; font-size: 0.76rem; cursor: pointer; transition: all 0.15s; }',
+      '.bai-ex-chip:hover { border-color: var(--gold, #C08A34); background: var(--gold-soft, #F1E2C4); }',
+      '.bai-chat-bar { display: flex; gap: 6px; margin-top: 8px; align-items: center; }',
+      '.bai-chat-input { flex: 1; margin: 0 !important; border-radius: 999px !important; padding: 9px 14px !important; font-size: 0.86rem !important; }',
+      '.bai-chat-send { border-radius: 999px !important; padding: 9px 16px !important; font-weight: 700 !important; flex-shrink: 0; }',
+      '.bai-inline-act { display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; padding: 5px 11px; border-radius: 8px; font-size: 0.76rem; font-weight: 700; cursor: pointer; border: 1px solid var(--gold, #C08A34); background: var(--gold-soft, #F1E2C4); color: var(--ink); }'
     ].join('\n');
     document.head.appendChild(uiStyle);
 
@@ -13833,100 +13847,61 @@
       return Promise.resolve({ forwarded: false });
     }
 
+    var _chatHistory = [];
+
     function openSelfHealModal(initialTab) {
       var isAdm = (typeof isAdminUnlocked !== 'undefined' && isAdminUnlocked);
       var hasUser = (typeof currentUser !== 'undefined' && currentUser && currentUser.id);
       var me = (typeof currentState !== 'undefined' && typeof findMyEntry === 'function') ? findMyEntry(currentState) : null;
-      var authorLabel = isAdm ? '관리자(베니)' : ((me && me.nickname) ? me.nickname : (hasUser && currentUser.nickname ? currentUser.nickname : '비로그인 손님'));
+      var authorLabel = isAdm ? '관리자(베니)' : ((me && me.nickname) ? me.nickname : (hasUser && currentUser.nickname ? currentUser.nickname : '손님'));
       var sctx = captureScreenContext();
 
-      /* 로그인 회원의 자주 찾는 버튼(탈퇴/잠시쉬기/PIN변경) 및 기존 관리자 대화 내역 */
-      var quickChipsHtml = '';
-      var prevThreadHtml = '';
-      if (!isAdm && hasUser) {
-        try {
-          if (me && (typeof isMatchmakerEntry !== 'function' || !isMatchmakerEntry(me))) {
-            var _id = escapeHtml(me.id);
-            quickChipsHtml =
-              '<div class="qa-quick" style="margin-bottom:8px;"><span>자주 찾는 기능</span>' +
-                (!me.deleteRequested ? '<button type="button" class="req-chip" data-action="delete" data-id="' + _id + '">🗑 탈퇴하기</button>' : '') +
-                (!me.deactivateRequested && !me.deactivated ? '<button type="button" class="req-chip" data-action="deactivate" data-id="' + _id + '">💤 잠시 쉬기</button>' : '') +
-                ((typeof isProxyEntry !== 'function' || !isProxyEntry(me)) ? '<button type="button" class="req-chip" id="change-my-pin">🔑 PIN 변경</button>' : '') +
-              '</div>';
-          }
-          if (typeof threadFor === 'function' && typeof currentState !== 'undefined' && currentState) {
-            var th = threadFor(currentState, currentUser.id, 'user') || [];
-            if (th.length) {
-              try { localStorage.setItem('bb-admsg-seen:' + currentUser.id, new Date().toISOString()); } catch (e) {}
-              var recent = th.slice(-4).map(function (m) {
-                var isFromAdm = m.from === 'admin';
-                return '<div style="padding:4px 0;font-size:0.78rem;border-bottom:1px dashed var(--line);">' +
-                  '<b style="color:' + (isFromAdm ? 'var(--gold)' : 'var(--ink)') + ';">' + (isFromAdm ? '👑 관리자' : '나') + '</b>: ' +
-                  escapeHtml(m.text || '') +
-                '</div>';
-              }).join('');
-              prevThreadHtml =
-                '<details style="margin-bottom:8px;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:6px 10px;">' +
-                  '<summary style="cursor:pointer;font-size:0.78rem;font-weight:700;color:var(--ink);">👑 관리자와의 최근 대화 내역 (' + th.length + '건)</summary>' +
-                  '<div style="max-height:130px;overflow-y:auto;margin-top:6px;">' + recent + '</div>' +
-                '</details>';
-            }
-          }
-        } catch (e) {}
-      }
+      var examples = isAdm ? [
+        '명단 카드의 대화 신청 버튼을 더 눈에 띄게 해줘',
+        '모바일에서 상단 버튼 여백을 조금 더 넓혀줘'
+      ] : [
+        '사진·대화 신청은 하루 몇 번 돼요?',
+        '잠시 쉬거나 PIN을 바꾸고 싶어요',
+        '화면이나 버튼이 불편한 곳이 있어요',
+        '관리자님께 문의할 게 있어요'
+      ];
 
-      /* 비로그인 손님용 선택 입력란 (답변이 필요한 일반 문의 시 활용) */
-      var guestInputsHtml = (!isAdm && !hasUser) ? (
-        '<div style="display:flex;gap:6px;margin-bottom:6px;">' +
-          '<input type="text" class="modal-input" id="bai-guest-name" maxlength="30" placeholder="이름/닉네임 (답변 받을 분)" style="flex:1;margin:0;padding:7px 9px;font-size:0.8rem;" />' +
-          '<input type="tel" class="modal-input" id="bai-guest-phone" inputmode="numeric" maxlength="13" placeholder="연락처 (01012345678)" style="flex:1.2;margin:0;padding:7px 9px;font-size:0.8rem;" />' +
-        '</div>' +
-        '<div style="font-size:0.73rem;color:var(--muted);margin-bottom:8px;">💡 화면 불편·버그 제보는 연락처 없이 바로 보내도 AI가 즉시 수리해요. 개인 문의·답장이 필요할 때만 연락처(암호화)를 적어주세요.</div>'
-      ) : '';
+      var exHtml = '<div class="bai-ex-list" id="bai-ex-box">' +
+        examples.map(function (q) {
+          return '<button type="button" class="bai-ex-chip" data-ex="' + escapeHtml(q) + '">' + escapeHtml(q) + '</button>';
+        }).join('') +
+      '</div>';
+
+      var greetingText = isAdm
+        ? '베니 님, 수정할 화면·문구나 지시할 내용을 편하게 말씀해 주세요!'
+        : '안녕하세요! 궁금한 점이나 불편한 화면, 관리자에게 전할 말을 대화로 편하게 남겨주세요 😊';
 
       var ov = openModal(
         '<div style="text-align:left;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
-            '<h3 style="margin:0;font-size:1.08rem;">' + (isAdm ? '👑 AI 부관리자 & 자율 수리 관제' : '✨ AI 도우미 · 문의 (Q&A & 자율수리)') + '</h3>' +
-            '<button type="button" id="bai-heal-close" style="border:0;background:none;font-size:1.3rem;color:var(--muted);cursor:pointer;">×</button>' +
+            '<h3 style="margin:0;font-size:1.05rem;">' + (isAdm ? '👑 AI 부관리자' : '✨ AI 도우미') + '</h3>' +
+            '<button type="button" id="bai-heal-close" style="border:0;background:none;font-size:1.3rem;color:var(--muted);cursor:pointer;line-height:1;">×</button>' +
           '</div>' +
           (isAdm ? (
             '<div style="display:flex;gap:5px;margin-bottom:10px;">' +
-              '<button type="button" class="card-btn primary" id="bai-tab-coadmin" style="flex:1.15;padding:6px 4px;font-size:0.78rem;">👑 AI 부관리자</button>' +
-              '<button type="button" class="card-btn" id="bai-tab-submit" style="flex:1;padding:6px 4px;font-size:0.78rem;">🛠️ 자율수리 지시</button>' +
-              '<button type="button" class="card-btn" id="bai-tab-list" style="flex:1;padding:6px 4px;font-size:0.78rem;">📋 허락 대기함</button>' +
+              '<button type="button" class="card-btn primary" id="bai-tab-coadmin" style="flex:1.15;padding:6px 4px;font-size:0.78rem;">👑 부관리자</button>' +
+              '<button type="button" class="card-btn" id="bai-tab-submit" style="flex:1;padding:6px 4px;font-size:0.78rem;">💬 대화·수리</button>' +
+              '<button type="button" class="card-btn" id="bai-tab-list" style="flex:1;padding:6px 4px;font-size:0.78rem;">📋 대기함</button>' +
             '</div>'
           ) : '') +
           '<div id="bai-pane-coadmin" style="display:' + (isAdm ? 'block' : 'none') + ';"></div>' +
           '<div id="bai-pane-submit" style="display:' + (isAdm ? 'none' : 'block') + ';">' +
-            quickChipsHtml +
-            prevThreadHtml +
-            '<p class="modal-msg" style="margin-bottom:8px;">' +
-              (isAdm
-                ? '관리자 모드입니다. 고치고 싶은 UI·문구·버그를 적으시면 <b>Argon 심사 후 Opus/Argon이 즉시 자율 수리</b>합니다.'
-                : '<b>궁금한 점·건의사항</b>부터 <b>화면 오류·불편한 점</b>까지 편하게 적어주세요.<br>AI가 내용을 판단해 <b>① 화면/코드 불편은 즉시 수리</b>하고, <b>② 일반 문의는 1차 답변과 함께 👑 관리자에게 바로 전달</b>해 드려요.') +
-            '</p>' +
-            '<div class="bai-ctx-box">' +
-              '📡 <b>현재 화면 맥락</b>: 탭(<b>' + escapeHtml(sctx.tab) + '</b>) · 화면(<b>' + escapeHtml(sctx.viewport) + '</b>) · 작성자(<b>' + escapeHtml(authorLabel) + '</b>)' +
-              (sctx.recent_errors.length ? '<br>⚠️ 감지된 스크립트 오류: ' + escapeHtml(sctx.recent_errors.join(', ')) : '') +
+            '<div class="bai-chat-log" id="bai-chat-log">' +
+              '<div class="bai-msg-row ai">' +
+                '<div class="bai-av">✨</div>' +
+                '<div class="bai-bubble">' + escapeHtml(greetingText) + '</div>' +
+              '</div>' +
+              exHtml +
             '</div>' +
-            guestInputsHtml +
-            '<textarea class="modal-input" id="bai-heal-input" rows="3" maxlength="800" placeholder="' +
-              (isAdm
-                ? '예) 명단 카드에서 대화 신청 버튼 글자를 조금 더 크고 선명하게 키워줘 / 모바일에서 닫기 버튼 터치 영역 넓혀줘'
-                : '예) 사진 요청은 하루에 몇 번 가능한가요? / 모바일에서 버튼이 너무 작아 잘 안 눌려요 / 가입 승인은 언제쯤 되나요?') +
-            '"></textarea>' +
-            '<div class="modal-actions" style="margin-top:10px;">' +
-              '<button type="button" class="card-btn" id="bai-heal-cancel">닫기</button>' +
-              '<button type="button" class="card-btn primary" id="bai-heal-send">' + (isAdm ? '⚡ AI 수리팀에 지시하기' : '✨ AI에게 말하기 (자동 수리·문의)') + '</button>' +
+            '<div class="bai-chat-bar">' +
+              '<input type="text" class="modal-input bai-chat-input" id="bai-heal-input" maxlength="600" placeholder="메시지를 입력하세요…" autocomplete="off" />' +
+              '<button type="button" class="card-btn primary bai-chat-send" id="bai-heal-send">전송</button>' +
             '</div>' +
-            '<div id="bai-heal-result"></div>' +
-            (!isAdm ? (
-              '<div style="display:flex;gap:6px;margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);">' +
-                '<button type="button" class="card-btn" data-kakao="1" style="flex:1;background:#FEE500;border-color:#FEE500;color:#3C1E1E;font-weight:700;font-size:0.78rem;padding:7px;">💬 카카오톡으로 문의</button>' +
-                (hasUser ? '<button type="button" class="card-btn" id="bai-open-classic-qna" style="flex:1;font-size:0.78rem;padding:7px;">👑 관리자 1:1 대화방 열기</button>' : '') +
-              '</div>'
-            ) : '') +
           '</div>' +
           '<div id="bai-pane-list" style="display:none;"></div>' +
         '</div>'
@@ -13938,88 +13913,157 @@
         if (typeof schedulePaint === 'function') schedulePaint();
       };
       ov.querySelector('#bai-heal-close').onclick = closeFn;
-      ov.querySelector('#bai-heal-cancel').onclick = closeFn;
       ov.addEventListener('click', function (e) {
-        if (e.target === ov || (e.target.closest && e.target.closest('.qa-quick button'))) closeFn();
+        if (e.target === ov) closeFn();
       });
-      var classicBtn = ov.querySelector('#bai-open-classic-qna');
-      if (classicBtn) {
-        classicBtn.onclick = function () {
-          closeModal(ov);
-          if (typeof openMemberMsgCenter === 'function') openMemberMsgCenter();
-        };
-      }
 
+      var chatLog = ov.querySelector('#bai-chat-log');
       var sendBtn = ov.querySelector('#bai-heal-send');
       var inputEl = ov.querySelector('#bai-heal-input');
-      var resEl = ov.querySelector('#bai-heal-result');
 
-      sendBtn.onclick = function () {
-        var msg = (inputEl.value || '').trim();
-        if (msg.length < 2) {
-          resEl.innerHTML = '<div style="color:var(--accent);font-size:0.82rem;margin-top:6px;font-weight:700;">문의하거나 제보할 내용을 적어주세요.</div>';
+      function scrollBottom() {
+        try { chatLog.scrollTop = chatLog.scrollHeight; } catch (e) {}
+      }
+
+      /* 말풍선 안의 원클릭 기능 칩 생성 (회원이 물어봤을 때만 노출) */
+      function buildActionChipHtml(chipType) {
+        if (!chipType) return '';
+        var myId = (me && me.id) ? escapeHtml(me.id) : (hasUser ? escapeHtml(currentUser.id) : '');
+        if (chipType === 'deactivate' && myId) {
+          return '<div><button type="button" class="bai-inline-act" data-action="deactivate" data-id="' + myId + '">💤 잠시 쉬기 실행</button></div>';
+        }
+        if (chipType === 'delete' && myId) {
+          return '<div><button type="button" class="bai-inline-act" data-action="delete" data-id="' + myId + '">🗑 탈퇴 신청하기</button></div>';
+        }
+        if (chipType === 'pin' && myId) {
+          return '<div><button type="button" class="bai-inline-act" id="change-my-pin">🔑 PIN 변경하기</button></div>';
+        }
+        if (chipType === 'kakao') {
+          return '<div><button type="button" class="bai-inline-act" data-kakao="1" style="background:#FEE500;border-color:#FEE500;color:#3C1E1E;">💬 카카오톡 문의 열기</button></div>';
+        }
+        return '';
+      }
+
+      /* 기존 대화 내역이 이번 세션에 있으면 복원 */
+      function appendBubble(role, htmlContent) {
+        var row = document.createElement('div');
+        row.className = 'bai-msg-row ' + (role === 'mine' ? 'mine' : 'ai');
+        if (role === 'mine') {
+          row.innerHTML = '<div class="bai-bubble">' + htmlContent + '</div>';
+        } else {
+          row.innerHTML = '<div class="bai-av">✨</div><div class="bai-bubble">' + htmlContent + '</div>';
+        }
+        chatLog.appendChild(row);
+        scrollBottom();
+        return row;
+      }
+
+      chatLog.addEventListener('click', function (e) {
+        var exBtn = e.target.closest ? e.target.closest('.bai-ex-chip') : null;
+        if (exBtn) {
+          var q = exBtn.getAttribute('data-ex') || '';
+          if (q) sendChatMessage(q);
           return;
         }
-        var gNameEl = ov.querySelector('#bai-guest-name');
-        var gPhoneEl = ov.querySelector('#bai-guest-phone');
-        var gName = gNameEl ? (gNameEl.value || '').trim() : '';
-        var gPhone = gPhoneEl ? (gPhoneEl.value || '').trim() : '';
+        var actBtn = e.target.closest ? e.target.closest('.bai-inline-act') : null;
+        if (actBtn && !actBtn.hasAttribute('data-kakao')) {
+          setTimeout(closeFn, 60);
+        }
+      });
+
+      function sendChatMessage(rawText) {
+        var msg = String(rawText != null ? rawText : (inputEl.value || '')).trim();
+        if (!msg) return;
+        inputEl.value = '';
+        var exBox = ov.querySelector('#bai-ex-box');
+        if (exBox) exBox.style.display = 'none';
+
+        appendBubble('mine', escapeHtml(msg));
+        _chatHistory.push({ role: 'user', text: msg });
 
         sendBtn.disabled = true;
-        sendBtn.textContent = '✨ AI 분석 & 처리 중…';
-        resEl.innerHTML =
-          '<div class="bai-step-card">' +
-            '<div>⏳ <b>1단계 (Groq)</b>: 문의/제보 내용 및 현재 화면 맥락 파악 중…</div>' +
-            '<div style="color:var(--muted);margin-top:4px;">⏳ <b>2단계 (Argon)</b>: [🛠️ 화면·코드 자율 수리] vs [👑 관리자 Q&A 전달 + 1차 답변] 자동 분기 중…</div>' +
-          '</div>';
+        var loadingRow = appendBubble('ai', '<span style="color:var(--muted);">생각 중…</span>');
+        var bubbleEl = loadingRow.querySelector('.bai-bubble');
 
         callHealBackend({
           op: 'submit',
           message: msg,
+          history: _chatHistory.slice(-6),
           is_admin: isAdm,
-          author: gName ? (gName + ' (비로그인)') : authorLabel,
-          screen_context: sctx,
-          judge_model: 'argon'
+          author: authorLabel,
+          screen_context: sctx
         }).then(function (r) {
           var tk = r.ticket || {};
-          /* 일반 문의(ADMIN_MSG_ONLY)이거나 회원이 남긴 건의사항이면 관리자 Q&A 메시지함(messages)에도 자동 전달 */
-          var shouldForwardQna = (!isAdm && (tk.decision === 'ADMIN_MSG_ONLY' || tk.decision === 'BETA_AND_ASK'));
-          var qnaPromise = shouldForwardQna ? forwardToAdminQnaInbox(msg, gName, gPhone) : Promise.resolve({ forwarded: false });
+          var shouldForwardQna = (!isAdm && (tk.forward_admin || tk.decision === 'BETA_AND_ASK'));
+          var qnaPromise = shouldForwardQna ? forwardToAdminQnaInbox(msg, '', '') : Promise.resolve({ forwarded: false });
 
           return qnaPromise.then(function (qnaRes) {
             sendBtn.disabled = false;
-            sendBtn.textContent = isAdm ? '⚡ AI 수리팀에 지시하기' : '✨ AI에게 말하기 (자동 수리·문의)';
             if (tk.css_override && tk.decision !== 'REJECT') {
               appendLiveHotfix(tk.css_override);
             }
-            var qnaNote = '';
-            if (tk.decision === 'ADMIN_MSG_ONLY') {
-              if (qnaRes && qnaRes.forwarded) {
-                qnaNote = '<br>📨 <b>관리자 전달</b>: 👑 베니브릿지 관리자 Q&A 대화방에 메시지가 정상 전달되었습니다.';
-              } else if (!hasUser) {
-                qnaNote = '<br>💡 <b>안내</b>: 관리자님께 개별 답장을 받으시려면 위 이름·연락처 칸을 함께 적어 보내주시거나 아래 카카오톡 문의를 이용해 주세요.';
-              }
+            var replyText = tk.user_reply || '말씀해 주셔서 감사합니다 😊';
+            _chatHistory.push({ role: 'ai', text: replyText });
+
+            var statusPill = '';
+            if (tk.decision === 'AUTO_FIX') {
+              statusPill = '<div style="margin-top:6px;"><span class="bai-tier-badge bai-tier-1">🛠️ 실시간 수리 반영됨</span></div>';
+            } else if (tk.decision === 'BETA_AND_ASK') {
+              statusPill = '<div style="margin-top:6px;"><span class="bai-tier-badge bai-tier-2">🛠️ 베타 수리 접수 · 관리자 확인 대기</span></div>';
+            } else if (qnaRes && qnaRes.forwarded) {
+              statusPill = '<div style="margin-top:6px;"><span class="bai-tier-badge bai-tier-0">📨 관리자에게 전달 완료</span></div>';
+            } else if (shouldForwardQna && !hasUser) {
+              /* 비로그인 손님이 관리자에게 문의 남길 때만 말풍선 안에 미니 연락처 칸 표시 */
+              statusPill =
+                '<div class="bai-guest-mini" style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:0.76rem;">' +
+                  '<div style="color:var(--muted);margin-bottom:4px;">답변 받으실 이름과 연락처를 남겨주시면 관리자에게 바로 전달돼요:</div>' +
+                  '<div style="display:flex;gap:4px;">' +
+                    '<input type="text" class="modal-input bai-gm-name" placeholder="이름" style="width:70px;margin:0;padding:5px 7px;font-size:0.75rem;" />' +
+                    '<input type="tel" class="modal-input bai-gm-phone" placeholder="01012345678" style="flex:1;margin:0;padding:5px 7px;font-size:0.75rem;" />' +
+                    '<button type="button" class="card-btn primary bai-gm-send" style="padding:5px 9px;font-size:0.75rem;">전달</button>' +
+                  '</div>' +
+                '</div>';
             }
-            resEl.innerHTML =
-              '<div class="bai-step-card" style="border-color:var(--gold);">' +
-                '<div style="margin-bottom:6px;">' + tierBadgeHtml(tk.tier, tk.decision) + '</div>' +
-                '<div style="font-weight:700;color:var(--ink);margin-bottom:4px;line-height:1.5;">💬 ' + escapeHtml(tk.user_reply || '접수 완료되었습니다.') + '</div>' +
-                '<div style="font-size:0.78rem;color:var(--muted);border-top:1px dashed var(--line);padding-top:6px;margin-top:6px;">' +
-                  '• <b>처리 방식</b>: ' + (tk.decision === 'ADMIN_MSG_ONLY' ? '<b>👑 관리자 Q&A 전달 + AI 1차 안내</b>' : ('<b>🛠️ AI 자율 수리 (' + escapeHtml((tk.worker || 'opus').toUpperCase()) + ')</b>')) +
-                  ' (' + ((tk.latency_ms || 400) / 1000).toFixed(1) + 's)<br>' +
-                  '• <b>분류 사유</b>: ' + escapeHtml(tk.reason || '-') +
-                  (tk.css_override ? '<br>✨ <b>실시간 패치</b>: 현재 화면에 즉시 반영되었습니다!' : '') +
-                  qnaNote +
-                '</div>' +
-              '</div>';
-            inputEl.value = '';
+
+            bubbleEl.innerHTML =
+              '<div style="white-space:pre-wrap;">' + escapeHtml(replyText) + '</div>' +
+              buildActionChipHtml(tk.action_chip) +
+              statusPill;
+
+            var gmBtn = bubbleEl.querySelector('.bai-gm-send');
+            if (gmBtn) {
+              gmBtn.onclick = function () {
+                var gn = (bubbleEl.querySelector('.bai-gm-name').value || '').trim();
+                var gp = (bubbleEl.querySelector('.bai-gm-phone').value || '').trim();
+                if (!gn || !gp) return;
+                gmBtn.disabled = true;
+                forwardToAdminQnaInbox(msg, gn, gp).then(function (gr) {
+                  var mini = bubbleEl.querySelector('.bai-guest-mini');
+                  if (mini) {
+                    mini.innerHTML = gr.forwarded
+                      ? '<span class="bai-tier-badge bai-tier-0">📨 관리자에게 연락처와 함께 전달되었어요!</span>'
+                      : '<span style="color:var(--accent);">전달 실패 (연락처 형식을 확인해 주세요)</span>';
+                  }
+                });
+              };
+            }
+            scrollBottom();
+            inputEl.focus();
           });
         }).catch(function (err) {
           sendBtn.disabled = false;
-          sendBtn.textContent = isAdm ? '⚡ AI 수리팀에 지시하기' : '✨ AI에게 말하기 (자동 수리·문의)';
-          resEl.innerHTML = '<div class="bai-step-card" style="color:var(--accent);">접수 중 오류가 발생했어요: ' + escapeHtml(err.message || String(err)) + '</div>';
+          bubbleEl.innerHTML = '<span style="color:var(--accent);">잠시 연결이 지연되었어요. 다시 한 번 말씀해 주세요 🙏 (' + escapeHtml(err.message || String(err)) + ')</span>';
+          scrollBottom();
         });
-      };
+      }
+
+      sendBtn.onclick = function () { sendChatMessage(); };
+      inputEl.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendChatMessage();
+        }
+      });
 
       if (isAdm) {
         var btnCoAdmin = ov.querySelector('#bai-tab-coadmin');
@@ -14269,8 +14313,8 @@
         badgeCount = pendC + editC;
       }
       var label = isAdm
-        ? ('👑 AI 부관리자 · 관제' + (badgeCount > 0 ? ' (' + badgeCount + ')' : ''))
-        : '✨ AI 도우미 · 문의';
+        ? ('👑 AI 부관리자' + (badgeCount > 0 ? ' (' + badgeCount + ')' : ''))
+        : '✨ AI 도우미';
 
       fbBtn.removeAttribute('style');
       fbBtn.className = 'admin-link bai-heal-btn';
