@@ -8,7 +8,9 @@ index-merged.html
 *.tmp
 *.bak
 
-# 로컬 firebase/노드 산출물
+# 로컬 firebase/노드 산출물 및 환경변수 시크릿
 functions/node_modules/
+functions/.env*
+.env*
 .firebase/
 *.log

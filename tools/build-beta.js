@@ -4,7 +4,7 @@
    - 같은 주소(benny3s.github.io)라 브라우저 저장소(localStorage·sessionStorage)가 운영과 섞이지 않게 키 앞에 'beta:' 를 붙임
    - 푸시(FCM)는 끔 (베타엔 푸시 키가 없음)
    - 화면 왼쪽 아래 🧪 패널: 시험 관리자·회원·손님 전환, 시험 데이터 다시 심기 (베타에만 들어감)
-   - 화면 오른쪽 아래 🐻‍❄️ 베니 AI 말풍선 도우미 (tools/benny-ai-beta.js): 내 화면 꾸미기·AI 코치·친구 추천·의견 남기기 (베타에만 들어감)
+   - 인컨텍스트 ✦ 베니 AI 살롱 컨시어지 (tools/benny-ai-beta.js): 프로필 아틀리에·주선자 케미 리포트·맞춤 신청 인사말·채팅 아이스브레이커 (베타에만 들어감)
    사용: 프로젝트 루트에서  node tools/build-beta.js   → beta/index.html, beta/firebase-messaging-sw.js
    운영 코드를 고친 뒤 베타에서 먼저 시험하려면 이 스크립트를 다시 돌리고 커밋·푸시. */
 const fs = require('fs');
@@ -51,7 +51,7 @@ rep(/var _pushUsable = \(function \(\) \{/, 'var _pushUsable = false && (functio
 /* 4) 상대 경로 이미지 */
 h = h.split('src="coffee-qr.png"').join('src="../coffee-qr.png"');
 
-/* 5) 🧪 베타 패널 + 🐻‍❄️ 베니 AI 도우미 — 앱 코드 안(마지막 })(); 직전)에 넣어 앱 함수·변수를 그대로 씀 */
+/* 5) 🧪 베타 패널 + ✦ 베니 AI 살롱 컨시어지 — 앱 코드 안(마지막 })(); 직전)에 넣어 앱 함수·변수를 그대로 씀 */
 const panel = fs.readFileSync(path.join(__dirname, 'beta-panel.js'), 'utf8');
 const aiPath = path.join(__dirname, 'benny-ai-beta.js');
 const aiPanel = fs.existsSync(aiPath) ? fs.readFileSync(aiPath, 'utf8') : '';

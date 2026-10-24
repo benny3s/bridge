@@ -1579,3 +1579,88 @@ exports.chatStats = functions
       medianMsgs: med(sizes), maxMsgs: sizes[sizes.length - 1] || 0, buckets: { '1-5': sizes.filter((x) => x <= 5).length, '6-20': sizes.filter((x) => x > 5 && x <= 20).length, '21-50': sizes.filter((x) => x > 20 && x <= 50).length, '51+': sizes.filter((x) => x > 50).length },
       medianReplyMin: Math.round(med(gaps) / 60000), daily, hours };
   });
+
+
+/* ══ 베니 AI 살롱 컨시어지 (2026-10-24) — 프로필 아틀리에 · 케미 리포트 · 맞춤 신청 메시지 · 채팅 아이스브레이커 ══ */
+function callGroqChat(apiKey, model, sysPrompt, userPrompt, maxTokens, temperature) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      model: model,
+      messages: [
+        { role: 'system', content: sysPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      max_tokens: maxTokens || 700,
+      temperature: typeof temperature === 'number' ? temperature : 0.72
+    });
+    const req = https.request({
+      hostname: 'api.groq.com',
+      path: '/openai/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + apiKey,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      },
+      timeout: 14000
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(raw);
+          const txt = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+          if (res.statusCode >= 200 && res.statusCode < 300 && txt) {
+            resolve({ text: String(txt).trim(), model: j.model || model });
+          } else {
+            reject(new Error((j && j.error && j.error.message) || ('HTTP ' + res.statusCode)));
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+exports.aiConcierge = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 30, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new HttpsError('unauthenticated', '연결 확인 후 다시 시도해 주세요.');
+    const apiKey = (process.env.GROQ_API_KEY || '').trim();
+    if (!apiKey) throw new HttpsError('failed-precondition', 'AI 컨시어지 키가 준비되지 않았어요.');
+
+    const mode = String((data && data.mode) || 'profile_atelier').slice(0, 40);
+    const sysPrompt = String((data && data.system) || (
+      '당신은 지인 기반 프라이빗 소개팅 살롱 [베니브릿지]의 수석 매칭 컨시어지입니다. ' +
+      '과장되거나 기계적인 번역투를 절대 쓰지 말고, 한국의 20~30대 직장인이 실제로 호감을 느끼는 따뜻하고 세련된 한국어 문장으로 작성하세요. ' +
+      '마크다운 별표(**)나 불필요한 서론/결론 인사 없이 요청된 형식만 깔끔하게 출력하세요.'
+    )).slice(0, 1800);
+    const userPrompt = String((data && data.prompt) || '').trim().slice(0, 3500);
+    if (!userPrompt) throw new HttpsError('invalid-argument', '내용을 입력해 주세요.');
+
+    const t0 = Date.now();
+    const models = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'];
+    let lastErr = null;
+    for (const m of models) {
+      try {
+        const res = await callGroqChat(apiKey, m, sysPrompt, userPrompt, 750, 0.72);
+        const cleanText = res.text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        return {
+          ok: true,
+          mode,
+          reply: cleanText,
+          model: res.model,
+          latencyMs: Date.now() - t0
+        };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw new HttpsError('internal', 'AI 응답 지연: ' + (lastErr ? lastErr.message : 'unknown'));
+  });
