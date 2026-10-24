@@ -279,16 +279,92 @@
       });
     }
 
+    /* 일반 문의(ADMIN_MSG_ONLY)일 때 기존 관리자 Q&A 메시지함(messages)으로 자동 전달 */
+    function forwardToAdminQnaInbox(msgText, guestName, guestPhone) {
+      try {
+        if (typeof currentUser !== 'undefined' && currentUser && currentUser.id) {
+          var p = (typeof dataMode !== 'undefined' && dataMode === 'full' && typeof sendMessageTo === 'function')
+            ? sendMessageTo(currentUser.id, 'user', msgText)
+            : (typeof callFn === 'function' ? callFn('applicantAction', { op: 'message', text: msgText }) : Promise.resolve());
+          return Promise.resolve(p).then(function () {
+            if (typeof appendLog === 'function') appendLog('message', currentUser.nickname || '회원', '관리자에게 메시지 (AI 도우미)');
+            return { forwarded: true, mode: 'member' };
+          }).catch(function () { return { forwarded: false }; });
+        }
+        /* 비로그인 손님: 이름·전화번호가 있으면 암호화하여 게스트 문의로 전달 */
+        var cleanPhone = String(guestPhone || '').replace(/[^0-9]/g, '');
+        var cleanName = String(guestName || '').trim();
+        if (cleanName && /^01[0-9]{8,9}$/.test(cleanPhone) && typeof encryptForAdmin === 'function' && typeof callFn === 'function') {
+          var pubJwk = (typeof currentState !== 'undefined' && currentState && currentState.adminAuth) ? currentState.adminAuth.publicKeyJwk : null;
+          if (pubJwk) {
+            return encryptForAdmin(pubJwk, cleanPhone).then(function (phoneEnc) {
+              return callFn('applicantAction', { op: 'guestMessage', name: cleanName, text: msgText, phoneEnc: phoneEnc });
+            }).then(function () {
+              if (typeof appendLog === 'function') appendLog('message', cleanName + ' (비로그인)', '관리자에게 문의 (AI 도우미)');
+              try { if (typeof notifyAdmin === 'function') notifyAdmin('💬 비로그인 문의', cleanName + ': ' + msgText.slice(0, 40)); } catch (e) {}
+              return { forwarded: true, mode: 'guest' };
+            }).catch(function () { return { forwarded: false }; });
+          }
+        }
+      } catch (e) {}
+      return Promise.resolve({ forwarded: false });
+    }
+
     function openSelfHealModal(initialTab) {
       var isAdm = (typeof isAdminUnlocked !== 'undefined' && isAdminUnlocked);
+      var hasUser = (typeof currentUser !== 'undefined' && currentUser && currentUser.id);
       var me = (typeof currentState !== 'undefined' && typeof findMyEntry === 'function') ? findMyEntry(currentState) : null;
-      var authorLabel = isAdm ? '관리자(베니)' : ((me && me.nickname) ? me.nickname : '회원/손님');
+      var authorLabel = isAdm ? '관리자(베니)' : ((me && me.nickname) ? me.nickname : (hasUser && currentUser.nickname ? currentUser.nickname : '비로그인 손님'));
       var sctx = captureScreenContext();
+
+      /* 로그인 회원의 자주 찾는 버튼(탈퇴/잠시쉬기/PIN변경) 및 기존 관리자 대화 내역 */
+      var quickChipsHtml = '';
+      var prevThreadHtml = '';
+      if (!isAdm && hasUser) {
+        try {
+          if (me && (typeof isMatchmakerEntry !== 'function' || !isMatchmakerEntry(me))) {
+            var _id = escapeHtml(me.id);
+            quickChipsHtml =
+              '<div class="qa-quick" style="margin-bottom:8px;"><span>자주 찾는 기능</span>' +
+                (!me.deleteRequested ? '<button type="button" class="req-chip" data-action="delete" data-id="' + _id + '">🗑 탈퇴하기</button>' : '') +
+                (!me.deactivateRequested && !me.deactivated ? '<button type="button" class="req-chip" data-action="deactivate" data-id="' + _id + '">💤 잠시 쉬기</button>' : '') +
+                ((typeof isProxyEntry !== 'function' || !isProxyEntry(me)) ? '<button type="button" class="req-chip" id="change-my-pin">🔑 PIN 변경</button>' : '') +
+              '</div>';
+          }
+          if (typeof threadFor === 'function' && typeof currentState !== 'undefined' && currentState) {
+            var th = threadFor(currentState, currentUser.id, 'user') || [];
+            if (th.length) {
+              try { localStorage.setItem('bb-admsg-seen:' + currentUser.id, new Date().toISOString()); } catch (e) {}
+              var recent = th.slice(-4).map(function (m) {
+                var isFromAdm = m.from === 'admin';
+                return '<div style="padding:4px 0;font-size:0.78rem;border-bottom:1px dashed var(--line);">' +
+                  '<b style="color:' + (isFromAdm ? 'var(--gold)' : 'var(--ink)') + ';">' + (isFromAdm ? '👑 관리자' : '나') + '</b>: ' +
+                  escapeHtml(m.text || '') +
+                '</div>';
+              }).join('');
+              prevThreadHtml =
+                '<details style="margin-bottom:8px;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:6px 10px;">' +
+                  '<summary style="cursor:pointer;font-size:0.78rem;font-weight:700;color:var(--ink);">👑 관리자와의 최근 대화 내역 (' + th.length + '건)</summary>' +
+                  '<div style="max-height:130px;overflow-y:auto;margin-top:6px;">' + recent + '</div>' +
+                '</details>';
+            }
+          }
+        } catch (e) {}
+      }
+
+      /* 비로그인 손님용 선택 입력란 (답변이 필요한 일반 문의 시 활용) */
+      var guestInputsHtml = (!isAdm && !hasUser) ? (
+        '<div style="display:flex;gap:6px;margin-bottom:6px;">' +
+          '<input type="text" class="modal-input" id="bai-guest-name" maxlength="30" placeholder="이름/닉네임 (답변 받을 분)" style="flex:1;margin:0;padding:7px 9px;font-size:0.8rem;" />' +
+          '<input type="tel" class="modal-input" id="bai-guest-phone" inputmode="numeric" maxlength="13" placeholder="연락처 (01012345678)" style="flex:1.2;margin:0;padding:7px 9px;font-size:0.8rem;" />' +
+        '</div>' +
+        '<div style="font-size:0.73rem;color:var(--muted);margin-bottom:8px;">💡 화면 불편·버그 제보는 연락처 없이 바로 보내도 AI가 즉시 수리해요. 개인 문의·답장이 필요할 때만 연락처(암호화)를 적어주세요.</div>'
+      ) : '';
 
       var ov = openModal(
         '<div style="text-align:left;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
-            '<h3 style="margin:0;font-size:1.08rem;">' + (isAdm ? '👑 AI 부관리자 & 자율 수리 관제' : '🛠️ 불편·오류 제보 (AI 자율 수리)') + '</h3>' +
+            '<h3 style="margin:0;font-size:1.08rem;">' + (isAdm ? '👑 AI 부관리자 & 자율 수리 관제' : '✨ AI 도우미 · 문의 (Q&A & 자율수리)') + '</h3>' +
             '<button type="button" id="bai-heal-close" style="border:0;background:none;font-size:1.3rem;color:var(--muted);cursor:pointer;">×</button>' +
           '</div>' +
           (isAdm ? (
@@ -300,35 +376,56 @@
           ) : '') +
           '<div id="bai-pane-coadmin" style="display:' + (isAdm ? 'block' : 'none') + ';"></div>' +
           '<div id="bai-pane-submit" style="display:' + (isAdm ? 'none' : 'block') + ';">' +
+            quickChipsHtml +
+            prevThreadHtml +
             '<p class="modal-msg" style="margin-bottom:8px;">' +
               (isAdm
                 ? '관리자 모드입니다. 고치고 싶은 UI·문구·버그를 적으시면 <b>Argon 심사 후 Opus/Argon이 즉시 자율 수리</b>합니다.'
-                : '쓰시면서 안 눌리는 버튼, 어색한 문구, 불편한 점을 편하게 적어주세요. <b>Groq</b>가 즉시 접수하고 <b>Argon & Opus</b>가 수리합니다.') +
+                : '<b>궁금한 점·건의사항</b>부터 <b>화면 오류·불편한 점</b>까지 편하게 적어주세요.<br>AI가 내용을 판단해 <b>① 화면/코드 불편은 즉시 수리</b>하고, <b>② 일반 문의는 1차 답변과 함께 👑 관리자에게 바로 전달</b>해 드려요.') +
             '</p>' +
             '<div class="bai-ctx-box">' +
-              '📡 <b>자동 첨부되는 화면 맥락</b>: 탭(<b>' + escapeHtml(sctx.tab) + '</b>) · 화면(<b>' + escapeHtml(sctx.viewport) + '</b>) · 신분(<b>' + escapeHtml(authorLabel) + '</b>)' +
+              '📡 <b>현재 화면 맥락</b>: 탭(<b>' + escapeHtml(sctx.tab) + '</b>) · 화면(<b>' + escapeHtml(sctx.viewport) + '</b>) · 작성자(<b>' + escapeHtml(authorLabel) + '</b>)' +
               (sctx.recent_errors.length ? '<br>⚠️ 감지된 스크립트 오류: ' + escapeHtml(sctx.recent_errors.join(', ')) : '') +
             '</div>' +
+            guestInputsHtml +
             '<textarea class="modal-input" id="bai-heal-input" rows="3" maxlength="800" placeholder="' +
               (isAdm
                 ? '예) 명단 카드에서 대화 신청 버튼 글자를 조금 더 크고 선명하게 키워줘 / 모바일에서 닫기 버튼 터치 영역 넓혀줘'
-                : '예) 모바일에서 사진 닫기 버튼이 너무 작아서 잘 안 눌려요 / 신청서 안내 문구가 조금 헷갈려요') +
+                : '예) 사진 요청은 하루에 몇 번 가능한가요? / 모바일에서 버튼이 너무 작아 잘 안 눌려요 / 가입 승인은 언제쯤 되나요?') +
             '"></textarea>' +
             '<div class="modal-actions" style="margin-top:10px;">' +
               '<button type="button" class="card-btn" id="bai-heal-cancel">닫기</button>' +
-              '<button type="button" class="card-btn primary" id="bai-heal-send">⚡ AI 수리팀에 전달하기</button>' +
+              '<button type="button" class="card-btn primary" id="bai-heal-send">' + (isAdm ? '⚡ AI 수리팀에 지시하기' : '✨ AI에게 말하기 (자동 수리·문의)') + '</button>' +
             '</div>' +
             '<div id="bai-heal-result"></div>' +
+            (!isAdm ? (
+              '<div style="display:flex;gap:6px;margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);">' +
+                '<button type="button" class="card-btn" data-kakao="1" style="flex:1;background:#FEE500;border-color:#FEE500;color:#3C1E1E;font-weight:700;font-size:0.78rem;padding:7px;">💬 카카오톡으로 문의</button>' +
+                (hasUser ? '<button type="button" class="card-btn" id="bai-open-classic-qna" style="flex:1;font-size:0.78rem;padding:7px;">👑 관리자 1:1 대화방 열기</button>' : '') +
+              '</div>'
+            ) : '') +
           '</div>' +
           '<div id="bai-pane-list" style="display:none;"></div>' +
         '</div>'
       );
       ov.classList.add('wide-modal');
 
-      var closeFn = function () { closeModal(ov); };
+      var closeFn = function () {
+        closeModal(ov);
+        if (typeof schedulePaint === 'function') schedulePaint();
+      };
       ov.querySelector('#bai-heal-close').onclick = closeFn;
       ov.querySelector('#bai-heal-cancel').onclick = closeFn;
-      ov.addEventListener('click', function (e) { if (e.target === ov) closeFn(); });
+      ov.addEventListener('click', function (e) {
+        if (e.target === ov || (e.target.closest && e.target.closest('.qa-quick button'))) closeFn();
+      });
+      var classicBtn = ov.querySelector('#bai-open-classic-qna');
+      if (classicBtn) {
+        classicBtn.onclick = function () {
+          closeModal(ov);
+          if (typeof openMemberMsgCenter === 'function') openMemberMsgCenter();
+        };
+      }
 
       var sendBtn = ov.querySelector('#bai-heal-send');
       var inputEl = ov.querySelector('#bai-heal-input');
@@ -336,47 +433,67 @@
 
       sendBtn.onclick = function () {
         var msg = (inputEl.value || '').trim();
-        if (msg.length < 4) {
-          resEl.innerHTML = '<div style="color:var(--accent);font-size:0.82rem;margin-top:6px;font-weight:700;">내용을 4자 이상 적어주세요.</div>';
+        if (msg.length < 2) {
+          resEl.innerHTML = '<div style="color:var(--accent);font-size:0.82rem;margin-top:6px;font-weight:700;">문의하거나 제보할 내용을 적어주세요.</div>';
           return;
         }
+        var gNameEl = ov.querySelector('#bai-guest-name');
+        var gPhoneEl = ov.querySelector('#bai-guest-phone');
+        var gName = gNameEl ? (gNameEl.value || '').trim() : '';
+        var gPhone = gPhoneEl ? (gPhoneEl.value || '').trim() : '';
+
         sendBtn.disabled = true;
-        sendBtn.textContent = '⚡ Groq 접수 & Argon 심사 중…';
+        sendBtn.textContent = '✨ AI 분석 & 처리 중…';
         resEl.innerHTML =
           '<div class="bai-step-card">' +
-            '<div>⏳ <b>1단계 (Groq)</b>: 화면 상태 캡처 및 접수 중…</div>' +
-            '<div style="color:var(--muted);margin-top:4px;">⏳ <b>2단계 (Argon 심사관)</b>: 3단계 헌법에 따라 [즉시 자율 수리 vs 베타 선반영 후 허락 요청] 판정 중…</div>' +
+            '<div>⏳ <b>1단계 (Groq)</b>: 문의/제보 내용 및 현재 화면 맥락 파악 중…</div>' +
+            '<div style="color:var(--muted);margin-top:4px;">⏳ <b>2단계 (Argon)</b>: [🛠️ 화면·코드 자율 수리] vs [👑 관리자 Q&A 전달 + 1차 답변] 자동 분기 중…</div>' +
           '</div>';
 
         callHealBackend({
           op: 'submit',
           message: msg,
           is_admin: isAdm,
-          author: authorLabel,
+          author: gName ? (gName + ' (비로그인)') : authorLabel,
           screen_context: sctx,
           judge_model: 'argon'
         }).then(function (r) {
-          sendBtn.disabled = false;
-          sendBtn.textContent = '⚡ AI 수리팀에 전달하기';
           var tk = r.ticket || {};
-          if (tk.css_override && tk.decision !== 'REJECT') {
-            appendLiveHotfix(tk.css_override);
-          }
-          resEl.innerHTML =
-            '<div class="bai-step-card" style="border-color:var(--gold);">' +
-              '<div style="margin-bottom:6px;">' + tierBadgeHtml(tk.tier, tk.decision) + '</div>' +
-              '<div style="font-weight:700;color:var(--ink);margin-bottom:4px;">💬 ' + escapeHtml(tk.user_reply || '접수 완료되었습니다.') + '</div>' +
-              '<div style="font-size:0.78rem;color:var(--muted);border-top:1px dashed var(--line);padding-top:6px;margin-top:6px;">' +
-                '• <b>심사 모델</b>: ' + escapeHtml(tk.judge_via || 'Argon') + ' (' + ((tk.latency_ms || 400) / 1000).toFixed(1) + 's)<br>' +
-                '• <b>판정 사유</b>: ' + escapeHtml(tk.reason || '-') + '<br>' +
-                '• <b>배정 일꾼</b>: <b>' + escapeHtml((tk.worker || 'opus').toUpperCase()) + '</b>' +
-                (tk.css_override ? '<br>✨ <b>실시간 패치</b>: 현재 화면에 즉시 반영되었습니다!' : '') +
-              '</div>' +
-            '</div>';
-          inputEl.value = '';
+          /* 일반 문의(ADMIN_MSG_ONLY)이거나 회원이 남긴 건의사항이면 관리자 Q&A 메시지함(messages)에도 자동 전달 */
+          var shouldForwardQna = (!isAdm && (tk.decision === 'ADMIN_MSG_ONLY' || tk.decision === 'BETA_AND_ASK'));
+          var qnaPromise = shouldForwardQna ? forwardToAdminQnaInbox(msg, gName, gPhone) : Promise.resolve({ forwarded: false });
+
+          return qnaPromise.then(function (qnaRes) {
+            sendBtn.disabled = false;
+            sendBtn.textContent = isAdm ? '⚡ AI 수리팀에 지시하기' : '✨ AI에게 말하기 (자동 수리·문의)';
+            if (tk.css_override && tk.decision !== 'REJECT') {
+              appendLiveHotfix(tk.css_override);
+            }
+            var qnaNote = '';
+            if (tk.decision === 'ADMIN_MSG_ONLY') {
+              if (qnaRes && qnaRes.forwarded) {
+                qnaNote = '<br>📨 <b>관리자 전달</b>: 👑 베니브릿지 관리자 Q&A 대화방에 메시지가 정상 전달되었습니다.';
+              } else if (!hasUser) {
+                qnaNote = '<br>💡 <b>안내</b>: 관리자님께 개별 답장을 받으시려면 위 이름·연락처 칸을 함께 적어 보내주시거나 아래 카카오톡 문의를 이용해 주세요.';
+              }
+            }
+            resEl.innerHTML =
+              '<div class="bai-step-card" style="border-color:var(--gold);">' +
+                '<div style="margin-bottom:6px;">' + tierBadgeHtml(tk.tier, tk.decision) + '</div>' +
+                '<div style="font-weight:700;color:var(--ink);margin-bottom:4px;line-height:1.5;">💬 ' + escapeHtml(tk.user_reply || '접수 완료되었습니다.') + '</div>' +
+                '<div style="font-size:0.78rem;color:var(--muted);border-top:1px dashed var(--line);padding-top:6px;margin-top:6px;">' +
+                  '• <b>처리 방식</b>: ' + (tk.decision === 'ADMIN_MSG_ONLY' ? '<b>👑 관리자 Q&A 전달 + AI 1차 안내</b>' : ('<b>🛠️ AI 자율 수리 (' + escapeHtml((tk.worker || 'opus').toUpperCase()) + ')</b>')) +
+                  ' (' + ((tk.latency_ms || 400) / 1000).toFixed(1) + 's)<br>' +
+                  '• <b>분류 사유</b>: ' + escapeHtml(tk.reason || '-') +
+                  (tk.css_override ? '<br>✨ <b>실시간 패치</b>: 현재 화면에 즉시 반영되었습니다!' : '') +
+                  qnaNote +
+                '</div>' +
+              '</div>';
+            inputEl.value = '';
+          });
         }).catch(function (err) {
           sendBtn.disabled = false;
-          sendBtn.textContent = '⚡ AI 수리팀에 전달하기';
+          sendBtn.textContent = isAdm ? '⚡ AI 수리팀에 지시하기' : '✨ AI에게 말하기 (자동 수리·문의)';
           resEl.innerHTML = '<div class="bai-step-card" style="color:var(--accent);">접수 중 오류가 발생했어요: ' + escapeHtml(err.message || String(err)) + '</div>';
         });
       };
@@ -618,23 +735,34 @@
     }
 
     function injectHeaderButton() {
-      var row = document.querySelector('.admin-bar-row');
-      if (!row) return;
-      var existing = row.querySelector('#bai-self-heal-btn');
+      var fbBtn = document.querySelector('#feedback-btn');
+      if (!fbBtn) return;
       var isAdm = (typeof isAdminUnlocked !== 'undefined' && isAdminUnlocked);
-      var label = isAdm ? '👑 AI 부관리자 · 자율수리' : '🛠️ 불편·오류 제보';
-      if (existing) {
-        if (existing.textContent !== label) existing.textContent = label;
-        return;
+      var st = (typeof currentState !== 'undefined' && currentState) ? currentState : {};
+      var badgeCount = 0;
+      if (isAdm) {
+        var pendC = ((st.pendingEntries || []).filter(function (p) { return !p.heldReason && !p.rejectedAt; })).length;
+        var editC = ((st.entries || []).filter(function (e) { return e.editReviewAt && !e.deactivated; })).length;
+        badgeCount = pendC + editC;
       }
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.id = 'bai-self-heal-btn';
-      btn.className = 'admin-link bai-heal-btn';
-      btn.textContent = label;
-      btn.onclick = function () { openSelfHealModal(isAdm ? 'coadmin' : 'submit'); };
-      row.insertBefore(btn, row.firstChild);
+      var label = isAdm
+        ? ('👑 AI 부관리자 · 관제' + (badgeCount > 0 ? ' (' + badgeCount + ')' : ''))
+        : '✨ AI 도우미 · 문의';
+
+      fbBtn.removeAttribute('style');
+      fbBtn.className = 'admin-link bai-heal-btn';
+      if (fbBtn.textContent !== label) fbBtn.textContent = label;
     }
+
+    /* 상단 #feedback-btn (기존 💬 Q&A 자리) 클릭을 가로채어 통합 AI 도우미·문의 모달 실행 */
+    document.addEventListener('click', function (e) {
+      var t = e.target && e.target.closest ? e.target.closest('#feedback-btn') : null;
+      if (!t) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      var isAdm = (typeof isAdminUnlocked !== 'undefined' && isAdminUnlocked);
+      openSelfHealModal(isAdm ? 'coadmin' : 'submit');
+    }, true);
 
     if (typeof paint === 'function') {
       var _origPaint = paint;

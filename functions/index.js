@@ -1831,8 +1831,8 @@ exports.aiConcierge = functions
         '- Tier 1 (decision:"AUTO_FIX"): 오타, 문구 어색함, 모바일 터치/여백/레이아웃 깨짐, 다크모드 색상 오류, 콘솔 런타임 에러 방어, 또는 관리자(is_admin=true)의 직접 지시\n' +
         '- Tier 2 (decision:"BETA_AND_ASK"): 매칭 규칙/신청 한도 변경, 새 기능/탭 추가, DB 구조 변경, 보안/인증 변경, 푸시/문자 조건 변경 (베타에만 선반영 후 허락 요청)\n' +
         '- Tier 3 (decision:"REJECT"): 사진 블러 해제, 비번 요구, 타인 연락처 요구 등 보안 침해\n' +
-        '- Tier 0 (decision:"ADMIN_MSG_ONLY"): 코드 수정과 무관한 일반 운영/가입승인 문의\n' +
-        '출력 JSON 형식: {"tier":1,"decision":"AUTO_FIX","worker":"opus","title":"20자이내제목","reason":"판정사유","user_reply":"제보자에게보여줄친절한안내(2문장)","fix_spec":"기술지시서","css_override":"CSS로즉시해결가능한UI/크기/여백/색상수정이면순수CSS코드(아니면빈문자열)"}';
+        '- Tier 0 (decision:"ADMIN_MSG_ONLY"): 코드/UI 버그가 아닌 일반 운영·가입승인·사진/대화 신청 한도(하루 각 3건)·잠시 쉬기/탈퇴·PIN 문의 및 건의사항. 이 경우 시스템이 자동으로 [👑 관리자 Q&A 메시지함]에 전달하므로 user_reply에 친절한 1차 안내 답변과 함께 "남겨주신 문의는 👑 베니브릿지 관리자님께도 바로 전달해 두었어요! 확인 후 답장해 드릴게요 😊"라고 안내하세요.\n' +
+        '출력 JSON 형식: {"tier":1,"decision":"AUTO_FIX","worker":"opus","title":"20자이내제목","reason":"판정사유","user_reply":"제보자에게보여줄친절한안내(2~3문장)","fix_spec":"기술지시서","css_override":"CSS로즉시해결가능한UI/크기/여백/색상수정이면순수CSS코드(아니면빈문자열)"}';
       const uPrompt = `[제보자]: ${isAdmin ? '관리자(베니 님 본인 - is_admin=true)' : author}\n[화면맥락]: ${JSON.stringify(sctx)}\n[내용]: ${msg}`;
       const t0 = Date.now();
       let parsed = {};
