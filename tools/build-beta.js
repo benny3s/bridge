@@ -4,6 +4,7 @@
    - 같은 주소(benny3s.github.io)라 브라우저 저장소(localStorage·sessionStorage)가 운영과 섞이지 않게 키 앞에 'beta:' 를 붙임
    - 푸시(FCM)는 끔 (베타엔 푸시 키가 없음)
    - 화면 왼쪽 아래 🧪 패널: 시험 관리자·회원·손님 전환, 시험 데이터 다시 심기 (베타에만 들어감)
+   - 화면 오른쪽 아래 🐻‍❄️ 베니 AI 말풍선 도우미 (tools/benny-ai-beta.js): 내 화면 꾸미기·AI 코치·친구 추천·의견 남기기 (베타에만 들어감)
    사용: 프로젝트 루트에서  node tools/build-beta.js   → beta/index.html, beta/firebase-messaging-sw.js
    운영 코드를 고친 뒤 베타에서 먼저 시험하려면 이 스크립트를 다시 돌리고 커밋·푸시. */
 const fs = require('fs');
@@ -32,8 +33,8 @@ function rep(re, to, label) {
   if (h === before) throw new Error('바꿀 곳을 못 찾음: ' + label);
 }
 
-/* 0) 지역 기능 스위치: 베타는 켬. ZONES_OFF=1 이면 운영과 같은 상태(끔)로 — 운영 미리보기용 */
-if (!process.env.ZONES_OFF) h = h.replace('var ZONES_ON = false;', 'var ZONES_ON = true;');
+/* 0) 지역 기능 스위치: 기본 끔(운영과 동일, 2026-10-24 Benny 결정). ZONES_ON=1 일 때만 켬 */
+if (process.env.ZONES_ON === '1') h = h.replace('var ZONES_ON = false;', 'var ZONES_ON = true;');
 
 /* 1) Firebase 접속 설정 → 베타 */
 rep(/var firebaseConfig = \{[\s\S]*?\};/, 'var firebaseConfig = ' + JSON.stringify(BETA, null, 4).replace(/\n/g, '\n  ') + ';', 'firebaseConfig');
@@ -50,13 +51,15 @@ rep(/var _pushUsable = \(function \(\) \{/, 'var _pushUsable = false && (functio
 /* 4) 상대 경로 이미지 */
 h = h.split('src="coffee-qr.png"').join('src="../coffee-qr.png"');
 
-/* 5) 🧪 베타 패널 — 앱 코드 안(마지막 })(); 직전)에 넣어 앱 함수·변수를 그대로 씀 */
+/* 5) 🧪 베타 패널 + 🐻‍❄️ 베니 AI 도우미 — 앱 코드 안(마지막 })(); 직전)에 넣어 앱 함수·변수를 그대로 씀 */
 const panel = fs.readFileSync(path.join(__dirname, 'beta-panel.js'), 'utf8');
+const aiPath = path.join(__dirname, 'benny-ai-beta.js');
+const aiPanel = fs.existsSync(aiPath) ? fs.readFileSync(aiPath, 'utf8') : '';
 const endRe = /\}\)\(\);\s*<\/script>\s*<\/body>/g;
 let at = -1, mm;
 while ((mm = endRe.exec(h))) at = mm.index;   /* 마지막 것 (줄바꿈 CRLF·LF 모두) */
 if (at < 0) throw new Error('앱 코드 끝을 못 찾음');
-h = h.slice(0, at) + '\n' + panel + '\n' + h.slice(at);
+h = h.slice(0, at) + '\n' + panel + '\n' + aiPanel + '\n' + h.slice(at);
 
 fs.mkdirSync(path.join(root, 'beta'), { recursive: true });
 const outName = process.argv[3] || 'index.html';   /* 예: node tools/build-beta.js master old.html (비교용 옛 화면) */
