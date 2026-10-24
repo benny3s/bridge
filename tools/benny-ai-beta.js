@@ -108,27 +108,87 @@
       };
     }
 
+    var _localDeadUntil = 0;
+
+    function matchInstantFaq(rawMsg) {
+      var s = String(rawMsg || '').replace(/[\s?.!~·ㆍ,]+/g, '').toLowerCase();
+      if (s === '사진대화신청은하루몇번돼요' || s === '사진대화신청은하루몇번되나요' || s === '하루몇번신청돼요') {
+        return {
+          tier: 0,
+          decision: 'CHAT_CONTINUE',
+          action_chip: '',
+          title: '사진·대화 신청 한도 안내',
+          user_reply: '사진 요청과 대화 신청은 각각 하루 최대 3번까지 신청하실 수 있어요! 매일 자정(00:00)에 다시 3건으로 초기화됩니다 😊'
+        };
+      }
+      if (s === '잠시쉬거나pin을바꾸고싶어요' || s === '잠시쉬고싶어요' || s === '휴면하고싶어요' || s === 'pin바꾸고싶어요' || s === '비밀번호바꾸고싶어요') {
+        var chip = (s.indexOf('pin') >= 0 || s.indexOf('비밀번호') >= 0) && s.indexOf('쉬') < 0 ? 'pin' : 'deactivate';
+        return {
+          tier: 0,
+          decision: 'CHAT_CONTINUE',
+          action_chip: chip,
+          title: '휴면 및 PIN 변경 안내',
+          user_reply: '잠시 쉬기(프로필 비노출)나 PIN 변경은 [내 공간] 탭 하단이나 아래 바로가기 버튼으로 즉시 설정하실 수 있어요 😊'
+        };
+      }
+      if (s === '화면이나버튼이불편한곳이있어요' || s === '화면이불편해요' || s === '버튼이불편해요' || s === '오류가있어요') {
+        return {
+          tier: 0,
+          decision: 'CHAT_CONTINUE',
+          action_chip: '',
+          title: '불편 사항 확인',
+          user_reply: '어느 화면(예: 명단, 내 공간, 신청서)에서 어떤 버튼이나 문구가 불편하셨는지 편하게 알려주시면 원인을 파악해 바로 고쳐볼게요 😊'
+        };
+      }
+      if (s === '관리자님께문의할게있어요' || s === '관리자한테메세지보내고싶어' || s === '관리자한테메시지보내고싶어' || s === '관리자에게메시지보내고싶어') {
+        return {
+          tier: 0,
+          decision: 'CHAT_CONTINUE',
+          action_chip: '',
+          title: '관리자 메시지 내용 확인',
+          user_reply: '네! 제가 관리자님께 바로 메시지를 전달해 드릴 수 있어요 😊 어떤 내용을 전해드릴까요? 편하게 말씀해 주세요!'
+        };
+      }
+      return null;
+    }
+
     function callHealBackend(payload) {
+      if (payload && payload.op === 'submit' && !payload.is_admin) {
+        var instantTk = matchInstantFaq(payload.message);
+        if (instantTk) {
+          return new Promise(function (resolve) {
+            setTimeout(function () { resolve({ ok: true, ticket: instantTk }); }, 120);
+          });
+        }
+      }
+      var timeoutMs = (payload && payload.op === 'coadmin_audit') ? 22000 : 4500;
+      function callCloudFallback() {
+        if (typeof callFn === 'function') {
+          var fnOp = payload.op === 'list'
+            ? 'heal_list'
+            : (payload.op === 'approve'
+                ? 'heal_approve'
+                : (payload.op === 'reject'
+                    ? 'heal_reject'
+                    : (payload.op === 'coadmin_audit'
+                        ? 'coadmin_audit'
+                        : (payload.op === 'confirm_forward' ? 'confirm_forward' : 'heal_submit'))));
+          return callFn('aiConcierge', Object.assign({}, payload, { op: fnOp })).then(function (r) {
+            return (r && r.data) ? r.data : r;
+          });
+        }
+        return Promise.reject(new Error('자율 수리 서버에 연결할 수 없어요.'));
+      }
+      if (Date.now() < _localDeadUntil && payload.op === 'submit') {
+        return callCloudFallback();
+      }
       function tryLocal(idx) {
         if (idx >= HEAL_URLS.length) {
-          if (typeof callFn === 'function') {
-            var fnOp = payload.op === 'list'
-              ? 'heal_list'
-              : (payload.op === 'approve'
-                  ? 'heal_approve'
-                  : (payload.op === 'reject'
-                      ? 'heal_reject'
-                      : (payload.op === 'coadmin_audit'
-                          ? 'coadmin_audit'
-                          : (payload.op === 'confirm_forward' ? 'confirm_forward' : 'heal_submit'))));
-            return callFn('aiConcierge', Object.assign({}, payload, { op: fnOp })).then(function (r) {
-              return (r && r.data) ? r.data : r;
-            });
-          }
-          return Promise.reject(new Error('자율 수리 서버에 연결할 수 없어요.'));
+          _localDeadUntil = Date.now() + 120000;
+          return callCloudFallback();
         }
         var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        var tm = ctl ? setTimeout(function () { ctl.abort(); }, 22000) : null;
+        var tm = ctl ? setTimeout(function () { ctl.abort(); }, timeoutMs) : null;
         return fetch(HEAL_URLS[idx], {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
