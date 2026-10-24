@@ -13637,7 +13637,13 @@
           if (typeof callFn === 'function') {
             var fnOp = payload.op === 'list'
               ? 'heal_list'
-              : (payload.op === 'approve' ? 'heal_approve' : (payload.op === 'reject' ? 'heal_reject' : (payload.op === 'coadmin_audit' ? 'coadmin_audit' : 'heal_submit')));
+              : (payload.op === 'approve'
+                  ? 'heal_approve'
+                  : (payload.op === 'reject'
+                      ? 'heal_reject'
+                      : (payload.op === 'coadmin_audit'
+                          ? 'coadmin_audit'
+                          : (payload.op === 'confirm_forward' ? 'confirm_forward' : 'heal_submit'))));
             return callFn('aiConcierge', Object.assign({}, payload, { op: fnOp })).then(function (r) {
               return (r && r.data) ? r.data : r;
             });
@@ -13925,7 +13931,7 @@
         try { chatLog.scrollTop = chatLog.scrollHeight; } catch (e) {}
       }
 
-      /* 말풍선 안의 원클릭 기능 칩 생성 (회원이 물어봤을 때만 노출) */
+      /* 말풍선 안의 원클릭 기능 칩 생성 (회원이 물어봤을 때만 노출 — 카카오톡 문의 완전 제거) */
       function buildActionChipHtml(chipType) {
         if (!chipType) return '';
         var myId = (me && me.id) ? escapeHtml(me.id) : (hasUser ? escapeHtml(currentUser.id) : '');
@@ -13937,9 +13943,6 @@
         }
         if (chipType === 'pin' && myId) {
           return '<div><button type="button" class="bai-inline-act" id="change-my-pin">🔑 PIN 변경하기</button></div>';
-        }
-        if (chipType === 'kakao') {
-          return '<div><button type="button" class="bai-inline-act" data-kakao="1" style="background:#FEE500;border-color:#FEE500;color:#3C1E1E;">💬 카카오톡 문의 열기</button></div>';
         }
         return '';
       }
@@ -13966,7 +13969,7 @@
           return;
         }
         var actBtn = e.target.closest ? e.target.closest('.bai-inline-act') : null;
-        if (actBtn && !actBtn.hasAttribute('data-kakao')) {
+        if (actBtn) {
           setTimeout(closeFn, 60);
         }
       });
@@ -13993,63 +13996,89 @@
           author: authorLabel,
           screen_context: sctx
         }).then(function (r) {
+          sendBtn.disabled = false;
           var tk = r.ticket || {};
-          var shouldForwardQna = (!isAdm && (tk.forward_admin || tk.decision === 'BETA_AND_ASK'));
-          var qnaPromise = shouldForwardQna ? forwardToAdminQnaInbox(msg, '', '') : Promise.resolve({ forwarded: false });
+          if (tk.css_override && tk.decision !== 'REJECT') {
+            appendLiveHotfix(tk.css_override);
+          }
+          var replyText = tk.user_reply || '조금만 더 자세히 말씀해 주시면 바로 도와드릴게요 😊';
+          _chatHistory.push({ role: 'ai', text: replyText });
 
-          return qnaPromise.then(function (qnaRes) {
-            sendBtn.disabled = false;
-            if (tk.css_override && tk.decision !== 'REJECT') {
-              appendLiveHotfix(tk.css_override);
-            }
-            var replyText = tk.user_reply || '말씀해 주셔서 감사합니다 😊';
-            _chatHistory.push({ role: 'ai', text: replyText });
-
-            var statusPill = '';
-            if (tk.decision === 'AUTO_FIX') {
-              statusPill = '<div style="margin-top:6px;"><span class="bai-tier-badge bai-tier-1">🛠️ 실시간 수리 반영됨</span></div>';
-            } else if (tk.decision === 'BETA_AND_ASK') {
-              statusPill = '<div style="margin-top:6px;"><span class="bai-tier-badge bai-tier-2">🛠️ 베타 수리 접수 · 관리자 확인 대기</span></div>';
-            } else if (qnaRes && qnaRes.forwarded) {
-              statusPill = '<div style="margin-top:6px;"><span class="bai-tier-badge bai-tier-0">📨 관리자에게 전달 완료</span></div>';
-            } else if (shouldForwardQna && !hasUser) {
-              /* 비로그인 손님이 관리자에게 문의 남길 때만 말풍선 안에 미니 연락처 칸 표시 */
-              statusPill =
-                '<div class="bai-guest-mini" style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:0.76rem;">' +
-                  '<div style="color:var(--muted);margin-bottom:4px;">답변 받으실 이름과 연락처를 남겨주시면 관리자에게 바로 전달돼요:</div>' +
+          var extraHtml = '';
+          if (tk.decision === 'AUTO_FIX') {
+            var prob1 = tk.problem_summary || tk.title || msg;
+            extraHtml =
+              '<div style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:0.76rem;color:var(--muted);">' +
+                '🔍 <b>파악된 문제</b>: ' + escapeHtml(prob1) + '<br>' +
+                '<span class="bai-tier-badge bai-tier-1" style="margin-top:4px;">🛠️ 자율 수리 착수 · 관리자에게 요약 보고됨</span>' +
+              '</div>';
+          } else if (tk.decision === 'BETA_AND_ASK') {
+            var prob2 = tk.problem_summary || tk.title || msg;
+            extraHtml =
+              '<div style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:0.76rem;color:var(--muted);">' +
+                '🔍 <b>파악된 내용</b>: ' + escapeHtml(prob2) + '<br>' +
+                '<span class="bai-tier-badge bai-tier-2" style="margin-top:4px;">🛠️ 베타 선반영 · 관리자 확인 요청 보고됨</span>' +
+              '</div>';
+          } else if (tk.decision === 'ASK_FORWARD_ADMIN' && !isAdm) {
+            var summaryText = tk.admin_summary || tk.title || msg;
+            if (hasUser) {
+              extraHtml =
+                '<div class="bai-fwd-box" style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:0.77rem;">' +
+                  '<div style="color:var(--muted);margin-bottom:6px;">📝 <b>전달 요약</b>: ' + escapeHtml(summaryText) + '</div>' +
+                  '<button type="button" class="card-btn primary bai-confirm-fwd" style="padding:6px 12px;font-size:0.76rem;border-radius:8px;">📨 네, 관리자에게 전달하기</button>' +
+                '</div>';
+            } else {
+              extraHtml =
+                '<div class="bai-fwd-box" style="margin-top:8px;padding-top:7px;border-top:1px dashed var(--line);font-size:0.76rem;">' +
+                  '<div style="color:var(--muted);margin-bottom:4px;">📝 <b>전달 요약</b>: ' + escapeHtml(summaryText) + '</div>' +
+                  '<div style="color:var(--muted);margin-bottom:4px;">답변 받으실 이름과 연락처를 적고 전달을 눌러주세요:</div>' +
                   '<div style="display:flex;gap:4px;">' +
                     '<input type="text" class="modal-input bai-gm-name" placeholder="이름" style="width:70px;margin:0;padding:5px 7px;font-size:0.75rem;" />' +
                     '<input type="tel" class="modal-input bai-gm-phone" placeholder="01012345678" style="flex:1;margin:0;padding:5px 7px;font-size:0.75rem;" />' +
-                    '<button type="button" class="card-btn primary bai-gm-send" style="padding:5px 9px;font-size:0.75rem;">전달</button>' +
+                    '<button type="button" class="card-btn primary bai-confirm-fwd" style="padding:5px 10px;font-size:0.75rem;">📨 전달</button>' +
                   '</div>' +
                 '</div>';
             }
+          }
 
-            bubbleEl.innerHTML =
-              '<div style="white-space:pre-wrap;">' + escapeHtml(replyText) + '</div>' +
-              buildActionChipHtml(tk.action_chip) +
-              statusPill;
+          bubbleEl.innerHTML =
+            '<div style="white-space:pre-wrap;">' + escapeHtml(replyText) + '</div>' +
+            buildActionChipHtml(tk.action_chip) +
+            extraHtml;
 
-            var gmBtn = bubbleEl.querySelector('.bai-gm-send');
-            if (gmBtn) {
-              gmBtn.onclick = function () {
-                var gn = (bubbleEl.querySelector('.bai-gm-name').value || '').trim();
-                var gp = (bubbleEl.querySelector('.bai-gm-phone').value || '').trim();
-                if (!gn || !gp) return;
-                gmBtn.disabled = true;
-                forwardToAdminQnaInbox(msg, gn, gp).then(function (gr) {
-                  var mini = bubbleEl.querySelector('.bai-guest-mini');
-                  if (mini) {
-                    mini.innerHTML = gr.forwarded
-                      ? '<span class="bai-tier-badge bai-tier-0">📨 관리자에게 연락처와 함께 전달되었어요!</span>'
-                      : '<span style="color:var(--accent);">전달 실패 (연락처 형식을 확인해 주세요)</span>';
-                  }
-                });
-              };
-            }
-            scrollBottom();
-            inputEl.focus();
-          });
+          var fwdBtn = bubbleEl.querySelector('.bai-confirm-fwd');
+          if (fwdBtn) {
+            fwdBtn.onclick = function () {
+              var summaryText = tk.admin_summary || tk.title || msg;
+              var gnEl = bubbleEl.querySelector('.bai-gm-name');
+              var gpEl = bubbleEl.querySelector('.bai-gm-phone');
+              var gn = gnEl ? (gnEl.value || '').trim() : '';
+              var gp = gpEl ? (gpEl.value || '').trim() : '';
+              if (!hasUser && (!gn || !/^01[0-9]{8,9}$/.test(gp.replace(/[^0-9]/g, '')))) {
+                alert('답변을 받으실 이름과 정확한 연락처(01012345678)를 입력해 주세요.');
+                return;
+              }
+              fwdBtn.disabled = true;
+              fwdBtn.textContent = '전달 중…';
+              var formattedQna = '[AI 요약] ' + summaryText + '\n(내용: ' + msg + ')';
+              Promise.all([
+                forwardToAdminQnaInbox(formattedQna, gn, gp),
+                callHealBackend({
+                  op: 'confirm_forward',
+                  author: gn ? (gn + ' (비로그인)') : authorLabel,
+                  summary: summaryText,
+                  message: msg
+                }).catch(function () { return {}; })
+              ]).then(function () {
+                var box = bubbleEl.querySelector('.bai-fwd-box');
+                if (box) {
+                  box.innerHTML = '<span class="bai-tier-badge bai-tier-0">✅ 관리자에게 요약 전달 완료! 확인 후 답장해 드릴게요 😊</span>';
+                }
+              });
+            };
+          }
+          scrollBottom();
+          inputEl.focus();
         }).catch(function (err) {
           sendBtn.disabled = false;
           bubbleEl.innerHTML = '<span style="color:var(--accent);">잠시 연결이 지연되었어요. 다시 한 번 말씀해 주세요 🙏 (' + escapeHtml(err.message || String(err)) + ')</span>';

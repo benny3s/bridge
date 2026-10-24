@@ -1821,6 +1821,32 @@ exports.aiConcierge = functions
       return { ok: true, ticket: Object.assign({}, snap.data(), patch) };
     }
 
+    if (op === 'confirm_forward') {
+      const author = String((data && data.author) || '회원').slice(0, 60);
+      const summary = String((data && data.summary) || (data && data.message) || '').trim().slice(0, 600);
+      const rawMsg = String((data && data.message) || '').trim().slice(0, 1000);
+      const tid = 'qna-' + Date.now().toString(36);
+      const nowIso = new Date().toISOString();
+      const tk = {
+        id: tid,
+        created_at: nowIso,
+        updated_at: nowIso,
+        author,
+        is_admin: false,
+        message: rawMsg,
+        tier: 0,
+        decision: 'ASK_FORWARD_ADMIN',
+        worker: 'argon',
+        title: summary.slice(0, 28) || '회원 문의 전달',
+        admin_summary: summary,
+        reason: '사용자 확인 후 관리자에게 요약 전달됨',
+        status: 'admin_msg',
+        heal_log: '[📨 관리자 요약 전달] ' + summary
+      };
+      await db.collection('aiHealTickets').doc(tid).set(tk);
+      return { ok: true, ticket: tk, forwarded: true };
+    }
+
     if (op === 'heal_submit') {
       const msg = String((data && data.message) || '').trim().slice(0, 2000);
       if (!msg) throw new HttpsError('invalid-argument', '불편한 점이나 요청 내용을 입력해 주세요.');
@@ -1831,13 +1857,14 @@ exports.aiConcierge = functions
         ? '\n[이전대화]:\n' + rawHist.map((h) => `- ${h.role === 'ai' ? 'AI' : author}: ${String(h.text || '').slice(0, 250)}`).join('\n')
         : '';
       const sys = '당신은 프라이빗 지인 소개팅 웹앱 [베니브릿지]의 대화형 AI 도우미이자 심사관입니다. ' +
-        '메시지를 분류해 순수 JSON만 출력하세요:\n' +
-        '- Tier 1 (decision:"AUTO_FIX"): 오타, 문구 어색함, 모바일 터치/여백/레이아웃 깨짐, 다크모드 색상 오류, 콘솔 에러 방어, 또는 관리자(is_admin=true)의 직접 지시\n' +
-        '- Tier 2 (decision:"BETA_AND_ASK"): 매칭 규칙/신청 한도 변경, 새 기능/탭 추가, DB 구조 변경, 보안/인증 변경 (베타 선반영 후 허락 요청)\n' +
-        '- Tier 3 (decision:"REJECT"): 사진 블러 해제, 비번 요구, 타인 연락처 요구 등 보안 침해\n' +
-        '- Tier 0 (decision:"ADMIN_MSG_ONLY"): 일반 인사·대화·이용 질문(사진/대화 신청은 하루 각 3건 한도, 상대 승인 전 사진 블러 및 연락처 비공개)·휴면/탈퇴/PIN 문의·건의사항. 단순 질문이면 forward_admin=false, 관리자가 직접 확인/답장해야 하는 개인 문의·건의·승인 확인이면 forward_admin=true 로 설정하세요.\n' +
-        '- action_chip: 회원이 휴면/쉬기를 원하면 "deactivate", 탈퇴를 원하면 "delete", PIN 변경을 원하면 "pin", 카카오톡 문의를 원하면 "kakao", 그 외엔 ""\n' +
-        '출력 JSON 형식: {"tier":0,"decision":"ADMIN_MSG_ONLY","worker":"argon","forward_admin":false,"action_chip":"","title":"20자이내제목","reason":"판정사유","user_reply":"친근하고간결한대화답변(1~3문장)","fix_spec":"기술지시서","css_override":"CSS로즉시해결가능하면순수CSS코드(아니면빈문자열)"}';
+        '절대 카카오톡으로 문의하라고 안내하지 마세요. 모든 상담·불편 수리는 이 대화창에서 직접 해결합니다. 순수 JSON만 출력하세요:\n' +
+        '- decision:"CHAT_CONTINUE" (tier:0): 사용자가 "화면이나 버튼이 불편한 곳이 있어요", "관리자님께 문의할 게 있어요", "오류가 있어요"처럼 아직 구체적으로 어디가 어떻게 문제인지/무슨 용건인지 말하지 않은 경우(이때는 절대 전달하거나 수리하지 말고 어디가 어떻게 불편한지/무슨 문의인지 친절히 물어보세요), 또는 AI가 바로 답할 수 있는 이용 질문(사진/대화 신청은 하루 각 3건 한도, 상대 승인 전 사진 블러 및 연락처 비공개)\n' +
+        '- decision:"ASK_FORWARD_ADMIN" (tier:0): 사용자가 관리자에게 전달할 구체적인 용건(가입 승인 일정 확인, 건의사항 등 알맹이)을 말했을 때. 바로 전달하지 말고 user_reply로 "말씀하신 내용을 정리해서 관리자님께 전달해 드릴까요?"라고 묻고, admin_summary에 핵심 요약을 작성하세요.\n' +
+        '- decision:"AUTO_FIX" (tier:1): 대화를 통해 구체적으로 어느 화면·요소가 어떻게 문제인지(problem_summary)와 어떻게 고칠지(fix_spec)가 명확히 파악된 오타·문구·모바일 터치/여백/색상 오류 수리\n' +
+        '- decision:"BETA_AND_ASK" (tier:2): 구체적인 요구사항이 파악된 매칭 규칙/신청 한도 변경, 새 기능 추가 등 중요 변경\n' +
+        '- decision:"REJECT" (tier:3): 사진 블러 해제, 비번 요구, 타인 연락처 요구 등 보안 침해\n' +
+        '- action_chip: 회원이 휴면/쉬기를 원하면 "deactivate", 탈퇴를 원하면 "delete", PIN 변경을 원하면 "pin", 그 외엔 ""\n' +
+        '출력 JSON 형식: {"tier":0,"decision":"CHAT_CONTINUE","worker":"argon","action_chip":"","title":"20자이내제목","problem_summary":"문제원인요약","admin_summary":"관리자전달용핵심요약","reason":"판정사유","user_reply":"친근하고간결한대화답변(1~3문장)","fix_spec":"기술지시서","css_override":"CSS로즉시해결가능하면순수CSS코드(아니면빈문자열)"}';
       const uPrompt = `[제보자]: ${isAdmin ? '관리자(베니 님 본인 - is_admin=true)' : author}\n[화면맥락]: ${JSON.stringify(sctx)}${histText}\n[내용]: ${msg}`;
       const t0 = Date.now();
       let parsed = {};
@@ -1852,12 +1879,11 @@ exports.aiConcierge = functions
         } catch (e) {}
       }
       const tier = [0, 1, 2, 3].includes(Number(parsed.tier)) ? Number(parsed.tier) : (isAdmin ? 1 : 0);
-      const decision = ['AUTO_FIX', 'BETA_AND_ASK', 'ADMIN_MSG_ONLY', 'REJECT'].includes(parsed.decision)
+      const decision = ['CHAT_CONTINUE', 'ASK_FORWARD_ADMIN', 'AUTO_FIX', 'BETA_AND_ASK', 'REJECT'].includes(parsed.decision)
         ? parsed.decision
-        : (tier === 1 ? 'AUTO_FIX' : 'ADMIN_MSG_ONLY');
+        : (tier === 1 ? 'AUTO_FIX' : 'CHAT_CONTINUE');
       const worker = parsed.worker === 'argon' ? 'argon' : 'opus';
-      const forwardAdmin = !!parsed.forward_admin;
-      const actionChip = ['deactivate', 'delete', 'pin', 'kakao'].includes(String(parsed.action_chip || '').toLowerCase())
+      const actionChip = ['deactivate', 'delete', 'pin'].includes(String(parsed.action_chip || '').toLowerCase())
         ? String(parsed.action_chip).toLowerCase()
         : '';
       const tid = 'heal-' + Date.now().toString(36);
@@ -1873,21 +1899,22 @@ exports.aiConcierge = functions
         tier,
         decision,
         worker,
-        forward_admin: forwardAdmin,
         action_chip: actionChip,
         judge_via: 'Groq (' + usedModel + ')',
         title: String(parsed.title || msg.slice(0, 22)).trim(),
+        problem_summary: String(parsed.problem_summary || '').trim(),
+        admin_summary: String(parsed.admin_summary || '').trim(),
         reason: String(parsed.reason || '자동 분류됨').trim(),
-        user_reply: String(parsed.user_reply || '말씀해 주셔서 감사합니다! 확인 후 바로 도와드릴게요 😊').trim(),
+        user_reply: String(parsed.user_reply || '조금만 더 자세히 말씀해 주시면 바로 도와드릴게요 😊').trim(),
         fix_spec: String(parsed.fix_spec || msg).trim(),
         css_override: String(parsed.css_override || '').trim(),
-        status: decision === 'REJECT' ? 'rejected' : (decision === 'ADMIN_MSG_ONLY' ? 'admin_msg' : (decision === 'AUTO_FIX' ? 'auto_fixed' : 'awaiting_approval')),
+        status: decision === 'REJECT' ? 'rejected' : (decision === 'AUTO_FIX' ? 'auto_fixed' : (decision === 'BETA_AND_ASK' ? 'awaiting_approval' : 'chat')),
         latency_ms: Date.now() - t0,
         heal_log: decision === 'AUTO_FIX'
           ? '[🟢 Tier 1 판정] 자율 수리 큐 등록됨'
           : (decision === 'BETA_AND_ASK' ? '[🟡 Tier 2 판정] 베타 선반영 및 베니 님 허락 대기' : '')
       };
-      if (decision !== 'ADMIN_MSG_ONLY' || forwardAdmin) {
+      if (decision === 'AUTO_FIX' || decision === 'BETA_AND_ASK') {
         await db.collection('aiHealTickets').doc(tid).set(ticket);
       }
       return { ok: true, ticket };
