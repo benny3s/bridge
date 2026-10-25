@@ -405,9 +405,42 @@
       return Promise.resolve({ forwarded: false });
     }
 
-    var _chatHistory = [];
+    /* AI에게 보내는 단기 대화 맥락(현재 진행 중인 용건만 유지, 창을 닫거나 전달 완료 시 초기화하여 불필요한 이력 전송/토큰 낭비 방지) */
+    var _activeTurnHistory = [];
+    var CHAT_LOG_STORAGE_PREFIX = 'bb_bai_chat_v1:';
+
+    function getChatStorageKey() {
+      var isAdm = (typeof isAdminUnlocked !== 'undefined' && isAdminUnlocked);
+      if (isAdm) return CHAT_LOG_STORAGE_PREFIX + 'admin';
+      var uid = (typeof currentUser !== 'undefined' && currentUser && currentUser.id) ? currentUser.id : 'guest';
+      return CHAT_LOG_STORAGE_PREFIX + uid;
+    }
+
+    function loadScreenChatLog() {
+      try {
+        var raw = localStorage.getItem(getChatStorageKey());
+        var arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr.slice(-24) : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function saveScreenChatLog(arr) {
+      try {
+        localStorage.setItem(getChatStorageKey(), JSON.stringify((arr || []).slice(-24)));
+      } catch (e) {}
+    }
+
+    function pushScreenChatLog(role, text, meta) {
+      var arr = loadScreenChatLog();
+      arr.push({ role: role, text: String(text || ''), meta: meta || null, at: new Date().toISOString() });
+      saveScreenChatLog(arr);
+    }
 
     function openSelfHealModal(initialTab) {
+      /* 새 창을 열 때는 이전 대화 기록을 화면에는 보여주되, AI에게 보낼 단기 문맥은 새로 시작 */
+      _activeTurnHistory = [];
       var isAdm = (typeof isAdminUnlocked !== 'undefined' && isAdminUnlocked);
       var hasUser = (typeof currentUser !== 'undefined' && currentUser && currentUser.id);
       var me = (typeof currentState !== 'undefined' && typeof findMyEntry === 'function') ? findMyEntry(currentState) : null;
@@ -424,7 +457,8 @@
         '관리자님께 문의할 게 있어요'
       ];
 
-      var exHtml = '<div class="bai-ex-list" id="bai-ex-box">' +
+      var savedLog = loadScreenChatLog();
+      var exHtml = '<div class="bai-ex-list" id="bai-ex-box"' + (savedLog.length ? ' style="display:none;"' : '') + '>' +
         examples.map(function (q) {
           return '<button type="button" class="bai-ex-chip" data-ex="' + escapeHtml(q) + '">' + escapeHtml(q) + '</button>';
         }).join('') +
@@ -438,7 +472,10 @@
         '<div style="text-align:left;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
             '<h3 style="margin:0;font-size:1.05rem;">' + (isAdm ? '👑 AI 부관리자' : '✨ AI 도우미') + '</h3>' +
-            '<button type="button" id="bai-heal-close" style="border:0;background:none;font-size:1.3rem;color:var(--muted);cursor:pointer;line-height:1;">×</button>' +
+            '<div style="display:flex;align-items:center;gap:8px;">' +
+              '<button type="button" id="bai-clear-chat" style="border:1px solid var(--line);background:var(--paper);border-radius:6px;padding:2px 7px;font-size:0.72rem;color:var(--muted);cursor:pointer;' + (savedLog.length ? '' : 'display:none;') + '">기록 지우기</button>' +
+              '<button type="button" id="bai-heal-close" style="border:0;background:none;font-size:1.3rem;color:var(--muted);cursor:pointer;line-height:1;">×</button>' +
+            '</div>' +
           '</div>' +
           (isAdm ? (
             '<div style="display:flex;gap:5px;margin-bottom:10px;">' +
@@ -499,7 +536,9 @@
         return '';
       }
 
-      /* 기존 대화 내역이 이번 세션에 있으면 복원 */
+      var clearChatBtn = ov.querySelector('#bai-clear-chat');
+
+      /* 기존 대화 내역 화면 복원 (AI API로는 이전 세션 이력을 보내지 않고 화면 표시만 유지) */
       function appendBubble(role, htmlContent) {
         var row = document.createElement('div');
         row.className = 'bai-msg-row ' + (role === 'mine' ? 'mine' : 'ai');
@@ -511,6 +550,38 @@
         chatLog.appendChild(row);
         scrollBottom();
         return row;
+      }
+
+      function renderStoredItem(it) {
+        if (!it || !it.text) return;
+        if (it.role === 'user') {
+          appendBubble('mine', escapeHtml(it.text));
+          return;
+        }
+        var m = it.meta || {};
+        var extra = '';
+        if (m.badgeText) {
+          extra = '<div style="margin-top:6px;"><span class="bai-tier-badge ' + escapeHtml(m.badgeClass || 'bai-tier-0') + '">' + escapeHtml(m.badgeText) + '</span></div>';
+        }
+        appendBubble('ai', '<div style="white-space:pre-wrap;">' + escapeHtml(it.text) + '</div>' + buildActionChipHtml(m.action_chip || '') + extra);
+      }
+
+      if (savedLog.length) {
+        savedLog.forEach(renderStoredItem);
+      }
+
+      if (clearChatBtn) {
+        clearChatBtn.onclick = function () {
+          saveScreenChatLog([]);
+          _activeTurnHistory = [];
+          chatLog.innerHTML =
+            '<div class="bai-msg-row ai">' +
+              '<div class="bai-av">✨</div>' +
+              '<div class="bai-bubble">' + escapeHtml(greetingText) + '</div>' +
+            '</div>' +
+            exHtml;
+          clearChatBtn.style.display = 'none';
+        };
       }
 
       chatLog.addEventListener('click', function (e) {
@@ -532,9 +603,11 @@
         inputEl.value = '';
         var exBox = ov.querySelector('#bai-ex-box');
         if (exBox) exBox.style.display = 'none';
+        if (clearChatBtn) clearChatBtn.style.display = '';
 
         appendBubble('mine', escapeHtml(msg));
-        _chatHistory.push({ role: 'user', text: msg });
+        pushScreenChatLog('user', msg);
+        _activeTurnHistory.push({ role: 'user', text: msg });
 
         sendBtn.disabled = true;
         var loadingRow = appendBubble('ai', '<span style="color:var(--muted);">생각 중…</span>');
@@ -543,7 +616,7 @@
         callHealBackend({
           op: 'submit',
           message: msg,
-          history: _chatHistory.slice(-6),
+          history: _activeTurnHistory.slice(-4),
           is_admin: isAdm,
           author: authorLabel,
           screen_context: sctx
@@ -552,9 +625,10 @@
           var tk = r.ticket || {};
           /* 1차 대화 모델은 화면을 직접 건드리지 않고, PC 관제탑(Argon/Opus)이 검증 후 패치함 */
           var replyText = tk.user_reply || '조금만 더 자세히 말씀해 주시면 바로 도와드릴게요 😊';
-          _chatHistory.push({ role: 'ai', text: replyText });
+          _activeTurnHistory.push({ role: 'ai', text: replyText });
 
           var extraHtml = '';
+          var savedMeta = { action_chip: tk.action_chip || '' };
           if (tk.decision === 'AUTO_FIX') {
             var prob1 = tk.problem_summary || tk.title || msg;
             extraHtml =
@@ -562,6 +636,9 @@
                 '🔍 <b>파악된 문제</b>: ' + escapeHtml(prob1) + '<br>' +
                 '<span class="bai-tier-badge bai-tier-1" style="margin-top:4px;">🛠️ 자율 수리 착수 · 관리자에게 요약 보고됨</span>' +
               '</div>';
+            savedMeta.badgeClass = 'bai-tier-1';
+            savedMeta.badgeText = '🛠️ 자율 수리 착수 · 관리자에게 요약 보고됨';
+            _activeTurnHistory = [];
           } else if (tk.decision === 'BETA_AND_ASK') {
             var prob2 = tk.problem_summary || tk.title || msg;
             extraHtml =
@@ -569,6 +646,9 @@
                 '🔍 <b>파악된 내용</b>: ' + escapeHtml(prob2) + '<br>' +
                 '<span class="bai-tier-badge bai-tier-2" style="margin-top:4px;">🛠️ 베타 선반영 · 관리자 확인 요청 보고됨</span>' +
               '</div>';
+            savedMeta.badgeClass = 'bai-tier-2';
+            savedMeta.badgeText = '🛠️ 베타 선반영 · 관리자 확인 요청 보고됨';
+            _activeTurnHistory = [];
           } else if (tk.decision === 'ASK_FORWARD_ADMIN' && !isAdm) {
             var summaryText = tk.admin_summary || tk.title || msg;
             if (hasUser) {
@@ -590,6 +670,8 @@
                 '</div>';
             }
           }
+
+          pushScreenChatLog('ai', replyText, savedMeta);
 
           bubbleEl.innerHTML =
             '<div style="white-space:pre-wrap;">' + escapeHtml(replyText) + '</div>' +
@@ -620,6 +702,16 @@
                   message: msg
                 }).catch(function () { return {}; })
               ]).then(function () {
+                _activeTurnHistory = [];
+                var logs = loadScreenChatLog();
+                if (logs.length && logs[logs.length - 1].role === 'ai') {
+                  logs[logs.length - 1].meta = {
+                    action_chip: tk.action_chip || '',
+                    badgeClass: 'bai-tier-0',
+                    badgeText: '✅ 관리자에게 요약 전달 완료! 확인 후 답장해 드릴게요 😊'
+                  };
+                  saveScreenChatLog(logs);
+                }
                 var box = bubbleEl.querySelector('.bai-fwd-box');
                 if (box) {
                   box.innerHTML = '<span class="bai-tier-badge bai-tier-0">✅ 관리자에게 요약 전달 완료! 확인 후 답장해 드릴게요 😊</span>';
