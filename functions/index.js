@@ -1630,13 +1630,108 @@ function callGroqChat(apiKey, model, sysPrompt, userPrompt, maxTokens, temperatu
   });
 }
 
+function callOllamaCloudChat(apiKey, model, sysPrompt, userPrompt, maxTokens, temperature) {
+  return new Promise((resolve, reject) => {
+    const messages = [];
+    if (sysPrompt) messages.push({ role: 'system', content: sysPrompt });
+    messages.push({ role: 'user', content: userPrompt });
+    const body = JSON.stringify({
+      model: model || 'deepseek-v4.1-flash',
+      messages: messages,
+      max_tokens: maxTokens || 550,
+      temperature: typeof temperature === 'number' ? temperature : 0.35,
+      reasoning_effort: 'none'
+    });
+    const req = https.request({
+      hostname: 'ollama.com',
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + apiKey,
+        'Content-Type': 'application/json',
+        'User-Agent': 'benny-bridge/1.0',
+        'Content-Length': Buffer.byteLength(body)
+      },
+      timeout: 10000
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(raw);
+          const txt = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+          if (res.statusCode >= 200 && res.statusCode < 300 && txt) {
+            resolve({ text: String(txt).trim(), model: j.model || model || 'deepseek-v4.1-flash' });
+          } else {
+            reject(new Error((j && j.error && j.error.message) || ('HTTP ' + res.statusCode)));
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+function callAnthropicHaiku(apiKey, sysPrompt, userPrompt, maxTokens, temperature) {
+  return new Promise((resolve, reject) => {
+    const payload = {
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: maxTokens || 550,
+      temperature: typeof temperature === 'number' ? temperature : 0.35,
+      messages: [{ role: 'user', content: userPrompt }]
+    };
+    if (sysPrompt) payload.system = sysPrompt;
+    const body = JSON.stringify(payload);
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      },
+      timeout: 10000
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(raw);
+          const txt = j && Array.isArray(j.content) && j.content[0] && j.content[0].text;
+          if (res.statusCode >= 200 && res.statusCode < 300 && txt) {
+            resolve({ text: String(txt).trim(), model: j.model || 'claude-haiku-4-5-20251001' });
+          } else {
+            reject(new Error((j && j.error && j.error.message) || ('HTTP ' + res.statusCode)));
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+
 exports.aiConcierge = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 30, memory: '256MB' })
+  .runWith({ timeoutSeconds: 30, memory: '512MB' })
   .https.onCall(async (data, context) => {
+    if (data && (data.ping || data.op === 'ping')) return { ok: true, pong: 1 };
     if (!context.auth) throw new HttpsError('unauthenticated', '연결 확인 후 다시 시도해 주세요.');
     const apiKey = (process.env.GROQ_API_KEY || '').trim();
-    if (!apiKey) throw new HttpsError('failed-precondition', 'AI 컨시어지 키가 준비되지 않았어요.');
+    const ollamaKey = (process.env.OLLAMA_API_KEY || '').trim();
+    const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+    if (!apiKey && !ollamaKey && !anthropicKey) throw new HttpsError('failed-precondition', 'AI 컨시어지 키가 준비되지 않았어요.');
 
     const op = String((data && data.op) || '').trim();
     const isAdmin = !!(context.auth.token && context.auth.token.admin === 1);
@@ -1869,15 +1964,34 @@ exports.aiConcierge = functions
       const uPrompt = `[제보자]: ${isAdmin ? '관리자(베니 님 본인 - is_admin=true)' : author}\n[화면맥락]: ${JSON.stringify(sctx)}${histText}\n[내용]: ${msg}`;
       const t0 = Date.now();
       let parsed = {};
-      let usedModel = 'qwen/qwen3.8-27b';
-      for (const m of ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b']) {
+      let usedModel = 'deepseek-v4.1-flash';
+      if (ollamaKey) {
         try {
-          const r = await callGroqChat(apiKey, m, sys, uPrompt, 600, 0.4);
-          usedModel = r.model;
+          const r = await callOllamaCloudChat(ollamaKey, 'deepseek-v4.1-flash', sys, uPrompt, 550, 0.35);
+          usedModel = 'Ollama (' + r.model + ')';
           const clean = r.text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
           const jm = clean.match(/\{[\s\S]*\}/);
-          if (jm) { parsed = JSON.parse(jm[0]); break; }
+          if (jm) parsed = JSON.parse(jm[0]);
         } catch (e) {}
+      }
+      if (!parsed.decision && anthropicKey) {
+        try {
+          const r = await callAnthropicHaiku(anthropicKey, sys, uPrompt, 550, 0.35);
+          usedModel = 'Anthropic (' + r.model + ')';
+          const jm = r.text.match(/\{[\s\S]*\}/);
+          if (jm) parsed = JSON.parse(jm[0]);
+        } catch (e) {}
+      }
+      if (!parsed.decision && apiKey) {
+        for (const m of ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b']) {
+          try {
+            const r = await callGroqChat(apiKey, m, sys, uPrompt, 600, 0.4);
+            usedModel = 'Groq (' + r.model + ')';
+            const clean = r.text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+            const jm = clean.match(/\{[\s\S]*\}/);
+            if (jm) { parsed = JSON.parse(jm[0]); break; }
+          } catch (e) {}
+        }
       }
       const tier = [0, 1, 2, 3].includes(Number(parsed.tier)) ? Number(parsed.tier) : (isAdmin ? 1 : 0);
       const decision = ['CHAT_CONTINUE', 'ASK_FORWARD_ADMIN', 'AUTO_FIX', 'BETA_AND_ASK', 'REJECT'].includes(parsed.decision)
@@ -1907,7 +2021,7 @@ exports.aiConcierge = functions
         decision,
         worker,
         action_chip: actionChip,
-        judge_via: 'Groq (' + usedModel + ')',
+        judge_via: usedModel,
         title: String(parsed.title || msg.slice(0, 22)).trim(),
         problem_summary: String(parsed.problem_summary || '').trim(),
         admin_summary: String(parsed.admin_summary || '').trim(),
