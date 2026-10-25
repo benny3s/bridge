@@ -13755,13 +13755,39 @@
     }
 
     /* ── 👑 AI 부관리자: 현재 대기 중인 신청서 & 프로필 변경 건 수집 및 자동 처분 실행 ── */
+    function resolvePhoneForEntry(entry) {
+      if (!entry || !entry.id) return Promise.resolve('');
+      var decContacts = (typeof decryptedContacts !== 'undefined' && decryptedContacts) ? decryptedContacts : {};
+      if (decContacts[entry.id]) return Promise.resolve(decContacts[entry.id]);
+      if (typeof adminPrivateKey !== 'undefined' && adminPrivateKey && typeof decryptWithAdmin === 'function') {
+        if (entry.contactEnc) {
+          return decryptWithAdmin(adminPrivateKey, entry.contactEnc).then(function (v) {
+            if (v) decContacts[entry.id] = v;
+            return v || '';
+          }).catch(function () { return ''; });
+        }
+        if (typeof db !== 'undefined') {
+          return db.collection('adminOnly').doc(entry.id).get().then(function (doc) {
+            var d = doc && doc.exists ? doc.data() : null;
+            if (d && d.contactEnc) {
+              return decryptWithAdmin(adminPrivateKey, d.contactEnc).then(function (v) {
+                if (v) decContacts[entry.id] = v;
+                return v || '';
+              });
+            }
+            return '';
+          }).catch(function () { return ''; });
+        }
+      }
+      return Promise.resolve('');
+    }
+
     function gatherCoAdminTargets() {
       var st = (typeof currentState !== 'undefined' && currentState) ? currentState : {};
-      var decContacts = (typeof decryptedContacts !== 'undefined' && decryptedContacts) ? decryptedContacts : {};
       var pendList = (st.pendingEntries || []).filter(function (p) { return !p.heldReason && !p.rejectedAt; });
       var editList = (st.entries || []).filter(function (e) { return e.editReviewAt && !e.deactivated; });
 
-      /* 각 신청자의 첫 번째 사진(원본 또는 썸네일) 가져오기 */
+      /* 각 신청자의 첫 번째 사진(원본 또는 썸네일) 및 복호화된 전화번호 가져오기 */
       return Promise.all(pendList.slice(0, 12).map(function (p) {
         var pUrl = p.photoThumb || '';
         var pProm = (!p.isMatchmaker && typeof db !== 'undefined')
@@ -13770,7 +13796,9 @@
               return arr[0] || pUrl;
             }).catch(function () { return pUrl; })
           : Promise.resolve(pUrl);
-        return pProm.then(function (finalUrl) {
+        return Promise.all([pProm, resolvePhoneForEntry(p)]).then(function (pair) {
+          var finalUrl = pair[0];
+          var phoneStr = pair[1] || (p.pinSet || p.contactEnc ? '010-암호화보관확인' : '');
           return {
             id: p.id,
             nickname: p.nickname || '',
@@ -13784,29 +13812,32 @@
             dealbreaker: p.dealbreaker || '',
             photoCount: p.photoCount || (finalUrl ? 1 : 0),
             photoDataUrl: finalUrl || '',
-            phone: decContacts[p.id] || ''
+            phone: phoneStr
           };
         });
       })).then(function (pendingItems) {
-        var editItems = editList.slice(0, 15).map(function (e) {
-          return {
-            id: e.id,
-            nickname: e.nickname || '',
-            phone: decContacts[e.id] || '',
-            intro: e.intro || '',
-            idealType: e.idealType || '',
-            dealbreaker: e.dealbreaker || '',
-            region: e.region || '',
-            workplace: e.workplace || '',
-            editChanges: Array.isArray(e.editChanges) ? e.editChanges : []
+        return Promise.all(editList.slice(0, 15).map(function (e) {
+          return resolvePhoneForEntry(e).then(function (phoneStr) {
+            return {
+              id: e.id,
+              nickname: e.nickname || '',
+              phone: phoneStr || '',
+              intro: e.intro || '',
+              idealType: e.idealType || '',
+              dealbreaker: e.dealbreaker || '',
+              region: e.region || '',
+              workplace: e.workplace || '',
+              editChanges: Array.isArray(e.editChanges) ? e.editChanges : []
+            };
+          });
+        })).then(function (editItems) {
+          var statsSummary = {
+            pin_resets: ((st.pinResetReqs || []).filter(function (r) { return r.status === 'pending'; })).length,
+            reported_chats: (typeof _reportedChats !== 'undefined' && _reportedChats) ? Object.keys(_reportedChats).length : 0,
+            stale_requests: ((st.dateRequests || []).filter(function (r) { return !r.approved && !r.rejected && !r.held; })).length
           };
+          return { pending_items: pendingItems, edit_items: editItems, stats_summary: statsSummary };
         });
-        var statsSummary = {
-          pin_resets: ((st.pinResetReqs || []).filter(function (r) { return r.status === 'pending'; })).length,
-          reported_chats: (typeof _reportedChats !== 'undefined' && _reportedChats) ? Object.keys(_reportedChats).length : 0,
-          stale_requests: ((st.dateRequests || []).filter(function (r) { return !r.approved && !r.rejected && !r.held; })).length
-        };
-        return { pending_items: pendingItems, edit_items: editItems, stats_summary: statsSummary };
       });
     }
 
@@ -13980,6 +14011,33 @@
         '관리자님께 문의할 게 있어요'
       ];
 
+      /* 로그인 회원이거나 승인 대기 본인이면 베니 님(관리자)과 주고받은 메시지 내역도 함께 표시 + 읽음 처리 */
+      var adminThread = [];
+      if (!isAdm && hasUser && typeof threadFor === 'function' && typeof currentState !== 'undefined' && currentState) {
+        try {
+          adminThread = threadFor(currentState, currentUser.id, 'user') || [];
+          localStorage.setItem('bb-admsg-seen:' + currentUser.id, new Date().toISOString());
+        } catch (e) {}
+      }
+      var adminRepliesHtml = '';
+      if (adminThread.length) {
+        adminRepliesHtml =
+          '<div id="bai-admin-thread-box" style="margin-bottom:8px;padding:8px 10px;background:var(--gold-soft, #fffbeb);border:1px solid var(--gold, #d97706);border-radius:12px;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+              '<span style="font-size:0.76rem;font-weight:800;color:var(--accent);">👑 관리자와 주고받은 메시지 (' + adminThread.length + '건)</span>' +
+              (typeof deleteMyThread === 'function' ? '<button type="button" id="bai-del-admin-thread" style="border:0;background:none;font-size:0.7rem;color:var(--muted);cursor:pointer;text-decoration:underline;">내역 비우기</button>' : '') +
+            '</div>' +
+            adminThread.slice(-10).map(function (m) {
+              var isFromAdm = m.from === 'admin';
+              var dt = (typeof fmtDate === 'function' && m.at) ? fmtDate(m.at) : '';
+              return '<div style="padding:5px 7px;margin-top:4px;border-radius:8px;background:' + (isFromAdm ? 'var(--card, #fff)' : 'rgba(0,0,0,0.03)') + ';font-size:0.79rem;">' +
+                '<div style="font-size:0.7rem;color:var(--muted);margin-bottom:2px;"><b>' + (isFromAdm ? '👑 베니브릿지 관리자' : '🙋 내가 보낸 문의') + '</b> · ' + escapeHtml(dt) + '</div>' +
+                '<div style="white-space:pre-wrap;word-break:break-word;color:var(--ink);font-weight:' + (isFromAdm ? '600' : '400') + ';">' + escapeHtml(m.text || '') + '</div>' +
+              '</div>';
+            }).join('') +
+          '</div>';
+      }
+
       var savedLog = loadScreenChatLog();
       var exHtml = '<div class="bai-ex-list" id="bai-ex-box"' + (savedLog.length ? ' style="display:none;"' : '') + '>' +
         examples.map(function (q) {
@@ -13994,7 +14052,7 @@
       var ov = openModal(
         '<div style="text-align:left;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
-            '<h3 style="margin:0;font-size:1.05rem;">' + (isAdm ? '👑 AI 부관리자' : '✨ AI 도우미') + '</h3>' +
+            '<h3 style="margin:0;font-size:1.05rem;">' + (isAdm ? '👑 AI 부관리자' : '✨ AI 도우미 · 관리자 문의') + '</h3>' +
             '<div style="display:flex;align-items:center;gap:8px;">' +
               '<button type="button" id="bai-clear-chat" style="border:1px solid var(--line);background:var(--paper);border-radius:6px;padding:2px 7px;font-size:0.72rem;color:var(--muted);cursor:pointer;' + (savedLog.length ? '' : 'display:none;') + '">기록 지우기</button>' +
               '<button type="button" id="bai-heal-close" style="border:0;background:none;font-size:1.3rem;color:var(--muted);cursor:pointer;line-height:1;">×</button>' +
@@ -14010,6 +14068,7 @@
           '<div id="bai-pane-coadmin" style="display:' + (isAdm ? 'block' : 'none') + ';"></div>' +
           '<div id="bai-pane-submit" style="display:' + (isAdm ? 'none' : 'block') + ';">' +
             '<div class="bai-chat-log" id="bai-chat-log">' +
+              adminRepliesHtml +
               '<div class="bai-msg-row ai">' +
                 '<div class="bai-av">✨</div>' +
                 '<div class="bai-bubble">' + escapeHtml(greetingText) + '</div>' +
@@ -14034,6 +14093,19 @@
       ov.addEventListener('click', function (e) {
         if (e.target === ov) closeFn();
       });
+
+      var delAdmBtn = ov.querySelector('#bai-del-admin-thread');
+      if (delAdmBtn && typeof modalConfirm === 'function' && typeof deleteMyThread === 'function') {
+        delAdmBtn.onclick = function () {
+          modalConfirm('메시지 내역 비우기', '관리자와 주고받은 메시지 내역을 모두 지울까요?').then(function (ok) {
+            if (!ok) return;
+            deleteMyThread().then(function () {
+              var box = ov.querySelector('#bai-admin-thread-box');
+              if (box) box.remove();
+            });
+          });
+        };
+      }
 
       var chatLog = ov.querySelector('#bai-chat-log');
       var sendBtn = ov.querySelector('#bai-heal-send');
@@ -14271,8 +14343,8 @@
           var st = (typeof currentState !== 'undefined' && currentState) ? currentState : {};
           var pendCount = ((st.pendingEntries || []).filter(function (p) { return !p.heldReason && !p.rejectedAt; })).length;
           var editCount = ((st.entries || []).filter(function (e) { return e.editReviewAt && !e.deactivated; })).length;
-          var autoOn = false;
-          try { autoOn = localStorage.getItem(AUTO_COADMIN_KEY) === '1'; } catch (e) {}
+          var autoOn = true;
+          try { autoOn = localStorage.getItem(AUTO_COADMIN_KEY) !== '0'; } catch (e) {}
 
           paneCoAdmin.innerHTML =
             '<div class="bai-ctx-box" style="margin-bottom:10px;">' +
@@ -14282,7 +14354,7 @@
             '</div>' +
             '<label style="display:flex;align-items:center;gap:8px;font-size:0.8rem;padding:8px 11px;background:var(--paper);border:1px solid var(--gold);border-radius:10px;margin-bottom:10px;cursor:pointer;">' +
               '<input type="checkbox" id="bai-auto-coadmin-chk" ' + (autoOn ? 'checked' : '') + ' />' +
-              '<span><b>자동 부관리자 모드 켜기</b> (관리자 접속 중 새 신청·프로필 변경 감지 시 자동 심사·승인·텔레그램 보고)</span>' +
+              '<span><b>자동 부관리자 모드 켜기 (기본 ON)</b> (새 신청·프로필 변경 감지 시 자동 심사·승인·텔레그램 보고)</span>' +
             '</label>' +
             '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
               '<button type="button" class="card-btn primary" id="bai-run-audit" style="flex:1;padding:9px;">🔍 지금 심사 + 텔레그램 보고받기</button>' +
@@ -14292,8 +14364,7 @@
 
           paneCoAdmin.querySelector('#bai-auto-coadmin-chk').onchange = function (e) {
             try {
-              if (e.target.checked) localStorage.setItem(AUTO_COADMIN_KEY, '1');
-              else localStorage.removeItem(AUTO_COADMIN_KEY);
+              localStorage.setItem(AUTO_COADMIN_KEY, e.target.checked ? '1' : '0');
             } catch (err) {}
           };
 
@@ -14500,8 +14571,8 @@
     function maybeRunAutoCoAdmin() {
       if (_autoRunning) return;
       if (typeof isAdminUnlocked === 'undefined' || !isAdminUnlocked) return;
-      var autoOn = false;
-      try { autoOn = localStorage.getItem(AUTO_COADMIN_KEY) === '1'; } catch (e) {}
+      var autoOn = true;
+      try { autoOn = localStorage.getItem(AUTO_COADMIN_KEY) !== '0'; } catch (e) {}
       if (!autoOn) return;
 
       var st = (typeof currentState !== 'undefined' && currentState) ? currentState : {};
@@ -14548,15 +14619,25 @@
       if (fbBtn.textContent !== label) fbBtn.textContent = label;
     }
 
-    /* 상단 #feedback-btn (기존 💬 Q&A 자리) 클릭을 가로채어 통합 AI 도우미·문의 모달 실행 */
+    /* 상단 #feedback-btn 뿐 아니라 대화 탭의 [👑 베니브릿지 관리자], 내 현황의 [✍️ 관리자에게 메시지],
+       승인 대기 화면의 [💬 관리자에게 문의 남기기], 체크인 팝업의 [💬 의견 남기기] 모두 AI 도우미 창으로 완전 통합 */
     document.addEventListener('click', function (e) {
-      var t = e.target && e.target.closest ? e.target.closest('#feedback-btn') : null;
+      var t = e.target && e.target.closest
+        ? e.target.closest('#feedback-btn, #member-msg-open, [data-action="applicant-inquiry"], #ci-feedback')
+        : null;
       if (!t) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       var isAdm = (typeof isAdminUnlocked !== 'undefined' && isAdminUnlocked);
-      openSelfHealModal(isAdm ? 'coadmin' : 'submit');
+      openSelfHealModal((isAdm && t.id === 'feedback-btn') ? 'coadmin' : 'submit');
     }, true);
+
+    if (typeof openMemberMsgCenter === 'function') {
+      openMemberMsgCenter = function () { openSelfHealModal('submit'); };
+    }
+    if (typeof openGuestMsgModal === 'function') {
+      openGuestMsgModal = function () { openSelfHealModal('submit'); };
+    }
 
     if (typeof paint === 'function') {
       var _origPaint = paint;

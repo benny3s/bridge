@@ -1732,7 +1732,7 @@ exports.aiConcierge = functions
     const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim();
     const op = String((data && data.op) || '').trim();
 
-    /* PC 관제탑이 켜졌을 때 클라우드(Firestore)에 밀려 있던 미처리 안건을 수거해 가는 전용 동기화 엔드포인트 */
+    /* PC 관제탑이 켜졌을 때 클라우드(Firestore)에 밀려 있던 미처리 안건 + 신규 신청서/프로필 변경 건을 수거해 가는 전용 동기화 엔드포인트 */
     if (op === 'pc_sync_pull') {
       const syncKey = String((data && data.sync_key) || '').trim();
       const expected = (ollamaKey || apiKey).slice(0, 24);
@@ -1746,7 +1746,181 @@ exports.aiConcierge = functions
         batch.update(docSnap.ref, { pc_synced: true, pc_synced_at: nowIso });
       });
       if (pending.length > 0) await batch.commit();
-      return { ok: true, pending_tickets: pending };
+
+      /* 미심사 신규 신청서(pendingEntries) 및 미검토 프로필 수정(editReviewAt) 조회 */
+      const stSnap = await db.doc('app/state').get();
+      const st = stSnap.data() || {};
+      const nowMs = Date.now();
+      const rawPend = (st.pendingEntries || []).filter((p) => {
+        if (!p || p.heldReason || p.rejectedAt || p.aiAuditedAt) return false;
+        const subMs = p.submittedAt ? new Date(p.submittedAt).getTime() : 0;
+        return !subMs || (nowMs - subMs > 4000);
+      }).slice(0, 8);
+      const rawEdits = (st.entries || []).filter((e) => e && e.editReviewAt && !e.deactivated && e.aiEditAuditedAt !== e.editReviewAt).slice(0, 12);
+
+      const pendingItems = [];
+      for (const p of rawPend) {
+        let photoUrl = p.photoThumb || '';
+        if (!p.isMatchmaker) {
+          try {
+            const pDoc = await db.collection('photos').doc(p.id).get();
+            const arr = (pDoc.exists && pDoc.data() && Array.isArray(pDoc.data().photos)) ? pDoc.data().photos : [];
+            if (arr[0]) photoUrl = arr[0];
+          } catch (e) {}
+        }
+        let phoneStr = '';
+        try {
+          const sc = (await db.doc('sendContacts/' + p.id).get()).data();
+          if (sc && sc.enc) phoneStr = decPhone(sc.enc) || '010-암호화보관확인';
+          else if (sc && sc.ph) phoneStr = '010-암호화보관확인';
+        } catch (e) {}
+        if (!phoneStr) {
+          try {
+            const ao = (await db.collection('adminOnly').doc(p.id).get()).data();
+            if ((ao && ao.contactEnc) || p.contactEnc || p.pinSet) phoneStr = '010-암호화보관확인';
+          } catch (e) {}
+        }
+        pendingItems.push({
+          id: p.id,
+          nickname: p.nickname || '',
+          isMatchmaker: !!p.isMatchmaker,
+          gender: p.gender || '',
+          birthYear: p.birthYear || '',
+          region: p.region || '',
+          workplace: p.workplace || '',
+          intro: p.intro || '',
+          idealType: p.idealType || '',
+          dealbreaker: p.dealbreaker || '',
+          photoCount: p.photoCount || (photoUrl ? 1 : 0),
+          photoDataUrl: photoUrl || '',
+          phone: phoneStr
+        });
+      }
+
+      const editItems = rawEdits.map((e) => ({
+        id: e.id,
+        nickname: e.nickname || '',
+        phone: '',
+        intro: e.intro || '',
+        idealType: e.idealType || '',
+        dealbreaker: e.dealbreaker || '',
+        region: e.region || '',
+        workplace: e.workplace || '',
+        editReviewAt: e.editReviewAt,
+        editChanges: Array.isArray(e.editChanges) ? e.editChanges : []
+      }));
+
+      return {
+        ok: true,
+        pending_tickets: pending,
+        coadmin_targets: { pending_items: pendingItems, edit_items: editItems }
+      };
+    }
+
+    /* PC 관제탑이 부관리자 심사(신규 신청 승인/보류 및 프로필 변경 검토)를 마친 뒤 결과를 Firestore에 반영 */
+    if (op === 'pc_coadmin_apply') {
+      const syncKey = String((data && data.sync_key) || '').trim();
+      const expected = (ollamaKey || apiKey).slice(0, 24);
+      if (!expected || syncKey !== expected) throw new HttpsError('permission-denied', '동기화 키 불일치');
+      const pendRes = Array.isArray(data && data.pending_results) ? data.pending_results : [];
+      const editRes = Array.isArray(data && data.edit_results) ? data.edit_results : [];
+      const approveMap = {}, holdMap = {}, confirmMap = {}, flagMap = {};
+      pendRes.forEach((r) => {
+        if (r && r.id) {
+          if (r.action === 'APPROVE') approveMap[r.id] = r;
+          else if (r.action === 'HOLD') holdMap[r.id] = r;
+        }
+      });
+      editRes.forEach((r) => {
+        if (r && r.id) {
+          if (r.action === 'CONFIRM_EDIT') confirmMap[r.id] = r;
+          else if (r.action === 'FLAG_EDIT') flagMap[r.id] = r;
+        }
+      });
+
+      const stateRef = db.doc('app/state');
+      const approvedEntries = [];
+      const heldEntries = [];
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(stateRef);
+        const s = snap.data() || {};
+        const entries = (s.entries || []).slice();
+        const pend = (s.pendingEntries || []).slice();
+        const msgs = (s.messages || []).slice();
+        const logs = (s.logs || []).slice();
+        const nowIso = new Date().toISOString();
+
+        /* 다음 고유번호 계산 (성별별 101번~) */
+        const nextSerialFor = (gender, curEntries, curPend) => {
+          if (!gender) return null;
+          let max = 100;
+          curEntries.concat(curPend).forEach((x) => {
+            if (x && x.gender === gender && typeof x.serial === 'number' && x.serial > max) max = x.serial;
+          });
+          return max + 1;
+        };
+
+        const nextPend = [];
+        pend.forEach((p) => {
+          if (!p || !p.id) return;
+          if (approveMap[p.id]) {
+            const ent = Object.assign({}, p);
+            if (!ent.isMatchmaker && !ent.serial) ent.serial = nextSerialFor(ent.gender, entries, nextPend);
+            delete ent.rejectedReason; delete ent.rejectedAt; delete ent.heldReason; delete ent.heldAt;
+            ent.aiAuditedAt = nowIso;
+            if (!ent.lastSeenAt) ent.lastSeenAt = nowIso;
+            entries.push(ent);
+            approvedEntries.push(ent);
+            const welcomeText = ent.isMatchmaker
+              ? '🎉 주선자 계정이 승인되었어요! 내 현황 탭에서 소개할 친구 프로필을 등록하고 매칭을 시작해 보세요 😊'
+              : '🎉 베니브릿지 가입이 승인되었어요! 명단 탭에서 마음에 드는 분께 사진·대화 신청(하루 각 3건)을 보내 보세요 😊';
+            msgs.push({ id: nodeCrypto.randomUUID(), entryId: ent.id, from: 'admin', text: welcomeText, at: nowIso, auto: true });
+            logs.push(logItem('admin', 'AI 부관리자', '신청 자동 승인 · ' + (ent.nickname || '')));
+          } else if (holdMap[p.id]) {
+            const heldCopy = Object.assign({}, p, {
+              heldReason: holdMap[p.id].hold_reason || '프로필 사진 및 소개글 보완이 필요해요.',
+              heldAt: nowIso,
+              aiAuditedAt: nowIso
+            });
+            nextPend.push(heldCopy);
+            heldEntries.push(heldCopy);
+            logs.push(logItem('admin', 'AI 부관리자', '신청 보완 요청(보류) · ' + (heldCopy.nickname || '')));
+          } else {
+            nextPend.push(p);
+          }
+        });
+
+        const nextEntries = entries.map((e) => {
+          if (!e || !e.id) return e;
+          if (confirmMap[e.id]) {
+            const c = Object.assign({}, e);
+            delete c.editReviewAt;
+            delete c.editChanges;
+            delete c.aiEditAuditedAt;
+            logs.push(logItem('admin', 'AI 부관리자', '프로필 변경 확인 완료 · ' + (c.nickname || '')));
+            return c;
+          }
+          if (flagMap[e.id]) {
+            return Object.assign({}, e, { aiEditAuditedAt: e.editReviewAt || nowIso });
+          }
+          return e;
+        });
+
+        tx.update(stateRef, {
+          pendingEntries: nextPend,
+          entries: nextEntries,
+          messages: msgs,
+          logs: logs.slice(-500)
+        });
+      });
+
+      for (const ent of approvedEntries) {
+        await sendTo(ent.id, '🎉 베니브릿지 가입 승인 완료', '신청서가 승인되었어요! 지금 앱에서 명단을 확인해 보세요.', { route: 'list' }).catch(() => {});
+      }
+      for (const h of heldEntries) {
+        await sendTo(h.id, '📝 베니브릿지 신청서 보완 안내', h.heldReason || '신청서 보완 안내가 도착했어요.', { route: 'mine' }).catch(() => {});
+      }
+      return { ok: true, approved: approvedEntries.length, held: heldEntries.length };
     }
 
     if (!context.auth) throw new HttpsError('unauthenticated', '연결 확인 후 다시 시도해 주세요.');
