@@ -14570,25 +14570,31 @@
         function renderBroadcastPane() {
           var st = (typeof currentState !== 'undefined' && currentState) ? currentState : {};
           var liveEntries = (st.entries || []).filter(function (e) { return !e.managedBy && !e.deactivated; });
-          var maleEntries = liveEntries.filter(function (e) { return !e.isMatchmaker && e.gender === 'M'; });
-          var femaleEntries = liveEntries.filter(function (e) { return !e.isMatchmaker && e.gender === 'F'; });
+          var maleEntries = liveEntries.filter(function (e) { return !e.isMatchmaker && (e.gender === 'male' || e.gender === 'M'); });
+          var femaleEntries = liveEntries.filter(function (e) { return !e.isMatchmaker && (e.gender === 'female' || e.gender === 'F'); });
           var mmEntries = liveEntries.filter(function (e) { return !!e.isMatchmaker; });
 
           var nowMs = Date.now();
           var staleIdMap = {};
-          ((st.photoRequests || []).concat(st.talkRequests || [])).forEach(function (r) {
-            if (r && r.status === 'pending' && r.toId && r.createdAt && (nowMs - new Date(r.createdAt).getTime() > 48 * 3600 * 1000)) {
+          ((st.dateRequests || []).concat(st.photoRequests || []).concat(st.talkRequests || [])).forEach(function (r) {
+            var isPend = r && (!r.approved && !r.rejected && (!r.status || r.status === 'pending'));
+            var dtStr = r && (r.submittedAt || r.createdAt);
+            if (isPend && r.toId && dtStr && (nowMs - new Date(dtStr).getTime() > 48 * 3600 * 1000)) {
               staleIdMap[r.toId] = true;
             }
           });
           var staleEntries = liveEntries.filter(function (e) { return !!staleIdMap[e.id]; });
 
           var matchedIdMap = {};
-          ((st.talkRequests || [])).forEach(function (r) {
-            if (r && r.status === 'approved') {
+          ((st.dateRequests || []).concat(st.talkRequests || [])).forEach(function (r) {
+            if (r && (r.approved || r.status === 'approved') && (!r.type || r.type === 'contact')) {
               if (r.fromId) matchedIdMap[r.fromId] = true;
               if (r.toId) matchedIdMap[r.toId] = true;
             }
+          });
+          (st.connections || []).forEach(function (c) {
+            if (c && c.a) matchedIdMap[c.a] = true;
+            if (c && c.b) matchedIdMap[c.b] = true;
           });
           var matchedEntries = liveEntries.filter(function (e) { return !!matchedIdMap[e.id]; });
 
