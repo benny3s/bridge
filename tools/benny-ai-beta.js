@@ -550,9 +550,7 @@
         }).then(function (r) {
           sendBtn.disabled = false;
           var tk = r.ticket || {};
-          if (tk.css_override && tk.decision !== 'REJECT') {
-            appendLiveHotfix(tk.css_override);
-          }
+          /* 1차 대화 모델은 화면을 직접 건드리지 않고, PC 관제탑(Argon/Opus)이 검증 후 패치함 */
           var replyText = tk.user_reply || '조금만 더 자세히 말씀해 주시면 바로 도와드릴게요 😊';
           _chatHistory.push({ role: 'ai', text: replyText });
 
