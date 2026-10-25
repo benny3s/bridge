@@ -1935,6 +1935,43 @@ exports.aiConcierge = functions
       return { ok: true, tickets };
     }
 
+    if (op === 'draft_broadcast') {
+      if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 공지 문구를 생성할 수 있어요.');
+      const topic = clip(data && data.topic, 300) || '주변 싱글 친구에게 베니브릿지 소개 부탁';
+      const stats = (data && data.stats) || {};
+      const sysMsg = '너는 지인 기반 프라이빗 소개팅 웹앱 "베니브릿지"의 다정하고 센스 있는 운영 매니저야. 관리자(베니 님)가 회원들에게 보낼 공지/메시지 또는 지인 소개 유도 문구를 작성해줘. 딱딱한 기계식 안내문을 피하고 따뜻하고 신뢰감 있는 말투(3~5문장)로 작성해. JSON 형식으로만 답해: {"title":"제목(25자 이내)","text":"본문(300자 이내)"}';
+      const userMsg = '[현재 현황]\n' + JSON.stringify(stats) + '\n\n[요청 주제]\n' + topic;
+      try {
+        if (ollamaKey) {
+          const r = await fetch('https://ollama.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + ollamaKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'deepseek-v3.2',
+              messages: [{ role: 'system', content: sysMsg }, { role: 'user', content: userMsg }],
+              temperature: 0.45,
+              max_tokens: 450,
+              response_format: { type: 'json_object' }
+            })
+          });
+          if (r.ok) {
+            const j = await r.json();
+            const raw = (((j.choices || [])[0] || {}).message || {}).content || '';
+            const m = raw.match(/\{[\s\S]*\}/);
+            if (m) {
+              const p = JSON.parse(m[0]);
+              if (p.text) return { ok: true, title: clip(p.title, 50) || '💌 베니브릿지 소식', text: clip(p.text, 800) };
+            }
+          }
+        }
+      } catch (e) {}
+      return {
+        ok: true,
+        title: '💌 베니브릿지 소식 & 친구 초대',
+        text: '안녕하세요! 최근 베니브릿지에 매력적인 새 멤버분들이 합류했어요 😊 명단 탭에서 반가운 인연을 찾아보시고, 주변의 좋은 싱글 친구분께도 베니브릿지를 살짝 소개해 주세요 💕'
+      };
+    }
+
     if (op === 'coadmin_audit') {
       if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 AI 부관리자 심사를 실행할 수 있어요.');
       const pendingItems = Array.isArray(data && data.pending_items) ? data.pending_items.slice(0, 12) : [];

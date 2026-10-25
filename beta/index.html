@@ -13669,13 +13669,31 @@
           user_reply: '잠시 쉬기(프로필 비노출)나 PIN 변경은 [내 공간] 탭 하단이나 아래 바로가기 버튼으로 즉시 설정하실 수 있어요 😊'
         };
       }
-      if (s === '화면이나버튼이불편한곳이있어요' || s === '화면이불편해요' || s === '버튼이불편해요' || s === '오류가있어요') {
+      if (s.indexOf('친구에게이사이트소개') >= 0 || s.indexOf('주변친구에게') >= 0 || s.indexOf('친구소개') >= 0 || s.indexOf('사이트소개') >= 0 || s.indexOf('친구초대') >= 0 || s.indexOf('공유하고싶') >= 0) {
+        return {
+          tier: 0,
+          decision: 'CHAT_CONTINUE',
+          action_chip: 'share_invite',
+          title: '주변 친구 초대 & 카톡 소개 문구',
+          user_reply: '와, 주변의 좋은 분께 베니브릿지를 소개해주신다니 정말 감사해요! 💕\n광고 느낌 없이 카톡에 바로 복사해서 보낼 수 있는 상황별 추천 문구 3가지를 준비했어요. 아래에서 마음에 드는 문구를 골라 복사·공유해 보세요 😊'
+        };
+      }
+      if (s.indexOf('첫인사뭐라고') >= 0 || s.indexOf('매칭된분께첫인사') >= 0 || s.indexOf('첫인사추천') >= 0 || s.indexOf('아이스브레이커') >= 0 || s.indexOf('첫마디') >= 0) {
+        return {
+          tier: 0,
+          decision: 'CHAT_CONTINUE',
+          action_chip: 'icebreaker',
+          title: '매칭 후 센스 있는 첫인사 코치',
+          user_reply: '연결된 분께 첫 마디를 건네는 순간이 가장 설레고도 긴장되죠 😊\n상대방이 부담 없이 기분 좋게 답장할 수 있는 맞춤형 첫인사 문구를 아래에 준비했어요! 눌러서 복사한 뒤 대화방에 바로 보내보세요 💬'
+        };
+      }
+      if (s === '화면이나버튼이불편한곳이있어요' || s === '화면이불편하거나관리자님께문의할래요' || s === '화면이불편해요' || s === '버튼이불편해요' || s === '오류가있어요') {
         return {
           tier: 0,
           decision: 'CHAT_CONTINUE',
           action_chip: '',
-          title: '불편 사항 확인',
-          user_reply: '어느 화면(예: 명단, 내 공간, 신청서)에서 어떤 버튼이나 문구가 불편하셨는지 편하게 알려주시면 원인을 파악해 바로 고쳐볼게요 😊'
+          title: '불편 사항 및 관리자 문의 확인',
+          user_reply: '어느 화면(예: 명단, 내 공간, 신청서)이 불편하셨는지, 혹은 관리자님께 전하고 싶은 말씀이 무엇인지 편하게 적어주시면 바로 도와드릴게요 😊'
         };
       }
       if (s === '관리자님께문의할게있어요' || s === '관리자한테메세지보내고싶어' || s === '관리자한테메시지보내고싶어' || s === '관리자에게메시지보내고싶어') {
@@ -13699,7 +13717,7 @@
           });
         }
       }
-      var timeoutMs = (payload && payload.op === 'coadmin_audit') ? 22000 : 4500;
+      var timeoutMs = (payload && (payload.op === 'coadmin_audit' || payload.op === 'draft_broadcast')) ? 22000 : 4500;
       function callCloudFallback() {
         if (typeof callFn === 'function') {
           var fnOp = payload.op === 'list'
@@ -13710,7 +13728,9 @@
                     ? 'heal_reject'
                     : (payload.op === 'coadmin_audit'
                         ? 'coadmin_audit'
-                        : (payload.op === 'confirm_forward' ? 'confirm_forward' : 'heal_submit'))));
+                        : (payload.op === 'draft_broadcast'
+                            ? 'draft_broadcast'
+                            : (payload.op === 'confirm_forward' ? 'confirm_forward' : 'heal_submit')))));
           return callFn('aiConcierge', Object.assign({}, payload, { op: fnOp })).then(function (r) {
             return (r && r.data) ? r.data : r;
           });
@@ -14007,8 +14027,9 @@
       ] : [
         '사진·대화 신청은 하루 몇 번 돼요?',
         '잠시 쉬거나 PIN을 바꾸고 싶어요',
-        '화면이나 버튼이 불편한 곳이 있어요',
-        '관리자님께 문의할 게 있어요'
+        '💌 주변 친구에게 이 사이트 소개해줄래요',
+        '💬 매칭된 분께 첫인사 뭐라고 보낼까요?',
+        '화면이 불편하거나 관리자님께 문의할래요'
       ];
 
       /* 로그인 회원이거나 승인 대기 본인이면 읽음 처리 + 실제 관리자가 직접 답장한 메시지만 말풍선으로 표시
@@ -14058,13 +14079,15 @@
             '</div>' +
           '</div>' +
           (isAdm ? (
-            '<div style="display:flex;gap:5px;margin-bottom:10px;">' +
-              '<button type="button" class="card-btn primary" id="bai-tab-coadmin" style="flex:1.15;padding:6px 4px;font-size:0.78rem;">👑 부관리자</button>' +
-              '<button type="button" class="card-btn" id="bai-tab-submit" style="flex:1;padding:6px 4px;font-size:0.78rem;">💬 대화·수리</button>' +
-              '<button type="button" class="card-btn" id="bai-tab-list" style="flex:1;padding:6px 4px;font-size:0.78rem;">📋 대기함</button>' +
+            '<div style="display:flex;gap:4px;margin-bottom:10px;">' +
+              '<button type="button" class="card-btn primary" id="bai-tab-coadmin" style="flex:1.05;padding:6px 3px;font-size:0.75rem;">👑 부관리자</button>' +
+              '<button type="button" class="card-btn" id="bai-tab-broadcast" style="flex:1.05;padding:6px 3px;font-size:0.75rem;">📣 공지·케어</button>' +
+              '<button type="button" class="card-btn" id="bai-tab-submit" style="flex:1;padding:6px 3px;font-size:0.75rem;">💬 대화·수리</button>' +
+              '<button type="button" class="card-btn" id="bai-tab-list" style="flex:0.95;padding:6px 3px;font-size:0.75rem;">📋 대기함</button>' +
             '</div>'
           ) : '') +
           '<div id="bai-pane-coadmin" style="display:' + (isAdm ? 'block' : 'none') + ';"></div>' +
+          '<div id="bai-pane-broadcast" style="display:none;"></div>' +
           '<div id="bai-pane-submit" style="display:' + (isAdm ? 'none' : 'block') + ';">' +
             '<div class="bai-chat-log" id="bai-chat-log">' +
               '<div class="bai-msg-row ai">' +
@@ -14113,6 +14136,64 @@
         }
         if (chipType === 'pin' && myId) {
           return '<div><button type="button" class="bai-inline-act" id="change-my-pin">🔑 PIN 변경하기</button></div>';
+        }
+        if (chipType === 'share_invite') {
+          var shareUrl = 'https://benny3s.github.io/bridge/';
+          var tpl1 = '야 내가 요즘 지인 소개로만 조용히 운영하는 소개팅 페이지(베니브릿지) 하나 알게 됐는데, 신원 확실한 분들만 있어서 분위기 깔끔하더라! 너도 가볍게 프로필 구경해봐 😊\n👉 ' + shareUrl;
+          var tpl2 = '혹시 요즘 좋은 분 만날 기회 찾으셨나요? 지인 기반으로 운영자가 한 분씩 직접 확인해서 안전하게 연결해 주는 \'베니브릿지\'라는 곳인데 깔끔해서 추천드려요 ✨\n👉 ' + shareUrl;
+          return '<div style="margin-top:8px;display:flex;flex-direction:column;gap:7px;">' +
+            '<div style="background:var(--paper);border:1px solid var(--gold, #C08A34);border-radius:10px;padding:8px 10px;">' +
+              '<div style="font-size:0.73rem;font-weight:700;color:var(--accent);margin-bottom:3px;">💬 ① 찐친에게 편하게 보내는 카톡 문구</div>' +
+              '<div style="font-size:0.78rem;color:var(--ink);white-space:pre-wrap;margin-bottom:6px;">' + escapeHtml(tpl1) + '</div>' +
+              '<div style="display:flex;gap:6px;">' +
+                '<button type="button" class="card-btn primary" data-copy-txt="' + escapeHtml(tpl1) + '" style="padding:4px 10px;font-size:0.73rem;">📋 문구 복사</button>' +
+                '<button type="button" class="card-btn" data-share-txt="' + escapeHtml(tpl1) + '" style="padding:4px 10px;font-size:0.73rem;">🔗 바로 공유</button>' +
+              '</div>' +
+            '</div>' +
+            '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:8px 10px;">' +
+              '<div style="font-size:0.73rem;font-weight:700;color:var(--ink);margin-bottom:3px;">✨ ② 직장 동료·지인에게 정중하게 추천하는 문구</div>' +
+              '<div style="font-size:0.78rem;color:var(--ink);white-space:pre-wrap;margin-bottom:6px;">' + escapeHtml(tpl2) + '</div>' +
+              '<div style="display:flex;gap:6px;">' +
+                '<button type="button" class="card-btn primary" data-copy-txt="' + escapeHtml(tpl2) + '" style="padding:4px 10px;font-size:0.73rem;">📋 문구 복사</button>' +
+                '<button type="button" class="card-btn" data-share-txt="' + escapeHtml(tpl2) + '" style="padding:4px 10px;font-size:0.73rem;">🔗 바로 공유</button>' +
+              '</div>' +
+            '</div>' +
+            '<div style="background:var(--gold-soft, #fffbeb);border:1px dashed var(--gold, #C08A34);border-radius:10px;padding:7px 10px;font-size:0.76rem;color:var(--ink);">' +
+              '🤝 <b>친구가 직접 가입하기 쑥스러워하나요?</b><br>내가 주선자(매니저)가 되어 친구 프로필을 대신 등록해주고 좋은 인연을 찾아줄 수도 있어요!' +
+              (hasUser ? '<div style="margin-top:5px;"><button type="button" class="bai-inline-act" data-goto-tab="my" style="margin-top:0;">👉 내 공간 탭에서 확인하기</button></div>' : '') +
+            '</div>' +
+          '</div>';
+        }
+        if (chipType === 'icebreaker') {
+          var partner = null;
+          if (me && typeof currentState !== 'undefined' && currentState && typeof canViewContactOf === 'function') {
+            var matchedList = (currentState.entries || []).filter(function (x) {
+              return x.id !== me.id && !x.isMatchmaker && canViewContactOf(currentState, me.id, x.id);
+            });
+            if (matchedList.length) partner = matchedList[matchedList.length - 1];
+          }
+          var pName = partner && partner.nickname ? (partner.nickname + '님') : '상대방분';
+          var pHint = partner && partner.region ? ('(' + partner.region + ')') : '';
+          var ib1 = '안녕하세요 ' + pName + '! 프로필에서 분위기랑 소개글이 참 따뜻해 보여서 반가운 마음에 먼저 인사드려요 😊 오늘 하루 어떻게 보내셨나요?';
+          var ib2 = (partner && partner.intro)
+            ? ('안녕하세요 ' + pName + '! 소개글을 읽다 보니 취향이나 결이 비슷한 부분이 많아서 꼭 한 번 대화 나눠보고 싶었어요 😊 주말엔 주로 어떻게 시간 보내시나요?')
+            : '안녕하세요! 매칭되어 정말 반가워요 😊 맛집이나 분위기 좋은 카페 탐방 좋아하시는지 궁금해요. 편하게 대화 나눠요!';
+          var ib3 = '반갑습니다 ' + pName + ' 😊 서로 부담 없이 일상 이야기부터 천천히 알아가면 좋겠어요! 평일 퇴근 후엔 주로 뭐 하시면서 쉬시나요?';
+          return '<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">' +
+            '<div style="font-size:0.74rem;font-weight:700;color:var(--accent);">💡 ' + escapeHtml(pName + pHint) + '께 보내기 좋은 맞춤 첫인사 3선</div>' +
+            [ib1, ib2, ib3].map(function (line, i) {
+              return '<div style="background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:7px 9px;font-size:0.78rem;">' +
+                '<div style="margin-bottom:5px;color:var(--ink);">' + escapeHtml(line) + '</div>' +
+                '<button type="button" class="card-btn primary" data-copy-txt="' + escapeHtml(line) + '" style="padding:3px 9px;font-size:0.72rem;">📋 첫인사 ' + (i + 1) + ' 복사</button>' +
+              '</div>';
+            }).join('') +
+            (myId ? (
+              '<div style="margin-top:2px;padding:6px 9px;background:var(--gold-soft, #fffbeb);border-radius:9px;font-size:0.74rem;display:flex;justify-content:space-between;align-items:center;gap:6px;">' +
+                '<span>💕 혹시 좋은 만남을 시작하셨나요?</span>' +
+                '<button type="button" class="bai-inline-act" data-action="deactivate" data-id="' + myId + '" style="margin-top:0;padding:3px 8px;">💤 잠시 쉬기 전환</button>' +
+              '</div>'
+            ) : '') +
+          '</div>';
         }
         return '';
       }
@@ -14171,6 +14252,46 @@
         if (exBtn) {
           var q = exBtn.getAttribute('data-ex') || '';
           if (q) sendChatMessage(q);
+          return;
+        }
+        var copyBtn = e.target.closest ? e.target.closest('[data-copy-txt]') : null;
+        if (copyBtn) {
+          var txt = copyBtn.getAttribute('data-copy-txt') || '';
+          if (txt && navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(txt).then(function () {
+              var orig = copyBtn.textContent;
+              copyBtn.textContent = '✅ 복사 완료!';
+              setTimeout(function () { copyBtn.textContent = orig; }, 1800);
+            });
+          } else if (txt) {
+            var ta = document.createElement('textarea');
+            ta.value = txt;
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); } catch (err) {}
+            ta.remove();
+            var orig2 = copyBtn.textContent;
+            copyBtn.textContent = '✅ 복사 완료!';
+            setTimeout(function () { copyBtn.textContent = orig2; }, 1800);
+          }
+          return;
+        }
+        var shareBtn = e.target.closest ? e.target.closest('[data-share-txt]') : null;
+        if (shareBtn) {
+          var stxt = shareBtn.getAttribute('data-share-txt') || '';
+          if (navigator.share) {
+            navigator.share({ title: '베니브릿지 초대', text: stxt, url: 'https://benny3s.github.io/bridge/' }).catch(function () {});
+          } else if (typeof handleShare === 'function') {
+            handleShare();
+          }
+          return;
+        }
+        var gotoBtn = e.target.closest ? e.target.closest('[data-goto-tab]') : null;
+        if (gotoBtn) {
+          var tab = gotoBtn.getAttribute('data-goto-tab');
+          closeFn();
+          var tabBtn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
+          if (tabBtn) tabBtn.click();
           return;
         }
         var actBtn = e.target.closest ? e.target.closest('.bai-inline-act') : null;
@@ -14320,9 +14441,11 @@
 
       if (isAdm) {
         var btnCoAdmin = ov.querySelector('#bai-tab-coadmin');
+        var btnBroadcast = ov.querySelector('#bai-tab-broadcast');
         var btnSubmit = ov.querySelector('#bai-tab-submit');
         var btnList = ov.querySelector('#bai-tab-list');
         var paneCoAdmin = ov.querySelector('#bai-pane-coadmin');
+        var paneBroadcast = ov.querySelector('#bai-pane-broadcast');
         var paneSubmit = ov.querySelector('#bai-pane-submit');
         var paneList = ov.querySelector('#bai-pane-list');
 
@@ -14337,14 +14460,14 @@
             '<div class="bai-ctx-box" style="margin-bottom:10px;">' +
               '👑 <b>AI 부관리자 심사 기준</b><br>' +
               '1. <b>신규 신청서 (대기 ' + pendCount + '건)</b>: ① 정면 얼굴 사진(Vision 판독) · ② <code>010-XXXX-XXXX</code> 정상 번호 · ③ 자기소개 적절성 확인 → <b>정상 시 승인 / 미달 시 사유 안내 후 보류</b><br>' +
-              '2. <b>프로필 변경 (미검토 ' + editCount + '건)</b>: 기존 승인 내용 대비 이상 변경(내용 삭제·욕설·비정상 번호) 없으면 <b>자동 확인 완료</b>, 이상 시 베니 님께 경고 보고' +
+              '2. <b>프로필 변경 (미검토 ' + editCount + '건)</b>: 기존 승인 내용 대비 이상 변경(내용 삭제·욕설·비정상 번호) 없으면 <b>자동 확인 완료</b>, 이상 시 베니 비서로 경고 보고' +
             '</div>' +
             '<label style="display:flex;align-items:center;gap:8px;font-size:0.8rem;padding:8px 11px;background:var(--paper);border:1px solid var(--gold);border-radius:10px;margin-bottom:10px;cursor:pointer;">' +
               '<input type="checkbox" id="bai-auto-coadmin-chk" ' + (autoOn ? 'checked' : '') + ' />' +
-              '<span><b>자동 부관리자 모드 켜기 (기본 ON)</b> (새 신청·프로필 변경 감지 시 자동 심사·승인·텔레그램 보고)</span>' +
+              '<span><b>자동 부관리자 모드 켜기 (기본 ON)</b> (새 신청·이상 변경 감지 시 자동 심사·승인·📱 베니 비서 보고)</span>' +
             '</label>' +
             '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
-              '<button type="button" class="card-btn primary" id="bai-run-audit" style="flex:1;padding:9px;">🔍 지금 심사 + 텔레그램 보고받기</button>' +
+              '<button type="button" class="card-btn primary" id="bai-run-audit" style="flex:1;padding:9px;">🔍 지금 심사 + 📱 베니 비서 보고</button>' +
               '<button type="button" class="card-btn approve" id="bai-run-auto-exec" style="flex:1;padding:9px;">⚡ 심사 후 승인·확인 즉시 집행</button>' +
             '</div>' +
             '<div id="bai-coadmin-out"></div>';
@@ -14366,7 +14489,7 @@
                 edit_items: targets.edit_items,
                 stats_summary: targets.stats_summary,
                 send_report: true,
-                force_telegram: true
+                force_report: true
               });
             }).then(function (res) {
               var pList = res.pending_results || [];
@@ -14376,10 +14499,10 @@
                 var html = '';
                 if (execSummary) {
                   html += '<div class="bai-step-card" style="border-color:#137333;background:#e6f4ea;color:#137333;font-weight:700;margin-bottom:8px;">' +
-                    '✅ AI 부관리자 집행 완료: 신청 자동 승인 ' + execSummary.approved + '건 · 보완 보류 ' + execSummary.held + '건 · 프로필 변경 확인 ' + execSummary.confirmed + '건 (텔레그램 브리핑 발송됨)' +
+                    '✅ AI 부관리자 집행 완료: 신청 자동 승인 ' + execSummary.approved + '건 · 보완 보류 ' + execSummary.held + '건 · 프로필 변경 확인 ' + execSummary.confirmed + '건 (📱 핸드폰 베니 비서 브리핑 완료)' +
                   '</div>';
                 } else {
-                  html += '<div style="font-size:0.78rem;color:var(--gold);font-weight:700;margin-bottom:6px;">📨 베니 님 텔레그램으로 점검 브리핑 보고서를 전송했습니다.</div>';
+                  html += '<div style="font-size:0.78rem;color:var(--gold);font-weight:700;margin-bottom:6px;">📱 핸드폰 베니 비서 알림함으로 점검 브리핑 보고서를 전송했습니다.</div>';
                 }
 
                 if (!pList.length && !eList.length) {
@@ -14442,6 +14565,229 @@
 
           paneCoAdmin.querySelector('#bai-run-audit').onclick = function () { runAuditFlow(false); };
           paneCoAdmin.querySelector('#bai-run-auto-exec').onclick = function () { runAuditFlow(true); };
+        }
+
+        function renderBroadcastPane() {
+          var st = (typeof currentState !== 'undefined' && currentState) ? currentState : {};
+          var liveEntries = (st.entries || []).filter(function (e) { return !e.managedBy && !e.deactivated; });
+          var maleEntries = liveEntries.filter(function (e) { return !e.isMatchmaker && e.gender === 'M'; });
+          var femaleEntries = liveEntries.filter(function (e) { return !e.isMatchmaker && e.gender === 'F'; });
+          var mmEntries = liveEntries.filter(function (e) { return !!e.isMatchmaker; });
+
+          var nowMs = Date.now();
+          var staleIdMap = {};
+          ((st.photoRequests || []).concat(st.talkRequests || [])).forEach(function (r) {
+            if (r && r.status === 'pending' && r.toId && r.createdAt && (nowMs - new Date(r.createdAt).getTime() > 48 * 3600 * 1000)) {
+              staleIdMap[r.toId] = true;
+            }
+          });
+          var staleEntries = liveEntries.filter(function (e) { return !!staleIdMap[e.id]; });
+
+          var matchedIdMap = {};
+          ((st.talkRequests || [])).forEach(function (r) {
+            if (r && r.status === 'approved') {
+              if (r.fromId) matchedIdMap[r.fromId] = true;
+              if (r.toId) matchedIdMap[r.toId] = true;
+            }
+          });
+          var matchedEntries = liveEntries.filter(function (e) { return !!matchedIdMap[e.id]; });
+
+          var genderHint = maleEntries.length > femaleEntries.length
+            ? '여성 싱글 지인'
+            : (femaleEntries.length > maleEntries.length ? '남성 싱글 지인' : '괜찮은 싱글 친구');
+
+          var presets = {
+            referral: {
+              target: 'all',
+              title: '💌 주변의 좋은 친구에게 베니브릿지를 소개해 주세요!',
+              text: '안녕하세요! 현재 베니브릿지에는 총 ' + (maleEntries.length + femaleEntries.length) + '명의 회원분들과 ' + mmEntries.length + '분의 주선자님이 함께하고 있어요 😊\n지인 소개로 조용하고 안전하게 운영되는 공간인 만큼, 주변에 ' + genderHint + '이 계시다면 베니브릿지를 살짝 소개해 주시거나 주선자로 등록해 주시면 매칭 풀이 더욱 풍성해집니다 💕\n(AI 도우미 창에서 카톡 초대 문구도 바로 복사하실 수 있어요!)'
+            },
+            weekend: {
+              target: 'all',
+              title: '✨ 이번 주 새로 합류한 분들을 명단에서 만나보세요!',
+              text: '안녕하세요! 이번 주에도 매력적이고 진지한 새 멤버분들이 베니브릿지에 합류했어요 😊\n명단 탭을 가볍게 둘러보시고, 대화 나눠보고 싶은 분께 오늘의 사진·대화 신청(하루 각 3건)을 보내 보세요!'
+            },
+            stale: {
+              target: 'stale',
+              title: '⏰ 도착한 신청이 답변을 기다리고 있어요 😊',
+              text: '안녕하세요! 회원님께 도착한 사진/대화 신청이 애타게 확인을 기다리고 있어요 😊\n바쁘시더라도 잠시 [내 공간] 또는 [요청] 탭에 들러 승인·보류·거절 여부를 편하게 선택해 주시면 상대방분께 큰 배려가 됩니다 🙏'
+            },
+            matched: {
+              target: 'matched',
+              title: '💕 연결된 분과 좋은 대화 나누고 계신가요?',
+              text: '안녕하세요! 베니브릿지를 통해 연결되신 분과 기분 좋은 대화 이어가고 계신지 안부 인사드려요 😊\n혹시 첫인사가 고민되시면 [✨ AI 도우미]에서 맞춤 첫인사 추천을 받아보실 수 있고, 좋은 만남을 시작하셨다면 [잠시 쉬기]로 언제든 편하게 전환하실 수 있어요 💕'
+            }
+          };
+
+          paneBroadcast.innerHTML =
+            '<div class="bai-ctx-box" style="margin-bottom:8px;">' +
+              '📊 <b>현재 발송 가능 대상 현황</b><br>' +
+              '• 전체 활동 계정 <b>' + liveEntries.length + '명</b> (남성 <b>' + maleEntries.length + '명</b> · 여성 <b>' + femaleEntries.length + '명</b> · 주선자 <b>' + mmEntries.length + '명</b>)<br>' +
+              '• ⏰ 48시간+ 미응답 요청 보유: <b>' + staleEntries.length + '명</b> · 💌 연결(매칭) 성사 회원: <b>' + matchedEntries.length + '명</b>' +
+            '</div>' +
+            '<div style="font-size:0.76rem;font-weight:700;color:var(--ink);margin-bottom:5px;">✨ 원클릭 AI 메시지 테마 선택 (누르면 자동 입력)</div>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;">' +
+              '<button type="button" class="bai-ex-chip" data-bc-preset="referral">💌 주변 친구 소개 부탁 (성비 맞춤)</button>' +
+              '<button type="button" class="bai-ex-chip" data-bc-preset="weekend">🎉 신규 합류 & 주말 명단 안내</button>' +
+              '<button type="button" class="bai-ex-chip" data-bc-preset="stale">⏰ 미응답 요청 다정한 케어 (' + staleEntries.length + '명)</button>' +
+              '<button type="button" class="bai-ex-chip" data-bc-preset="matched">💕 매칭 회원 안부·성사 체크 (' + matchedEntries.length + '명)</button>' +
+            '</div>' +
+            '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">' +
+              '<span style="font-size:0.78rem;font-weight:700;flex-shrink:0;">🎯 발송 대상:</span>' +
+              '<select id="bai-bc-target" style="flex:1;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:0.8rem;background:var(--paper);color:var(--ink);">' +
+                '<option value="all">전체 활동 회원 (' + liveEntries.length + '명)</option>' +
+                '<option value="M">남성 회원만 (' + maleEntries.length + '명)</option>' +
+                '<option value="F">여성 회원만 (' + femaleEntries.length + '명)</option>' +
+                '<option value="mm">주선자만 (' + mmEntries.length + '명)</option>' +
+                '<option value="stale">⏰ 48시간+ 미응답 요청 회원만 (' + staleEntries.length + '명)</option>' +
+                '<option value="matched">💌 연결(매칭) 성사 회원만 (' + matchedEntries.length + '명)</option>' +
+              '</select>' +
+              '<button type="button" class="card-btn" id="bai-bc-ai-polish" style="flex:none;padding:6px 10px;font-size:0.75rem;">✨ AI 문구 생성</button>' +
+            '</div>' +
+            '<input type="text" class="modal-input" id="bai-bc-title" maxlength="60" value="' + escapeHtml(presets.referral.title) + '" placeholder="공지 제목 또는 AI에게 시킬 주제 입력" style="margin-bottom:6px;font-weight:700;font-size:0.84rem;" />' +
+            '<textarea class="modal-input" id="bai-bc-text" rows="4" maxlength="900" placeholder="메시지 본문 (비워두고 [✨ AI 문구 생성]을 누르면 제목/주제로 자동 작성해요)" style="font-size:0.82rem;line-height:1.5;margin-bottom:8px;">' + escapeHtml(presets.referral.text) + '</textarea>' +
+            '<div style="display:flex;flex-direction:column;gap:6px;">' +
+              '<button type="button" class="card-btn primary" id="bai-bc-send-msg" style="width:100%;padding:9px;font-size:0.82rem;">💬 선택 대상 대화창(👑 관리자 답장 말풍선)으로 발송</button>' +
+              '<div style="display:flex;gap:6px;">' +
+                '<button type="button" class="card-btn" id="bai-bc-send-popup" style="flex:1;padding:8px;font-size:0.76rem;">📢 전체 1회성 팝업 띄우기</button>' +
+                '<button type="button" class="card-btn approve" id="bai-bc-send-checkin" style="flex:1.15;padding:8px;font-size:0.76rem;">📅 친구공유 팝업(🔗 공유버튼 포함) 발송</button>' +
+              '</div>' +
+            '</div>' +
+            '<div id="bai-bc-status" style="margin-top:8px;font-size:0.78rem;"></div>';
+
+          var targetSel = paneBroadcast.querySelector('#bai-bc-target');
+          var titleInp = paneBroadcast.querySelector('#bai-bc-title');
+          var textInp = paneBroadcast.querySelector('#bai-bc-text');
+          var statusEl = paneBroadcast.querySelector('#bai-bc-status');
+
+          Array.prototype.forEach.call(paneBroadcast.querySelectorAll('[data-bc-preset]'), function (btn) {
+            btn.onclick = function () {
+              var k = btn.getAttribute('data-bc-preset');
+              var p = presets[k];
+              if (!p) return;
+              targetSel.value = p.target;
+              titleInp.value = p.title;
+              textInp.value = p.text;
+              statusEl.innerHTML = '<span style="color:var(--gold);font-weight:700;">✨ 테마 문구가 입력되었어요. 내용 확인 후 아래 발송 버튼을 눌러주세요!</span>';
+            };
+          });
+
+          var aiPolishBtn = paneBroadcast.querySelector('#bai-bc-ai-polish');
+          if (aiPolishBtn) {
+            aiPolishBtn.onclick = function () {
+              var topic = (titleInp.value || textInp.value || '주변 싱글 친구 소개 독려').trim();
+              aiPolishBtn.disabled = true;
+              aiPolishBtn.textContent = '작성 중…';
+              statusEl.innerHTML = '<span style="color:var(--muted);">⏳ AI가 현재 회원 현황에 맞춰 다정한 문구를 작성하고 있어요…</span>';
+              callHealBackend({
+                op: 'draft_broadcast',
+                topic: topic,
+                stats: {
+                  total_active: liveEntries.length,
+                  male: maleEntries.length,
+                  female: femaleEntries.length,
+                  matchmakers: mmEntries.length,
+                  stale_requests: staleEntries.length,
+                  matched_members: matchedEntries.length,
+                  target_group: targetSel.value
+                }
+              }).then(function (r) {
+                aiPolishBtn.disabled = false;
+                aiPolishBtn.textContent = '✨ AI 문구 생성';
+                if (r && r.title) titleInp.value = r.title;
+                if (r && r.text) textInp.value = r.text;
+                statusEl.innerHTML = '<span style="color:#137333;font-weight:700;">✅ AI가 맞춤 문구를 완성했어요!</span>';
+              }).catch(function () {
+                aiPolishBtn.disabled = false;
+                aiPolishBtn.textContent = '✨ AI 문구 생성';
+                statusEl.innerHTML = '<span style="color:var(--accent);">문구 생성 중 지연이 발생했어요. 왼쪽 테마 칩을 눌러 바로 사용하실 수 있어요.</span>';
+              });
+            };
+          }
+
+          function getTargetEntries(targetKey) {
+            if (targetKey === 'M') return maleEntries;
+            if (targetKey === 'F') return femaleEntries;
+            if (targetKey === 'mm') return mmEntries;
+            if (targetKey === 'stale') return staleEntries;
+            if (targetKey === 'matched') return matchedEntries;
+            return liveEntries;
+          }
+
+          paneBroadcast.querySelector('#bai-bc-send-msg').onclick = function () {
+            var tKey = targetSel.value;
+            var targets = getTargetEntries(tKey);
+            var title = (titleInp.value || '').trim();
+            var body = (textInp.value || '').trim();
+            if (!body) {
+              statusEl.innerHTML = '<span style="color:var(--accent);font-weight:700;">메시지 본문을 입력해 주세요.</span>';
+              return;
+            }
+            if (!targets.length) {
+              statusEl.innerHTML = '<span style="color:var(--accent);font-weight:700;">선택한 대상 그룹에 해당하는 회원이 현재 0명입니다.</span>';
+              return;
+            }
+            var fullMsg = title ? ('[' + title + ']\n' + body) : body;
+            var sendBtnEl = paneBroadcast.querySelector('#bai-bc-send-msg');
+            sendBtnEl.disabled = true;
+            sendBtnEl.textContent = '발송 중…';
+            db.runTransaction(function (tx) {
+              return tx.get(stateRef).then(function (doc) {
+                var s = doc.data() || {};
+                var now = Date.now();
+                var targetIds = {};
+                targets.forEach(function (x) { targetIds[x.id] = true; });
+                var newMsgs = Object.keys(targetIds).map(function (eid, i) {
+                  return {
+                    id: (typeof genId === 'function') ? genId() : ('adm-' + now + '-' + i),
+                    entryId: eid,
+                    from: 'admin',
+                    text: fullMsg,
+                    at: new Date(now + i).toISOString(),
+                    broadcast: tKey === 'all'
+                  };
+                });
+                var msgs = (s.messages || []).concat(newMsgs);
+                if (msgs.length > 5000) msgs = msgs.slice(msgs.length - 5000);
+                tx.update(stateRef, { messages: msgs });
+              });
+            }).then(function () {
+              if (typeof appendLog === 'function') appendLog('admin', 'AI 부관리자', '맞춤 메시지 발송(' + tKey + ') · ' + targets.length + '명');
+              if (typeof refreshNow === 'function') return refreshNow();
+            }).then(function () {
+              sendBtnEl.disabled = false;
+              sendBtnEl.textContent = '💬 선택 대상 대화창(👑 관리자 답장 말풍선)으로 발송';
+              statusEl.innerHTML = '<span style="color:#137333;font-weight:700;">✅ 총 ' + targets.length + '명의 대화창(👑 관리자 답장 말풍선)으로 발송 완료!</span>';
+            }).catch(function (err) {
+              sendBtnEl.disabled = false;
+              sendBtnEl.textContent = '💬 선택 대상 대화창(👑 관리자 답장 말풍선)으로 발송';
+              statusEl.innerHTML = '<span style="color:var(--accent);">발송 실패: ' + escapeHtml(err.message || String(err)) + '</span>';
+            });
+          };
+
+          paneBroadcast.querySelector('#bai-bc-send-popup').onclick = function () {
+            var title = (titleInp.value || '📢 공지').trim();
+            var body = (textInp.value || '').trim();
+            if (!body || typeof setOneOffPopup !== 'function') return;
+            setOneOffPopup(title, body).then(function () {
+              statusEl.innerHTML = '<span style="color:#137333;font-weight:700;">✅ 전체 회원에게 다음 접속 시 1회성 팝업으로 뜨도록 예약되었어요!</span>';
+            });
+          };
+
+          paneBroadcast.querySelector('#bai-bc-send-checkin').onclick = function () {
+            var title = (titleInp.value || '💌 베니브릿지 소식 & 친구 공유').trim();
+            var body = (textInp.value || '').trim();
+            if (!body || typeof saveCheckinCfg !== 'function') return;
+            saveCheckinCfg({
+              title: title,
+              text: body,
+              enabled: true,
+              since: Date.now(),
+              forceVer: String(Date.now())
+            }).then(function () {
+              statusEl.innerHTML = '<span style="color:#137333;font-weight:700;">✅ [🔗 친구에게 공유] 버튼이 포함된 팝업 문구를 갱신하고 전 회원에게 즉시 발송했어요!</span>';
+            });
+          };
         }
 
         function loadTicketList() {
@@ -14527,14 +14873,19 @@
         }
 
         function switchAdminModalTab(which) {
-          [btnCoAdmin, btnSubmit, btnList].forEach(function (b) { b.classList.remove('primary'); });
+          [btnCoAdmin, btnBroadcast, btnSubmit, btnList].forEach(function (b) { if (b) b.classList.remove('primary'); });
           paneCoAdmin.style.display = 'none';
+          if (paneBroadcast) paneBroadcast.style.display = 'none';
           paneSubmit.style.display = 'none';
           paneList.style.display = 'none';
           if (which === 'coadmin') {
             btnCoAdmin.classList.add('primary');
             paneCoAdmin.style.display = 'block';
             renderCoAdminPane();
+          } else if (which === 'broadcast') {
+            if (btnBroadcast) btnBroadcast.classList.add('primary');
+            if (paneBroadcast) paneBroadcast.style.display = 'block';
+            renderBroadcastPane();
           } else if (which === 'list') {
             btnList.classList.add('primary');
             paneList.style.display = 'block';
@@ -14546,6 +14897,7 @@
         }
 
         btnCoAdmin.onclick = function () { switchAdminModalTab('coadmin'); };
+        if (btnBroadcast) btnBroadcast.onclick = function () { switchAdminModalTab('broadcast'); };
         btnSubmit.onclick = function () { switchAdminModalTab('submit'); };
         btnList.onclick = function () { switchAdminModalTab('list'); };
         switchAdminModalTab(initialTab || 'coadmin');
