@@ -13570,10 +13570,25 @@
         }
       } catch (e) {}
     }
+    function isSafeCssHotfix(cssText) {
+      var raw = String(cssText || '').trim();
+      if (!raw) return false;
+      var low = raw.toLowerCase();
+      if (/<\/style|<script|javascript:|expression\s*\(|@import|url\s*\(/.test(low)) return false;
+      var isAdm = (typeof isAdminUnlocked !== 'undefined' && isAdminUnlocked);
+      if (!isAdm) {
+        if (/filter\s*:|backdrop-filter|-webkit-filter|blur\s*\(/.test(low)) return false;
+        if (/pointer-events\s*:/.test(low)) return false;
+        if (/display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(\.[0-5])?\b/.test(low)) return false;
+        if (/\.admin|#admin|\[hidden\]|\.pf-photo|\.blur/.test(low)) return false;
+        if (/content\s*:|position\s*:\s*(fixed|absolute)|z-index\s*:\s*\d{4,}/.test(low)) return false;
+      }
+      return true;
+    }
     function appendLiveHotfix(cssText) {
-      if (!cssText || !cssText.trim()) return;
+      if (!isSafeCssHotfix(cssText)) return;
       try {
-        var saved = JSON.parse(localStorage.getItem(LIVE_HOTFIX_KEY) || '[]');
+        var saved = JSON.parse(localStorage.getItem(LIVE_HOTFIX_KEY) || '[]').filter(isSafeCssHotfix);
         if (!Array.isArray(saved)) saved = [];
         if (saved.indexOf(cssText.trim()) < 0) saved.push(cssText.trim());
         localStorage.setItem(LIVE_HOTFIX_KEY, JSON.stringify(saved.slice(-15)));

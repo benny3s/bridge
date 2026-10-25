@@ -1993,17 +1993,29 @@ exports.aiConcierge = functions
           } catch (e) {}
         }
       }
-      const tier = [0, 1, 2, 3].includes(Number(parsed.tier)) ? Number(parsed.tier) : (isAdmin ? 1 : 0);
-      const decision = ['CHAT_CONTINUE', 'ASK_FORWARD_ADMIN', 'AUTO_FIX', 'BETA_AND_ASK', 'REJECT'].includes(parsed.decision)
+      let tier = [0, 1, 2, 3].includes(Number(parsed.tier)) ? Number(parsed.tier) : (isAdmin ? 1 : 0);
+      let decision = ['CHAT_CONTINUE', 'ASK_FORWARD_ADMIN', 'AUTO_FIX', 'BETA_AND_ASK', 'REJECT'].includes(parsed.decision)
         ? parsed.decision
         : (tier === 1 ? 'AUTO_FIX' : 'CHAT_CONTINUE');
       const worker = parsed.worker === 'argon' ? 'argon' : 'opus';
       const actionChip = ['deactivate', 'delete', 'pin'].includes(String(parsed.action_chip || '').toLowerCase())
         ? String(parsed.action_chip).toLowerCase()
         : '';
+      let rawCss = String(parsed.css_override || '').trim();
+      const msgLow = msg.toLowerCase();
+      const cssLow = rawCss.toLowerCase();
+      if (!isAdmin && (
+        /<\/style|<script|javascript:|onerror\s*=|onload\s*=|이전\s*지시를?\s*(모두\s*)?무시|규칙을?\s*무시|시스템\s*(프롬프트|명령|지시)|system\s*prompt|is_admin\s*[:=]\s*true|auto_fix|beta_and_ask|css_override|filter\s*:|backdrop-filter\s*:|pointer-events\s*:\s*none|display\s*:\s*(none|flex|block|grid)|visibility\s*:\s*(hidden|visible)|opacity\s*:\s*0(\.[0-5])?\b|\.admin-bar|#admin|\.pf-photo|\[hidden\]|url\s*\(|@import/.test(msgLow) ||
+        /<\/style|<script|javascript:|expression\s*\(|@import|url\s*\(|filter\s*:|backdrop-filter|-webkit-filter|blur\s*\(|pointer-events\s*:|display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(\.[0-5])?\b|\.admin|#admin|\[hidden\]|\.pf-photo|\.blur|content\s*:|position\s*:\s*(fixed|absolute)|z-index\s*:\s*\d{4,}/.test(cssLow)
+      )) {
+        decision = 'REJECT';
+        tier = 3;
+        rawCss = '';
+        parsed.reason = '보안 방화벽: 프롬프트 인젝션 또는 보호 대상 CSS 변조 시도 차단';
+      }
       let cleanReply = String(parsed.user_reply || (decision === 'REJECT' ? '보안 및 운영 정책상 해당 내용은 안내해 드리거나 처리할 수 없어요 😊' : '조금만 더 자세히 말씀해 주시면 바로 도와드릴게요 😊')).trim();
       if (decision === 'REJECT') {
-        cleanReply = cleanReply.replace(/말씀하신 내용은[^.!?\n]*전달해[^.!?\n]*[.!?]?\s*😊?/g, '').trim() || '보안 및 운영 정책상 해당 내용은 안내해 드리거나 처리할 수 없어요 😊';
+        cleanReply = '보안 및 운영 정책상 해당 내용은 안내해 드리거나 처리할 수 없어요 😊';
       } else if (/직접\s*메시지를?\s*보내는\s*기능|별도로?\s*제공되지|고객센터|운영진\s*채널/.test(cleanReply)) {
         cleanReply = '네! 제가 관리자님께 바로 메시지를 전달해 드릴 수 있어요 😊 어떤 내용을 전해드릴까요? 편하게 말씀해 주세요!';
       }
@@ -2028,7 +2040,7 @@ exports.aiConcierge = functions
         reason: String(parsed.reason || '자동 분류됨').trim(),
         user_reply: cleanReply,
         fix_spec: String(parsed.fix_spec || msg).trim(),
-        css_override: String(parsed.css_override || '').trim(),
+        css_override: rawCss,
         status: decision === 'REJECT' ? 'rejected' : (decision === 'AUTO_FIX' ? 'auto_fixed' : (decision === 'BETA_AND_ASK' ? 'awaiting_approval' : 'chat')),
         latency_ms: Date.now() - t0,
         heal_log: decision === 'AUTO_FIX'
