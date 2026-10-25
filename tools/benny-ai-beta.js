@@ -488,32 +488,31 @@
         '관리자님께 문의할 게 있어요'
       ];
 
-      /* 로그인 회원이거나 승인 대기 본인이면 베니 님(관리자)과 주고받은 메시지 내역도 함께 표시 + 읽음 처리 */
-      var adminThread = [];
+      /* 로그인 회원이거나 승인 대기 본인이면 읽음 처리 + 실제 관리자가 직접 답장한 메시지만 말풍선으로 표시
+         (자동 시스템 알림 '[베니브릿지] 확인 대기 중인 요청...' 및 내가 보낸 문의 중복 박스는 제외해 화면을 깔끔하게 유지) */
+      var realAdminReplies = [];
       if (!isAdm && hasUser && typeof threadFor === 'function' && typeof currentState !== 'undefined' && currentState) {
         try {
-          adminThread = threadFor(currentState, currentUser.id, 'user') || [];
+          var rawThread = threadFor(currentState, currentUser.id, 'user') || [];
           localStorage.setItem('bb-admsg-seen:' + currentUser.id, new Date().toISOString());
+          realAdminReplies = rawThread.filter(function (m) {
+            if (!m || m.from !== 'admin' || m.auto) return false;
+            var txt = String(m.text || '').trim();
+            if (!txt || txt.indexOf('[베니브릿지]') === 0) return false;
+            return true;
+          }).slice(-3);
         } catch (e) {}
       }
-      var adminRepliesHtml = '';
-      if (adminThread.length) {
-        adminRepliesHtml =
-          '<div id="bai-admin-thread-box" style="margin-bottom:8px;padding:8px 10px;background:var(--gold-soft, #fffbeb);border:1px solid var(--gold, #d97706);border-radius:12px;">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-              '<span style="font-size:0.76rem;font-weight:800;color:var(--accent);">👑 관리자와 주고받은 메시지 (' + adminThread.length + '건)</span>' +
-              (typeof deleteMyThread === 'function' ? '<button type="button" id="bai-del-admin-thread" style="border:0;background:none;font-size:0.7rem;color:var(--muted);cursor:pointer;text-decoration:underline;">내역 비우기</button>' : '') +
-            '</div>' +
-            adminThread.slice(-10).map(function (m) {
-              var isFromAdm = m.from === 'admin';
-              var dt = (typeof fmtDate === 'function' && m.at) ? fmtDate(m.at) : '';
-              return '<div style="padding:5px 7px;margin-top:4px;border-radius:8px;background:' + (isFromAdm ? 'var(--card, #fff)' : 'rgba(0,0,0,0.03)') + ';font-size:0.79rem;">' +
-                '<div style="font-size:0.7rem;color:var(--muted);margin-bottom:2px;"><b>' + (isFromAdm ? '👑 베니브릿지 관리자' : '🙋 내가 보낸 문의') + '</b> · ' + escapeHtml(dt) + '</div>' +
-                '<div style="white-space:pre-wrap;word-break:break-word;color:var(--ink);font-weight:' + (isFromAdm ? '600' : '400') + ';">' + escapeHtml(m.text || '') + '</div>' +
-              '</div>';
-            }).join('') +
-          '</div>';
-      }
+      var adminRepliesHtml = realAdminReplies.map(function (m) {
+        var dt = (typeof fmtDate === 'function' && m.at) ? fmtDate(m.at) : '';
+        return '<div class="bai-msg-row ai">' +
+          '<div class="bai-av" style="background:var(--gold, #f59e0b);color:#fff;">👑</div>' +
+          '<div class="bai-bubble" style="border-color:var(--gold, #d97706);background:var(--gold-soft, #fffbeb);">' +
+            '<div style="font-size:0.7rem;font-weight:700;color:var(--accent);margin-bottom:3px;">👑 관리자 답장' + (dt ? ' · <span style="font-weight:400;color:var(--muted);">' + escapeHtml(dt) + '</span>' : '') + '</div>' +
+            '<div style="white-space:pre-wrap;word-break:break-word;">' + escapeHtml(m.text || '') + '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
 
       var savedLog = loadScreenChatLog();
       var exHtml = '<div class="bai-ex-list" id="bai-ex-box"' + (savedLog.length ? ' style="display:none;"' : '') + '>' +
@@ -545,11 +544,11 @@
           '<div id="bai-pane-coadmin" style="display:' + (isAdm ? 'block' : 'none') + ';"></div>' +
           '<div id="bai-pane-submit" style="display:' + (isAdm ? 'none' : 'block') + ';">' +
             '<div class="bai-chat-log" id="bai-chat-log">' +
-              adminRepliesHtml +
               '<div class="bai-msg-row ai">' +
                 '<div class="bai-av">✨</div>' +
                 '<div class="bai-bubble">' + escapeHtml(greetingText) + '</div>' +
               '</div>' +
+              adminRepliesHtml +
               exHtml +
             '</div>' +
             '<div class="bai-chat-bar">' +
@@ -570,19 +569,6 @@
       ov.addEventListener('click', function (e) {
         if (e.target === ov) closeFn();
       });
-
-      var delAdmBtn = ov.querySelector('#bai-del-admin-thread');
-      if (delAdmBtn && typeof modalConfirm === 'function' && typeof deleteMyThread === 'function') {
-        delAdmBtn.onclick = function () {
-          modalConfirm('메시지 내역 비우기', '관리자와 주고받은 메시지 내역을 모두 지울까요?').then(function (ok) {
-            if (!ok) return;
-            deleteMyThread().then(function () {
-              var box = ov.querySelector('#bai-admin-thread-box');
-              if (box) box.remove();
-            });
-          });
-        };
-      }
 
       var chatLog = ov.querySelector('#bai-chat-log');
       var sendBtn = ov.querySelector('#bai-heal-send');
@@ -641,6 +627,7 @@
       if (savedLog.length) {
         savedLog.forEach(renderStoredItem);
       }
+      setTimeout(scrollBottom, 20);
 
       if (clearChatBtn) {
         clearChatBtn.onclick = function () {
@@ -1114,6 +1101,51 @@
     }
     if (typeof openGuestMsgModal === 'function') {
       openGuestMsgModal = function () { openSelfHealModal('submit'); };
+    }
+    if (typeof adminUnreadFor === 'function') {
+      adminUnreadFor = function (state, me) {
+        if (typeof adminRoomVisible === 'function' && !adminRoomVisible(me)) return 0;
+        if (typeof currentUser === 'undefined' || !currentUser || !currentUser.id) return 0;
+        var seen = '';
+        try { seen = localStorage.getItem('bb-admsg-seen:' + currentUser.id) || ''; } catch (e) {}
+        var _srv = ((typeof myAuthEntry === 'function' ? myAuthEntry(state) : null) || {}).mineSeenAt || '';
+        if (_srv > seen) seen = _srv;
+        return (typeof threadFor === 'function' ? threadFor(state, currentUser.id, 'user') : []).filter(function (m) {
+          if (!m || m.from !== 'admin' || m.auto) return false;
+          var txt = String(m.text || '').trim();
+          if (!txt || txt.indexOf('[베니브릿지]') === 0) return false;
+          return (m.at || '') > seen;
+        }).length;
+      };
+    }
+    if (typeof adminRoomHtml === 'function') {
+      adminRoomHtml = function (state, me) {
+        if (typeof adminRoomVisible === 'function' && !adminRoomVisible(me)) return '';
+        var un = typeof adminUnreadFor === 'function' ? adminUnreadFor(state, me) : 0;
+        var realAdm = (typeof threadFor === 'function' && currentUser && currentUser.id ? threadFor(state, currentUser.id, 'user') : []).filter(function (m) {
+          if (!m || m.from !== 'admin' || m.auto) return false;
+          var txt = String(m.text || '').trim();
+          return txt && txt.indexOf('[베니브릿지]') !== 0;
+        });
+        var saved = loadScreenChatLog();
+        var lastChat = saved.length ? saved[saved.length - 1] : null;
+        var lastAdm = realAdm.length ? realAdm[realAdm.length - 1] : null;
+        var prevText = '궁금한 점·불편한 화면·건의·탈퇴 문의를 편하게 남겨 주세요';
+        var lastTime = '';
+        if (lastAdm && (!lastChat || (lastAdm.at || '') > (lastChat.at || ''))) {
+          prevText = '👑 관리자: ' + (lastAdm.text || '');
+          lastTime = lastAdm.at || '';
+        } else if (lastChat) {
+          prevText = (lastChat.role === 'user' ? '나: ' : '✨ ') + (lastChat.text || '');
+          lastTime = lastChat.at || '';
+        }
+        return '<div class="chat-list admin-room-wrap"><button type="button" class="chat-item admin-room" id="member-msg-open">' +
+          '<div class="chat-av md" style="background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid #f59e0b;font-size:1.1rem;">✨</div>' +
+          '<div class="chat-item-mid"><div class="chat-item-name">✨ AI 도우미 · 관리자 문의 <span class="admin-room-tag">24시간 안내</span></div>' +
+            '<div class="chat-item-prev">' + escapeHtml(prevText) + '</div></div>' +
+          '<div class="chat-item-right">' + (lastTime && typeof chatListTime === 'function' ? '<div class="chat-item-time">' + escapeHtml(chatListTime(lastTime)) + '</div>' : '') + (un ? '<div class="chat-item-badge">' + un + '</div>' : '') + '</div>' +
+        '</button></div>';
+      };
     }
 
     if (typeof paint === 'function') {
