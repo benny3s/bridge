@@ -1727,13 +1727,31 @@ exports.aiConcierge = functions
   .runWith({ timeoutSeconds: 30, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (data && (data.ping || data.op === 'ping')) return { ok: true, pong: 1 };
-    if (!context.auth) throw new HttpsError('unauthenticated', '연결 확인 후 다시 시도해 주세요.');
     const apiKey = (process.env.GROQ_API_KEY || '').trim();
     const ollamaKey = (process.env.OLLAMA_API_KEY || '').trim();
     const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+    const op = String((data && data.op) || '').trim();
+
+    /* PC 관제탑이 켜졌을 때 클라우드(Firestore)에 밀려 있던 미처리 안건을 수거해 가는 전용 동기화 엔드포인트 */
+    if (op === 'pc_sync_pull') {
+      const syncKey = String((data && data.sync_key) || '').trim();
+      const expected = (ollamaKey || apiKey).slice(0, 24);
+      if (!expected || syncKey !== expected) throw new HttpsError('permission-denied', '동기화 키 불일치');
+      const qs = await db.collection('aiHealTickets').where('pc_synced', '==', false).limit(30).get();
+      const pending = [];
+      const batch = db.batch();
+      const nowIso = new Date().toISOString();
+      qs.forEach((docSnap) => {
+        pending.push(docSnap.data());
+        batch.update(docSnap.ref, { pc_synced: true, pc_synced_at: nowIso });
+      });
+      if (pending.length > 0) await batch.commit();
+      return { ok: true, pending_tickets: pending };
+    }
+
+    if (!context.auth) throw new HttpsError('unauthenticated', '연결 확인 후 다시 시도해 주세요.');
     if (!apiKey && !ollamaKey && !anthropicKey) throw new HttpsError('failed-precondition', 'AI 컨시어지 키가 준비되지 않았어요.');
 
-    const op = String((data && data.op) || '').trim();
     const isAdmin = !!(context.auth.token && context.auth.token.admin === 1);
 
     if (op === 'heal_list') {
@@ -1936,7 +1954,8 @@ exports.aiConcierge = functions
         admin_summary: summary,
         reason: '사용자 확인 후 관리자에게 요약 전달됨',
         status: 'admin_msg',
-        heal_log: '[📨 관리자 요약 전달] ' + summary
+        pc_synced: false,
+        heal_log: '[📨 관리자 요약 전달 · PC 관제탑 대기] ' + summary
       };
       await db.collection('aiHealTickets').doc(tid).set(tk);
       return { ok: true, ticket: tk, forwarded: true };
@@ -2042,6 +2061,7 @@ exports.aiConcierge = functions
         fix_spec: String(parsed.fix_spec || msg).trim(),
         css_override: rawCss,
         status: decision === 'REJECT' ? 'rejected' : (decision === 'AUTO_FIX' ? 'auto_fixed' : (decision === 'BETA_AND_ASK' ? 'awaiting_approval' : 'chat')),
+        pc_synced: false,
         latency_ms: Date.now() - t0,
         heal_log: decision === 'AUTO_FIX'
           ? '[🟢 Tier 1 판정] 자율 수리 큐 등록됨'

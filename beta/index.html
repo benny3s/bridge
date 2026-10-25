@@ -14298,31 +14298,64 @@
           paneList.innerHTML = '<div style="padding:16px;text-align:center;color:var(--muted);font-size:0.85rem;">티켓 목록을 불러오는 중…</div>';
           callHealBackend({ op: 'list' }).then(function (r) {
             var list = r.tickets || [];
-            if (!list.length) {
-              paneList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:0.85rem;">아직 접수된 자율 수리 티켓이 없어요.</div>';
-              return;
-            }
-            paneList.innerHTML = list.map(function (t) {
-              var needApprove = (t.decision === 'BETA_AND_ASK' && t.status !== 'approved_live' && t.status !== 'rejected');
-              return '<div class="bai-ticket-item" data-tid="' + escapeHtml(t.id) + '">' +
-                '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;">' +
-                  tierBadgeHtml(t.tier, t.decision) +
-                  '<span style="font-size:0.72rem;color:var(--muted);">' + escapeHtml((t.created_at || '').slice(5, 16).replace('T', ' ')) + ' · ' + escapeHtml(t.author || '') + '</span>' +
+            var tcfg = r.tower_config || { judge_model: 'auto', worker_model: 'auto' };
+            var towerBar =
+              '<div class="bai-ctx-box" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:space-between;">' +
+                '<div style="font-size:0.75rem;">' +
+                  '🗼 <b>PC 관제탑 모델</b>: ' +
+                  '<select id="bai-tower-judge" style="font-size:0.74rem;padding:2px 5px;border-radius:6px;border:1px solid var(--line);">' +
+                    '<option value="auto"' + (tcfg.judge_model === 'auto' ? ' selected' : '') + '>자동 (Argon 우선·Claude 백업)</option>' +
+                    '<option value="argon"' + (tcfg.judge_model === 'argon' ? ' selected' : '') + '>Argon (Gemini 4)</option>' +
+                    '<option value="claude-sonnet"' + (tcfg.judge_model === 'claude-sonnet' ? ' selected' : '') + '>Claude Sonnet 5.5</option>' +
+                    '<option value="claude-opus"' + (tcfg.judge_model === 'claude-opus' ? ' selected' : '') + '>Claude Opus 5.5</option>' +
+                  '</select>' +
                 '</div>' +
-                '<div style="font-weight:700;color:var(--ink);">' + escapeHtml(t.title || t.message) + '</div>' +
-                '<div style="color:var(--muted);font-size:0.78rem;margin-top:2px;">원문: ' + escapeHtml(t.message || '') + '</div>' +
-                '<div style="font-size:0.75rem;color:var(--ink);margin-top:4px;background:var(--card);padding:6px 8px;border-radius:7px;border:1px solid var(--line);">' +
-                  '🧠 <b>판정</b>: ' + escapeHtml(t.reason || '-') + ' (일꾼: <b>' + escapeHtml(t.used_worker || t.worker || 'opus') + '</b>)<br>' +
-                  '🛠️ <b>상태</b>: ' + escapeHtml(t.heal_log || t.status || '-') +
-                '</div>' +
-                (needApprove ? (
-                  '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px;">' +
-                    '<button type="button" class="card-btn" data-reject-id="' + escapeHtml(t.id) + '" style="padding:4px 10px;font-size:0.76rem;">↩️ 기각</button>' +
-                    '<button type="button" class="card-btn approve" data-approve-id="' + escapeHtml(t.id) + '" style="padding:4px 12px;font-size:0.76rem;">✅ 본서버 반영 허락</button>' +
-                  '</div>'
-                ) : '') +
+                '<button type="button" class="card-btn" id="bai-sync-cloud-btn" style="padding:3px 9px;font-size:0.73rem;">☁️ 밀린 안건 수거</button>' +
               '</div>';
-            }).join('');
+            var listHtml = !list.length
+              ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:0.85rem;">아직 접수된 자율 수리 티켓이 없어요.</div>'
+              : list.map(function (t) {
+                  var needApprove = (t.decision === 'BETA_AND_ASK' && t.status !== 'approved_live' && t.status !== 'rejected');
+                  return '<div class="bai-ticket-item" data-tid="' + escapeHtml(t.id) + '">' +
+                    '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;">' +
+                      tierBadgeHtml(t.tier, t.decision) +
+                      '<span style="font-size:0.72rem;color:var(--muted);">' + escapeHtml((t.created_at || '').slice(5, 16).replace('T', ' ')) + ' · ' + escapeHtml(t.author || '') + '</span>' +
+                    '</div>' +
+                    '<div style="font-weight:700;color:var(--ink);">' + escapeHtml(t.title || t.message) + '</div>' +
+                    '<div style="color:var(--muted);font-size:0.78rem;margin-top:2px;">원문: ' + escapeHtml(t.message || '') + '</div>' +
+                    '<div style="font-size:0.75rem;color:var(--ink);margin-top:4px;background:var(--card);padding:6px 8px;border-radius:7px;border:1px solid var(--line);">' +
+                      '🧠 <b>판정</b>: ' + escapeHtml(t.reason || '-') + ' (일꾼: <b>' + escapeHtml(t.used_worker || t.worker || 'opus') + '</b>)<br>' +
+                      '🛠️ <b>상태</b>: ' + escapeHtml(t.heal_log || t.status || '-') +
+                    '</div>' +
+                    (needApprove ? (
+                      '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px;">' +
+                        '<button type="button" class="card-btn" data-reject-id="' + escapeHtml(t.id) + '" style="padding:4px 10px;font-size:0.76rem;">↩️ 기각</button>' +
+                        '<button type="button" class="card-btn approve" data-approve-id="' + escapeHtml(t.id) + '" style="padding:4px 12px;font-size:0.76rem;">✅ 본서버 반영 허락</button>' +
+                      '</div>'
+                    ) : '') +
+                  '</div>';
+                }).join('');
+            paneList.innerHTML = towerBar + listHtml;
+
+            var selJudge = paneList.querySelector('#bai-tower-judge');
+            if (selJudge) {
+              selJudge.onchange = function () {
+                callHealBackend({ op: 'set_tower', judge_model: selJudge.value }).catch(function () {});
+              };
+            }
+            var syncBtn = paneList.querySelector('#bai-sync-cloud-btn');
+            if (syncBtn) {
+              syncBtn.onclick = function () {
+                syncBtn.disabled = true;
+                syncBtn.textContent = '수거 중…';
+                callHealBackend({ op: 'sync_cloud' }).then(function () {
+                  setTimeout(loadTicketList, 800);
+                }).catch(function () {
+                  syncBtn.disabled = false;
+                  syncBtn.textContent = '☁️ 밀린 안건 수거';
+                });
+              };
+            }
 
             Array.prototype.forEach.call(paneList.querySelectorAll('[data-approve-id]'), function (b) {
               b.onclick = function () {
