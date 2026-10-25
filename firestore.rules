@@ -101,6 +101,18 @@ service cloud.firestore {
         && request.resource.data.json.size() < 50000;
     }
 
+    // 레이더(benny3s.github.io/radar) 열쇠 (2026-10-26) — 자료는 GitHub 에 암호화, 이 열쇠로만 풂
+    // pub: 공개 키 — 누구나 읽기(PC 의 merge.py 가 암호화에 씀). key: 개인 키 — 관리자만 읽기.
+    // 둘 다 관리자가 처음 한 번만 만들 수 있고 고치거나 지울 수 없음 (실수로 열쇠가 바뀌는 것 막기)
+    match /radar/{doc} {
+      allow read: if doc == 'pub' || (doc == 'key' && isAdmin());
+      allow create: if isAdmin() && doc in ['pub', 'key']
+        && request.resource.data.keys().hasOnly(['jwk', 'updatedAt'])
+        && request.resource.data.jwk is string
+        && request.resource.data.jwk.size() < 10000;
+      allow update, delete: if false;
+    }
+
     // 그 외 전부 차단 (secrets(PIN 해시)·loginGuard·rateLimit·sendContacts 등은 서버 전용)
     match /{document=**} {
       allow read, write: if false;
