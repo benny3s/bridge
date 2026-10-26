@@ -71,6 +71,7 @@
 - GitHub repo 이름 변경·새 repo 생성은 자동모드가 막음 → 사용자 계정 브라우저(Claude in Chrome, benny3s 로그인)로 처리. git push는 `gh auth setup-git`로 benny3s 인증 고정됨(다른 계정 minim0 캐시 주의).
 
 ## 주요 관례 · 함정
+- **Pages 공개 범위**: GitHub Pages 는 저장소 파일을 전부 사이트로 내보냄 → `_config.yml` 의 `exclude`(functions·tools·CLAUDE.md·firestore.rules·firebase.json 등)로 막아 둠(2026-10-27, 전엔 `/bridge/functions/index.js` 가 그대로 열렸음). **사이트가 불러 쓰지 않는 새 파일·폴더를 루트에 추가하면 exclude 에도 추가.**
 - **관리자 섹션**: `DEFAULT_SEC_ORDER` 배열 + `SEC_NAMES` 맵 + `secHtml` 객체 + `adminFold()` + `<details data-sec="...">` + `secOpenAttr`. 새 키를 배열·맵·객체에 추가하면 순서에 자동 편입됨(`adminSecOrder` 병합).
 - **클라이언트 검색**: 행에 `data-*search` 속성 + `apply*Search()`가 `style.display`로 숨김/표시(리페인트 없이 → 포커스·한글 IME 유지). `paint()`에서 재적용.
 - `modalNotice`는 메시지를 escape함(HTML 태그 넣지 말 것). `modalMessage`(입력)·`modalConfirm`(예/아니오) 패턴.

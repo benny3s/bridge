@@ -1,0 +1,12 @@
+# GitHub Pages(Jekyll) 배포 설정 — 사이트에 필요 없는 파일은 공개 사이트로 내보내지 않음
+# (2026-10-27: functions/index.js·firestore.rules·CLAUDE.md 가 benny3s.github.io/bridge/... 로 그대로 열리던 것 차단)
+# 새로 저장소에 넣는 서버·문서·도구 파일도 사이트에서 불러 쓰지 않으면 여기에 추가할 것
+exclude:
+  - functions
+  - tools
+  - CLAUDE.md
+  - firestore.rules
+  - firebase.json
+  - .firebaserc
+  - .gitignore
+  - .claude
