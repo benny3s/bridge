@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-27-469';
+  var APP_VERSION = '2026-10-27-470';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1862,6 +1862,7 @@
     try { sess = JSON.parse(localStorage.getItem('meetUser') || sessionStorage.getItem('meetUser') || 'null'); } catch (e) {}
     var savedAdmin = getAdminPin();
     return authClaims().then(function (c) {
+      if (c.admin === 1) enrollAdminDevice();
       if (savedAdmin) {
         if (c.admin === 1) return;
         return adminServerLogin(savedAdmin).catch(function (e) { if (isAuthRejection(e)) clearAdminPin(); });
@@ -1948,6 +1949,7 @@
       var subE = ((currentState && currentState.entries) || []).find(function (e) { return e.id === actAs && e.managedBy === currentUser.id; });
       if (subE) { actingAs = subE.id; switcherExpanded = false; }
     }
+    if (route === 'adminApprove') { openAdminApprove(focusId); return; }   /* 새 기기 관리자 로그인 허용/거부 (v470) */
     var tab;
     if (route === 'admin') tab = 'admin';
     else if (route === 'mine' || route === 'request' || route === 'message' || route === 'dm') tab = 'mine';
@@ -2249,7 +2251,90 @@
     try { fns.httpsCallable(fnName)({ ping: 1 }).catch(function () {}); } catch (e) {}
   }
   function memberServerLogin(entryId, pin) { return serverSignIn('memberLogin', { entryId: entryId, pin: pin }); }
-  function adminServerLogin(pw) { return serverSignIn('adminLogin', { password: pw }); }
+  /* ── 관리자 기기 (v470) ── 이 브라우저의 무작위 기기 id(포털·레이더와 같은 주소라 같이 씀). 서버는 등록된 기기만 비번으로 바로 들여보내고,
+     처음 보는 기기는 베니 폰·PC 허용 또는 등록된 번호 문자 인증을 기다림 */
+  function adminDeviceId() {
+    try {
+      var id = localStorage.getItem('bennyAdminDevice');
+      if (!/^[A-Za-z0-9_-]{16,64}$/.test(id || '')) {
+        id = Array.from(crypto.getRandomValues(new Uint8Array(18)), function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+        localStorage.setItem('bennyAdminDevice', id);
+      }
+      return id;
+    } catch (e) { return ''; }
+  }
+  function adminDeviceName() {
+    var ua = navigator.userAgent || '';
+    var os = /iPhone/.test(ua) ? '아이폰' : /iPad/.test(ua) ? '아이패드' : /Android/.test(ua) ? '안드로이드' : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows PC' : '기기';
+    var br = /KAKAOTALK/i.test(ua) ? '카카오톡' : /SamsungBrowser/.test(ua) ? '삼성 인터넷' : /Edg\//.test(ua) ? 'Edge' : /CriOS|Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '';
+    return (os + ' ' + br).trim();
+  }
+  function adminServerLogin(pw) {
+    var dev = adminDeviceId();
+    var payload = { password: pw, deviceId: dev, deviceName: adminDeviceName() };
+    var direct = fns ? fns.httpsCallable('adminLogin')(payload).catch(function (e) { if (isSwMsgError(e)) return callFn('adminLogin', payload); throw e; }) : callFn('adminLogin', payload);
+    return direct.then(function (r) {
+      var d = (r && r.data) || {};
+      if (d.token) return d.token;
+      if (d.pending) return adminWaitApproval(d, dev);
+      throw new Error('토큰을 받지 못했어요.');
+    }).then(function (t) { return firebase.auth().signInWithCustomToken(t); });
+  }
+  /* 처음 보는 기기: 베니 폰·PC 알림에서 허용 또는 문자 인증을 기다림 → 토큰 */
+  function adminWaitApproval(d, dev) {
+    return new Promise(function (resolve, reject) {
+      var done = false, timer = null;
+      var targets = d.smsTargets || [];
+      var ov = openModal('<h3>🛂 새 기기 확인</h3>' +
+        '<p class="modal-msg" style="text-align:left;">처음 보는 기기라 확인이 필요해요. <b>베니 님 폰이나 등록된 PC</b>에 온 알림에서 <b>허용</b>을 눌러 주세요. (10분 안에)</p>' +
+        (targets.length ? '<p class="sub" style="margin:8px 0 4px;">폰·PC를 못 쓰면 문자로 인증:</p>' + targets.map(function (t, i) {
+          return '<button type="button" class="card-btn" data-sms="' + i + '" style="flex:none;margin:0 6px 6px 0;">📱 ' + escapeHtml(t) + '로 받기</button>';
+        }).join('') + '<div id="aw-code" style="display:none;margin-top:6px;"><input id="aw-code-in" inputmode="numeric" maxlength="6" placeholder="인증번호 6자리" style="width:140px;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;"> <button type="button" class="card-btn primary" id="aw-code-ok" style="flex:none;">확인</button></div>' : '') +
+        '<p class="sub" id="aw-msg" style="margin-top:8px;">기다리는 중…</p>' +
+        '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">취소</button></div>');
+      function finish(err, tok) { if (done) return; done = true; clearTimeout(timer); closeModal(ov); if (err) reject(err); else resolve(tok); }
+      function msg(t) { var m = ov.querySelector('#aw-msg'); if (m) m.textContent = t; }
+      function ask(extra) {
+        return callFn('adminLogin', Object.assign({ holdId: d.holdId, pollKey: d.pollKey, deviceId: dev }, extra || {})).then(function (r) {
+          var x = (r && r.data) || {};
+          if (x.token) { finish(null, x.token); return x; }
+          return x;
+        });
+      }
+      function poll() {
+        if (done) return;
+        ask().then(function () { if (!done) timer = setTimeout(poll, 3000); })
+          .catch(function (e) { finish(new Error((e && e.message) || '확인하지 못했어요.')); });
+      }
+      ov.querySelector('#modal-cancel').addEventListener('click', function () { finish(new Error('취소했어요.')); });
+      [].forEach.call(ov.querySelectorAll('[data-sms]'), function (b) {
+        b.addEventListener('click', function () {
+          msg('문자 보내는 중…');
+          ask({ smsSend: Number(b.getAttribute('data-sms')) }).then(function (x) {
+            msg((x.smsSent || '') + ' 번호로 인증번호를 보냈어요. 받은 6자리를 넣어 주세요.');
+            var c = ov.querySelector('#aw-code'); if (c) c.style.display = '';
+            var inp = ov.querySelector('#aw-code-in'); if (inp) inp.focus();
+          }).catch(function (e) { msg((e && e.message) || '문자를 보내지 못했어요.'); });
+        });
+      });
+      var okb = ov.querySelector('#aw-code-ok');
+      if (okb) okb.addEventListener('click', function () {
+        var v = (ov.querySelector('#aw-code-in').value || '').replace(/\D/g, '');
+        if (v.length !== 6) return msg('6자리를 넣어 주세요.');
+        msg('확인 중…');
+        ask({ smsCode: v }).then(function (x) { if (!x.token) msg('확인됐어요. 잠시만요…'); })
+          .catch(function (e) { msg((e && e.message) || '인증번호가 맞지 않아요.'); });
+      });
+      timer = setTimeout(poll, 3000);
+    });
+  }
+  /* 관리자 토큰이 있는 기기(이미 로그인돼 있던 폰·PC)는 앱을 열 때 '믿을 기기'로 등록 — 한 번만 */
+  var _adminEnrolled = false;
+  function enrollAdminDevice() {
+    if (_adminEnrolled) return;
+    _adminEnrolled = true;
+    callFn('adminDevice', { op: 'enroll', deviceId: adminDeviceId(), deviceName: adminDeviceName() }).catch(function () { _adminEnrolled = false; });
+  }
   /* 서버가 'PIN이 틀렸다/잠겼다/보관 계정'처럼 확실히 거절한 경우 (네트워크·서버 오류와 구분) */
   function isAuthRejection(e) {
     var c = ((e && e.code) || '') + '';
@@ -8856,6 +8941,7 @@
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px;">' +
         '<button type="button" class="card-btn" data-action="sec-log" style="flex:none;">🔐 로그인·접속 기록</button>' +
         '<button type="button" class="card-btn" data-action="sec-holds" style="flex:none;">🛂 VPN 로그인 검토</button>' +
+        '<button type="button" class="card-btn" data-action="sec-admindev" style="flex:none;">📱 관리자 기기</button>' +
         '<button type="button" class="card-btn" data-action="sec-pinaudit" style="flex:none;">🔑 쉬운 PIN 회원 찾기</button>' +
       '</div>' +
       (_secAlerts.length ? _secAlerts.map(function (a) {
@@ -12359,6 +12445,104 @@
         '</div>';
     }).catch(function (e) { var m = ov.querySelector('.modal-msg'); if (m) m.textContent = '불러오지 못했어요: ' + ((e && e.message) || e); });
   }
+  /* 📱 관리자 기기 (v470) — 믿을 기기 목록(이름 바꾸기·해제), 새 기기 승인 대기(허용/거부), 문자 인증 번호(베니·아내).
+     허용/거부·해제·번호 저장은 서버가 '이 기기도 믿을 기기'인지 확인 */
+  function adminCall(op, extra) {
+    return callFn('adminDevice', Object.assign({ op: op, deviceId: adminDeviceId(), deviceName: adminDeviceName() }, extra || {}));
+  }
+  function ensureAdminToken() {
+    return authClaims().then(function (c) {
+      if (c.admin === 1) return true;
+      return modalPin('관리자 확인', '허용·거부하려면 관리자 비밀번호를 넣어 주세요.', { password: true }).then(function (pw) {
+        if (!pw) throw new Error('취소했어요.');
+        return adminServerLogin(pw).then(function () { enrollAdminDevice(); return true; });
+      });
+    });
+  }
+  function openAdminApprove(holdId) {
+    ensureAdminToken().then(function () { return adminCall('list'); }).then(function (r) {
+      var d = (r && r.data) || {};
+      var h = (d.holds || []).find(function (x) { return x.id === holdId; });
+      if (!h) return modalNotice('새 기기 확인', '이미 처리됐거나 10분이 지난 요청이에요.');
+      if (!d.meTrusted) return modalNotice('새 기기 확인', '이 기기는 아직 관리자 기기로 등록되지 않아 허용·거부할 수 없어요.');
+      var it = h.intel || {};
+      var ov = openModal('<h3>🛂 새 기기 관리자 로그인</h3>' +
+        '<p class="modal-msg" style="text-align:left;"><b>' + escapeHtml(h.name || h.device || '') + '</b><br>' + escapeHtml(h.ip || '') +
+        (it.city || it.provider ? ' (' + escapeHtml([it.city, it.provider].filter(Boolean).join(' · ')) + (it.vpn ? ', VPN' : '') + ')' : '') + '<br>' + fmtDate(h.at) +
+        '<br><br>지금 베니 님이 직접 로그인하는 중이면 <b>허용</b>, 모르는 시도면 <b>거부</b>를 눌러 주세요.</p>' +
+        '<div class="modal-actions"><button type="button" class="card-btn danger" id="ap-deny">거부</button><button type="button" class="card-btn approve" id="ap-ok">허용</button></div>');
+      function act(op) {
+        adminCall(op, { holdId: holdId }).then(function () { closeModal(ov); modalNotice('완료', op === 'approve' ? '허용했어요. 그 기기에서 바로 들어가요.' : '거부했어요. 그 IP는 감시 목록에 넣었어요.'); })
+          .catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+      }
+      ov.querySelector('#ap-ok').addEventListener('click', function () { act('approve'); });
+      ov.querySelector('#ap-deny').addEventListener('click', function () { act('deny'); });
+    }).catch(function (e) { modalNotice('새 기기 확인', (e && e.message) || String(e)); });
+  }
+  function openAdminDevices() {
+    var ov = openModal('<h3>📱 관리자 기기</h3><div data-ad>불러오는 중…</div>' +
+      '<div class="modal-actions"><button type="button" class="card-btn primary" id="modal-ok">닫기</button></div>');
+    ov.querySelector('#modal-ok').addEventListener('click', function () { closeModal(ov); });
+    var mb = ov.querySelector('.modal-box'); if (mb) mb.style.maxWidth = '640px';
+    var VIA = { first: '첫 기기', session: '로그인돼 있던 기기', approve: '승인' };
+    function viaText(v) { v = String(v || ''); if (v.indexOf('sms:') === 0) return '문자 인증(' + v.slice(4) + ')'; if (v.indexOf('approve:') === 0) return v.slice(8) + '에서 승인'; return VIA[v] || v; }
+    function draw() {
+      adminCall('list').then(function (r) {
+        var d = (r && r.data) || {};
+        var holds = (d.holds || []).map(function (h) {
+          return '<div style="border:1px solid #f1b0ab;background:#fdecea;border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;">⏳ <b>' + escapeHtml(h.name || h.device || '') + '</b> · ' + escapeHtml(h.ip || '') + ' · ' + fmtDate(h.at) +
+            '<div style="margin-top:6px;display:flex;gap:6px;"><button type="button" class="card-btn approve" data-ap="approve" data-id="' + escapeHtml(h.id) + '" style="flex:none;">허용</button><button type="button" class="card-btn danger" data-ap="deny" data-id="' + escapeHtml(h.id) + '" style="flex:none;">거부</button></div></div>';
+        }).join('');
+        var devs = (d.devices || []).sort(function (a, b) { return (a.status === 'trusted' ? 0 : 1) - (b.status === 'trusted' ? 0 : 1) || String(b.lastAt).localeCompare(String(a.lastAt)); }).map(function (v) {
+          var off = v.status !== 'trusted';
+          return '<div style="border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;' + (off ? 'opacity:.55;' : '') + '">' +
+            (off ? '⛔ ' : '✅ ') + '<b>' + escapeHtml(v.name || v.device || '기기') + '</b>' + (v.me ? ' <span class="sub">(지금 이 기기)</span>' : '') +
+            '<br><span class="sub">' + escapeHtml(v.device || '') + ' · 마지막 ' + (v.lastAt ? fmtDate(v.lastAt) : '-') + ' · ' + escapeHtml(v.ip || '') + ' · ' + escapeHtml(viaText(v.via)) + '</span>' +
+            (off ? '' : '<div style="margin-top:6px;display:flex;gap:6px;"><button type="button" class="card-btn" data-rn="' + escapeHtml(v.id) + '" style="flex:none;">이름 바꾸기</button>' +
+              (v.me ? '' : '<button type="button" class="card-btn danger" data-rv="' + escapeHtml(v.id) + '" style="flex:none;">해제</button>') + '</div>') +
+          '</div>';
+        }).join('');
+        var ph = d.phones || [];
+        var phHtml = '<div style="border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-top:10px;font-size:0.84rem;">' +
+          '<b>📨 문자 인증 번호</b> <span class="sub">— 폰·PC를 못 쓸 때 새 기기 화면에서 이 번호로 6자리 인증</span><br>' +
+          (ph.length ? ph.map(function (p) { return escapeHtml(p.label) + ' ' + escapeHtml(p.masked); }).join(' · ') : '<span class="sub">아직 없어요</span>') +
+          '<div style="margin-top:6px;display:grid;grid-template-columns:70px 1fr;gap:6px;">' +
+            '<input data-pl="0" value="' + escapeHtml((ph[0] && ph[0].label) || '베니') + '" maxlength="10" style="padding:6px;border:1px solid var(--line);border-radius:8px;font-family:inherit;"><input data-pn="0" inputmode="tel" placeholder="010-0000-0000 (바꿀 때만)" style="padding:6px;border:1px solid var(--line);border-radius:8px;font-family:inherit;">' +
+            '<input data-pl="1" value="' + escapeHtml((ph[1] && ph[1].label) || '아내') + '" maxlength="10" style="padding:6px;border:1px solid var(--line);border-radius:8px;font-family:inherit;"><input data-pn="1" inputmode="tel" placeholder="010-0000-0000 (바꿀 때만)" style="padding:6px;border:1px solid var(--line);border-radius:8px;font-family:inherit;">' +
+          '</div><button type="button" class="card-btn primary" id="ad-ph-save" style="flex:none;margin-top:6px;">번호 저장</button>' +
+          '<p class="sub" style="margin:4px 0 0;">두 칸 모두 새로 넣어야 저장돼요 (서버에 암호화, 화면엔 뒤 4자리만).</p></div>';
+        var box = ov.querySelector('[data-ad]');
+        box.innerHTML = '<div style="max-height:62vh;overflow:auto;">' +
+          (d.meTrusted ? '' : '<p style="color:#c5221f;font-size:0.84rem;">이 기기는 아직 관리자 기기가 아니라 보기만 돼요.</p>') +
+          (holds ? '<h4 style="margin:4px 0 6px;">새 기기 승인 대기</h4>' + holds : '') +
+          '<h4 style="margin:8px 0 6px;">관리자 기기</h4>' + (devs || '<p class="sub">없어요</p>') +
+          '<p class="sub" style="margin:2px 0 0;">해제하면 그 기기의 관리자 로그인이 끊기고, 다른 관리자 기기도 한 번 다시 로그인해야 해요(비밀번호만).</p>' + phHtml + '</div>';
+        [].forEach.call(box.querySelectorAll('[data-ap]'), function (b) { b.addEventListener('click', function () {
+          adminCall(b.getAttribute('data-ap'), { holdId: b.getAttribute('data-id') }).then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+        }); });
+        [].forEach.call(box.querySelectorAll('[data-rn]'), function (b) { b.addEventListener('click', function () {
+          modalMessage('기기 이름', '알아보기 쉬운 이름으로 바꿔요.', '저장', 'primary', '예: 베니 폰, 집 PC', true).then(function (name) {
+            if (!name) return;
+            adminCall('rename', { targetId: b.getAttribute('data-rn'), name: name }).then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+          });
+        }); });
+        [].forEach.call(box.querySelectorAll('[data-rv]'), function (b) { b.addEventListener('click', function () {
+          modalConfirm('기기 해제', '이 기기를 관리자 기기에서 뺄까요? 다시 쓰려면 새로 승인받아야 해요.', '해제', 'danger').then(function (yes) {
+            if (!yes) return;
+            adminCall('revoke', { targetId: b.getAttribute('data-rv') }).then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+          });
+        }); });
+        var sv = box.querySelector('#ad-ph-save');
+        if (sv) sv.addEventListener('click', function () {
+          var list = [0, 1].map(function (i) { return { label: (box.querySelector('[data-pl="' + i + '"]').value || '').trim(), phone: (box.querySelector('[data-pn="' + i + '"]').value || '').trim() }; })
+            .filter(function (p) { return p.label && p.phone; });
+          if (!list.length) return modalNotice('안내', '번호를 넣어 주세요.');
+          adminCall('setPhones', { phones: list }).then(function () { modalNotice('저장', '문자 인증 번호를 저장했어요.'); draw(); }).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+        });
+      }).catch(function (e) { var b = ov.querySelector('[data-ad]'); if (b) b.textContent = '불러오지 못했어요: ' + ((e && e.message) || e); });
+    }
+    draw();
+  }
   /* 🛂 VPN 로그인 검토 (v468) — 데이터센터 VPN 으로 PIN 이 맞은 로그인은 서버가 보류(loginHold). 허용 = 그 계정·IP 7일 통과, 거부 = 막고 감시 IP */
   function openLoginHolds() {
     var ov = openModal('<h3>🛂 VPN 로그인 검토</h3><p class="modal-msg">불러오는 중…</p>' +
@@ -12875,6 +13059,7 @@
       else if (action === 'sec-jump') { var _d = document.querySelector('[data-sec="' + id + '"]'); if (_d) { _d.open = true; _d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } return; }
       else if (action === 'sec-log') { if (isAdminUnlocked) openSecurityLog(); }
       else if (action === 'sec-holds') { if (isAdminUnlocked) openLoginHolds(); }
+      else if (action === 'sec-admindev') { if (isAdminUnlocked) openAdminDevices(); }
       else if (action === 'sec-pinaudit') { if (isAdminUnlocked) runPinAudit(); }
       else if (action === 'sec-ack') { if (isAdminUnlocked) db.collection('securityAlerts').doc(id).update({ resolved: true, resolvedAt: new Date().toISOString() }).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); }); }
       else if (action === 'sec-restore') { if (isAdminUnlocked) restoreTamper(id); }

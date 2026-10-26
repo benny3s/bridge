@@ -261,26 +261,239 @@ exports.memberLogin = functions
     return { token, pending };
   });
 
+/* ══ 관리자 로그인: 믿을 수 있는 기기 + 새 기기 승인 (2026-10-27 Benny: "새 기기로 로그인하면 내 핸드폰으로 승인/거절",
+   "내 핸드폰·와이프 핸드폰·내 PC 세 채널") ══
+   - 믿을 수 있는 기기(adminDevices/{기기 id} — 브라우저·서버가 만든 무작위 id)는 비밀번호로 바로 들어옴.
+   - 처음 보는 기기는 비밀번호가 맞아도 보류(adminHolds) → 믿을 기기(베니 폰·PC)에서 허용/거부,
+     또는 등록된 번호(베니·아내, security/adminPhones 암호화)로 받은 문자 6자리로 통과.
+   - 관리자 잠금은 IP별(믿을 기기는 IP+기기별) — 남이 일부러 틀려서 베니를 못 들어오게 하지 못함(예전엔 전체 하나).
+     믿을 기기(예: Music Lab 서버) 경유 실패는 집 IP 차단(ipFailRecord)에 안 셈.
+   - 모든 시도는 adminAudit, 새 기기·틀림·허용/거부·문자는 관리자 알림 */
+const ADMIN_HOLD_MS = 10 * 60000;
+const ADMIN_SMS_PER_HOLD = 3;
+const adminDevId = (v) => { const s = String(v || ''); return /^[A-Za-z0-9_-]{16,64}$/.test(s) ? s : ''; };
+const sha256hex = (s) => nodeCrypto.createHash('sha256').update(String(s)).digest('hex');
+async function adminDeviceTrusted(id) {
+  if (!id) return null;
+  const d = (await db.collection('adminDevices').doc(id).get()).data();
+  return (d && d.status === 'trusted') ? d : null;
+}
+async function adminAudit(o) { await db.collection('adminAudit').add(Object.assign({ at: new Date().toISOString() }, o)).catch(() => {}); }
+async function trustAdminDevice(id, meta, via) {
+  const ref = db.collection('adminDevices').doc(id);
+  const now = new Date().toISOString();
+  const cur = (await ref.get()).data() || {};
+  await ref.set(Object.assign({ status: 'trusted', name: cur.name || meta.name || meta.device || '기기', device: meta.device || cur.device || '',
+    ip: meta.ip || '', lastAt: now, via: cur.via || via }, cur.firstAt ? {} : { firstAt: now }), { merge: true });
+}
+function adminMeta(context, data) {
+  const h = (context.rawRequest && context.rawRequest.headers) || {};
+  const ua = String(h['user-agent'] || '').slice(0, 300);
+  return { ip: clientIp(context), ua, device: deviceOf(ua), origin: String(h['origin'] || h['referer'] || '').slice(0, 200),
+    name: String((data && data.deviceName) || '').replace(/[<>]/g, '').slice(0, 40) };
+}
+function maskPhone(p) { const s = normPhone(p); return s ? s.slice(0, 3) + '-****-' + s.slice(-4) : ''; }
+async function adminPhones() {
+  const d = (await db.doc('security/adminPhones').get()).data() || {};
+  return (Array.isArray(d.list) ? d.list : []).map((x) => ({ label: String(x.label || ''), phone: decPhone(x.enc) })).filter((x) => x.phone);
+}
+/* 새 기기 보류 → 기다리는 기기가 holdId+pollKey 로 3초마다 물어봄 */
+async function adminHoldPoll(data, deviceId, meta) {
+  const holdId = String(data.holdId || '');
+  if (!/^ah_[a-f0-9]{16,40}$/.test(holdId)) throw new HttpsError('invalid-argument', '잘못된 요청이에요.');
+  const ref = db.collection('adminHolds').doc(holdId);
+  const d = (await ref.get()).data();
+  if (!d || d.deviceId !== deviceId || sha256hex(String(data.pollKey || '')) !== d.pollKeyHash) throw new HttpsError('permission-denied', '확인할 수 없는 요청이에요.');
+  if (d.status === 'denied') throw new HttpsError('permission-denied', '관리자 로그인이 거부됐어요.');
+  if (d.consumed) throw new HttpsError('failed-precondition', '이미 처리된 요청이에요. 다시 로그인해 주세요.');
+  if (Date.now() > d.expiresAt && d.status !== 'approved') {
+    await ref.set({ status: 'expired' }, { merge: true });
+    throw new HttpsError('deadline-exceeded', '10분이 지났어요. 다시 로그인해 주세요.');
+  }
+  /* 문자 인증: 보내기 */
+  if (data.smsSend !== undefined && d.status === 'pending') {
+    const phones = await adminPhones();
+    const t = phones[Number(data.smsSend)];
+    if (!t) throw new HttpsError('failed-precondition', '등록된 관리자 번호가 없어요.');
+    if ((d.smsSent || 0) >= ADMIN_SMS_PER_HOLD) throw new HttpsError('resource-exhausted', '문자는 한 번 로그인에 3번까지 보낼 수 있어요.');
+    const gate = await rateLimitAdminSms();
+    if (!gate) throw new HttpsError('resource-exhausted', '문자 인증 요청이 너무 많아요. 잠시 후 다시 해 주세요.');
+    const code = String(nodeCrypto.randomInt(0, 1000000)).padStart(6, '0');
+    const r = await solapiSend(process.env.SOLAPI_KEY || '', process.env.SOLAPI_SECRET || '', normPhone(process.env.SOLAPI_SENDER || ''), t.phone,
+      '[베니브릿지] 관리자 로그인 인증번호 ' + code + ' (10분 안에 입력). 본인이 아니면 무시하세요.');
+    if (!r.ok) throw new HttpsError('unavailable', '문자를 보내지 못했어요: ' + String(r.detail || '').slice(0, 80));
+    await ref.set({ smsCodeHash: sha256hex(holdId + ':' + code), smsTo: t.label, smsSent: (d.smsSent || 0) + 1, smsTries: 0 }, { merge: true });
+    await adminAudit({ status: 'sms-sent', holdId, deviceId, to: t.label, ip: meta.ip });
+    await sendToAdmin('📱 관리자 인증 문자 보냄 · ' + t.label, (d.name || d.device || '새 기기') + ' 로그인용 — 본인이 아니면 관리자탭에서 거부하세요', { route: 'adminApprove', focusId: holdId }).catch(() => {});
+    return { pending: true, smsSent: t.label };
+  }
+  /* 문자 인증: 번호 확인 */
+  if (data.smsCode !== undefined && d.status === 'pending') {
+    if (!d.smsCodeHash) throw new HttpsError('failed-precondition', '먼저 인증 문자를 받아 주세요.');
+    if ((d.smsTries || 0) >= 5) { await ref.set({ status: 'denied', deniedBy: 'sms-tries' }, { merge: true }); throw new HttpsError('permission-denied', '인증번호를 여러 번 틀려 막혔어요.'); }
+    if (sha256hex(holdId + ':' + String(data.smsCode).replace(/\D/g, '')) !== d.smsCodeHash) {
+      await ref.set({ smsTries: (d.smsTries || 0) + 1 }, { merge: true });
+      throw new HttpsError('permission-denied', '인증번호가 맞지 않아요.');
+    }
+    await ref.set({ status: 'approved', via: 'sms:' + (d.smsTo || ''), decidedAt: new Date().toISOString() }, { merge: true });
+    d.status = 'approved'; d.via = 'sms:' + (d.smsTo || '');
+  }
+  if (d.status === 'approved') {
+    await ref.set({ consumed: true }, { merge: true });
+    await trustAdminDevice(deviceId, Object.assign({}, meta, { name: d.name, device: d.device }), d.via || 'approve');
+    await adminAudit({ status: 'approved-login', holdId, deviceId, via: d.via || 'approve', ip: meta.ip });
+    await securityAlert({ type: 'admin-device', kind: 'trusted', target: deviceId, nickname: d.name || d.device || '', ip: meta.ip, device: d.device || '', via: d.via || 'approve' },
+      '🔐 관리자 새 기기 등록됨', (d.name || d.device || '기기') + ' — ' + (String(d.via || '').indexOf('sms') === 0 ? '문자 인증(' + String(d.via).slice(4) + ')' : '기기 승인') + '으로 통과. 본인이 아니면 관리자탭 📱 관리자 기기에서 해제').catch(() => {});
+    return { token: await admin.auth().createCustomToken('admin', { admin: 1 }) };
+  }
+  return { pending: true, smsSent: d.smsTo || '' };
+}
+/* 관리자 인증 문자: 전체 1시간 6통까지 (비번이 맞아야만 보낼 수 있지만 그래도 문자비 폭탄 방지) */
+async function rateLimitAdminSms() {
+  const ref = db.doc('security/adminSmsRate');
+  const now = Date.now();
+  let ok = false;
+  await db.runTransaction(async (tx) => {
+    const d = (await tx.get(ref)).data() || {};
+    const sent = (d.sent || []).filter((t) => now - t < 3600000);
+    ok = sent.length < 6;
+    if (ok) sent.push(now);
+    tx.set(ref, { sent });
+  });
+  return ok;
+}
+
 exports.adminLogin = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 20, memory: '1GB' })
+  .runWith({ secrets: ['NUM_ENC_KEY', 'SOLAPI_KEY', 'SOLAPI_SECRET', 'SOLAPI_SENDER'], timeoutSeconds: 30, memory: '1GB' })
   .https.onCall(async (data, context) => {
     if (data && data.ping) return { ok: true };   /* 관리자 로그인 창 열 때 미리 깨우기 */
-    const pw = String((data && data.password) || '');
+    data = data || {};
+    const meta = adminMeta(context, data);
+    const deviceId = adminDevId(data.deviceId);
+    if (data.holdId) return adminHoldPoll(data, deviceId, meta);
+    const pw = String(data.password || '');
     if (!pw || pw.length > 128) throw new HttpsError('invalid-argument', '비밀번호를 확인해주세요.');
-    const ip = clientIp(context);
-    const [, guard, stSnap] = await Promise.all([ipBlockedCheck(ip), loginGuardCheck('admin'), db.doc('app/state').get()]);
-    const st = (stSnap.data() || {}).adminAuth;
-    const a = (st && st.wrappedPrivateKey) ? st : (await db.collection('adminKey').doc('main').get()).data();
-    const ok = adminPasswordOk(pw, a);
+    const ip = meta.ip;
+    const trusted = await adminDeviceTrusted(deviceId);
+    const gk = trusted ? guardKey('adm_', ip + '_' + deviceId) : guardKey('adm_', ip);
+    const [, guard, keySnap] = await Promise.all([trusted ? Promise.resolve() : ipBlockedCheck(ip), loginGuardCheck(gk), db.collection('adminKey').doc('main').get()]);
+    const ok = adminPasswordOk(pw, keySnap.data());
     const fails = await loginGuardResult(guard, ok);
     if (!ok) {
-      await ipFailRecord(ip, 'admin');
-      await lockAlert('admin', fails, ip, '관리자');
+      if (!trusted) await ipFailRecord(ip, 'admin');
+      await adminAudit({ status: 'fail', deviceId, trusted: !!trusted, ip, device: meta.device, ua: meta.ua, origin: meta.origin, fails });
+      await lockAlert(gk, fails, ip, '관리자');
+      if (fails === 1) {
+        const gate = await alertAllowed(guardKey('adm_', ip)).catch(() => ({ ok: true }));
+        if (gate.ok) await sendToAdmin('🚨 관리자 비밀번호 틀림', ip + ' · ' + meta.device + (trusted ? ' (등록된 기기 ' + (trusted.name || '') + ')' : ' (처음 보는 기기)')).catch(() => {});
+      }
       throw new HttpsError('permission-denied', '비밀번호가 올바르지 않아요.');
     }
-    const token = await admin.auth().createCustomToken('admin', { admin: 1 });
-    return { token };
+    if (trusted) {
+      await db.collection('adminDevices').doc(deviceId).set({ lastAt: new Date().toISOString(), ip }, { merge: true });
+      await adminAudit({ status: 'ok', deviceId, ip, device: meta.device, name: trusted.name || '' });
+      return { token: await admin.auth().createCustomToken('admin', { admin: 1 }) };
+    }
+    if (!deviceId) {
+      await adminAudit({ status: 'old-client', ip, device: meta.device, ua: meta.ua, origin: meta.origin });
+      throw new HttpsError('failed-precondition', '관리자 로그인 방식이 바뀌었어요. 페이지를 새로고침한 뒤 다시 로그인해 주세요.');
+    }
+    /* 등록된 기기가 하나도 없을 때(처음 배포 직후)만: 이 기기를 첫 기기로 등록 */
+    const any = await db.collection('adminDevices').where('status', '==', 'trusted').limit(1).get();
+    if (any.empty) {
+      await trustAdminDevice(deviceId, meta, 'first');
+      await adminAudit({ status: 'first-device', deviceId, ip, device: meta.device });
+      await securityAlert({ type: 'admin-device', kind: 'trusted', target: deviceId, nickname: meta.name || meta.device, ip, device: meta.device, via: 'first' },
+        '🔐 첫 관리자 기기 등록', (meta.name || meta.device) + ' · ' + ip + ' — 본인이 아니면 바로 관리자탭에서 해제').catch(() => {});
+      return { token: await admin.auth().createCustomToken('admin', { admin: 1 }) };
+    }
+    /* 처음 보는 기기 → 보류 + 믿을 기기에 승인 알림 */
+    const holdId = 'ah_' + nodeCrypto.randomBytes(12).toString('hex');
+    const pollKey = nodeCrypto.randomBytes(18).toString('base64').replace(/[^A-Za-z0-9]/g, '');
+    const intel = await ipIntel(ip).catch(() => null);
+    await db.collection('adminHolds').doc(holdId).set({ deviceId, status: 'pending', at: new Date().toISOString(), expiresAt: Date.now() + ADMIN_HOLD_MS,
+      pollKeyHash: sha256hex(pollKey), ip, device: meta.device, name: meta.name || meta.device, ua: meta.ua, origin: meta.origin,
+      intel: intel ? { provider: intel.provider || '', city: intel.city || '', country: intel.country || '', vpn: !!intel.dcvpn } : null });
+    await adminAudit({ status: 'pending', holdId, deviceId, ip, device: meta.device, ua: meta.ua, origin: meta.origin });
+    await securityAlert({ type: 'admin-device', kind: 'pending', target: holdId, nickname: meta.name || meta.device, ip, device: meta.device },
+      '🛂 새 기기 관리자 로그인 — 허용/거부', (meta.name || meta.device) + ' · ' + ip + (intel && intel.city ? ' (' + intel.city + (intel.dcvpn ? ', VPN' : '') + ')' : '') + ' — 눌러서 허용 또는 거부').catch(() => {});
+    await sendToAdmin('🛂 새 기기 관리자 로그인 승인 요청', '눌러서 허용/거부 · ' + (meta.name || meta.device) + ' · ' + ip, { route: 'adminApprove', focusId: holdId }).catch(() => {});
+    const phones = await adminPhones().catch(() => []);
+    return { pending: true, holdId, pollKey, smsTargets: phones.map((p) => p.label + ' ' + maskPhone(p.phone)) };
+  });
+
+/* 관리자 기기 관리 (관리자 토큰 필요): enroll(지금 로그인된 기기 등록) · list · approve/deny · rename · revoke · setPhones
+   approve/deny/revoke/setPhones 는 부른 기기가 믿을 기기여야 함 */
+exports.adminDevice = functions
+  .region('asia-northeast3')
+  .runWith({ secrets: ['NUM_ENC_KEY'], timeoutSeconds: 30, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    if (claimsOf(context).admin !== 1) throw new HttpsError('permission-denied', '관리자만 쓸 수 있어요.');
+    data = data || {};
+    const op = String(data.op || 'list');
+    const meta = adminMeta(context, data);
+    const me = adminDevId(data.deviceId);
+    const meTrusted = await adminDeviceTrusted(me);
+    const needTrusted = () => { if (!meTrusted) throw new HttpsError('permission-denied', '등록된 관리자 기기에서만 할 수 있어요.'); };
+    if (op === 'enroll') {
+      if (!me) throw new HttpsError('invalid-argument', '기기 정보가 없어요.');
+      const cur = (await db.collection('adminDevices').doc(me).get()).data();
+      if (cur && cur.status === 'revoked') throw new HttpsError('permission-denied', '해제된 기기예요. 다시 승인받아 주세요.');
+      if (!cur || cur.status !== 'trusted') {
+        await trustAdminDevice(me, meta, 'session');
+        await adminAudit({ status: 'enroll', deviceId: me, ip: meta.ip, device: meta.device });
+        await securityAlert({ type: 'admin-device', kind: 'trusted', target: me, nickname: meta.name || meta.device, ip: meta.ip, device: meta.device, via: 'session' },
+          '🔐 관리자 기기 등록(로그인돼 있던 기기)', (meta.name || meta.device) + ' · ' + meta.ip).catch(() => {});
+      } else await db.collection('adminDevices').doc(me).set({ lastAt: new Date().toISOString(), ip: meta.ip }, { merge: true });
+      return { ok: true, trusted: true };
+    }
+    if (op === 'list') {
+      const [dv, hs, ph] = await Promise.all([db.collection('adminDevices').get(), db.collection('adminHolds').where('status', '==', 'pending').get(), adminPhones().catch(() => [])]);
+      const devices = dv.docs.map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', firstAt: x.firstAt || '', lastAt: x.lastAt || '', status: x.status || '', via: x.via || '', me: d.id === me }; });
+      const holds = hs.docs.filter((d) => d.data().expiresAt > Date.now()).map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', at: x.at, intel: x.intel || null, smsTo: x.smsTo || '' }; });
+      return { devices, holds, phones: ph.map((p) => ({ label: p.label, masked: maskPhone(p.phone) })), meTrusted: !!meTrusted };
+    }
+    if (op === 'approve' || op === 'deny') {
+      needTrusted();
+      const id = String(data.holdId || '');
+      if (!/^ah_[a-f0-9]{16,40}$/.test(id)) throw new HttpsError('invalid-argument', '잘못된 요청이에요.');
+      const ref = db.collection('adminHolds').doc(id);
+      const h = (await ref.get()).data();
+      if (!h) throw new HttpsError('not-found', '요청을 찾을 수 없어요.');
+      if (h.status !== 'pending') return { ok: true, status: h.status };
+      if (h.expiresAt < Date.now()) { await ref.set({ status: 'expired' }, { merge: true }); throw new HttpsError('deadline-exceeded', '10분이 지난 요청이에요.'); }
+      await ref.set({ status: op === 'approve' ? 'approved' : 'denied', via: 'approve:' + (meTrusted.name || me), decidedAt: new Date().toISOString() }, { merge: true });
+      if (op === 'deny') await addWatchIp(h.ip);
+      await adminAudit({ status: op === 'approve' ? 'approved' : 'denied', holdId: id, by: me, ip: h.ip });
+      return { ok: true, status: op === 'approve' ? 'approved' : 'denied' };
+    }
+    if (op === 'rename') {
+      needTrusted();
+      const id = adminDevId(data.targetId);
+      await db.collection('adminDevices').doc(id).set({ name: String(data.name || '').replace(/[<>]/g, '').slice(0, 40) }, { merge: true });
+      return { ok: true };
+    }
+    if (op === 'revoke') {
+      needTrusted();
+      const id = adminDevId(data.targetId);
+      if (!id) throw new HttpsError('invalid-argument', '잘못된 요청이에요.');
+      await db.collection('adminDevices').doc(id).set({ status: 'revoked', revokedAt: new Date().toISOString(), revokedBy: me }, { merge: true });
+      await admin.auth().revokeRefreshTokens('admin');   /* 그 기기의 관리자 로그인도 끊김 (모든 관리자 기기가 한 번 다시 로그인 — 믿을 기기는 비번만) */
+      await adminAudit({ status: 'revoked', target: id, by: me });
+      return { ok: true };
+    }
+    if (op === 'setPhones') {
+      needTrusted();
+      const list = (Array.isArray(data.phones) ? data.phones : []).slice(0, 3)
+        .map((p) => ({ label: String((p && p.label) || '').replace(/[<>]/g, '').slice(0, 10), phone: normPhone(p && p.phone) }))
+        .filter((p) => p.label && /^010\d{8}$/.test(p.phone));
+      await db.doc('security/adminPhones').set({ list: list.map((p) => ({ label: p.label, enc: encPhone(p.phone) })), updatedAt: new Date().toISOString(), by: me });
+      await adminAudit({ status: 'phones', by: me, count: list.length });
+      await sendToAdmin('📱 관리자 인증 번호 바뀜', list.map((p) => p.label + ' ' + maskPhone(p.phone)).join(', ') || '(없음)').catch(() => {});
+      return { ok: true, phones: list.map((p) => ({ label: p.label, masked: maskPhone(p.phone) })) };
+    }
+    throw new HttpsError('invalid-argument', '잘못된 요청이에요.');
   });
 
 /* 관리자: 쉬운 PIN 회원 찾기 (2026-10-26) — 흔한 PIN·출생연도로 PIN 확인값을 대 보고, 맞는 계정에 pinWeak 표시(mark:true)
@@ -586,9 +799,9 @@ async function notifyRecipient(entries, id, title, body, nav) {
   }
 }
 /* 관리자에게: pushTokens/admin 에 등록된 기기들 (관리자 페이지의 알림 토글로 기기별 관리) */
-async function sendToAdmin(title, body) {
+async function sendToAdmin(title, body, nav) {
   const tokens = await tokensFor('admin');
-  await sendToTokens(tokens, title, body, ['admin']);
+  await sendToTokens(tokens, title, body, ['admin'], nav);
 }
 
 exports.onStateChange = functions
@@ -2045,7 +2258,7 @@ async function ipFailRecord(ip, what, targetId) {
 /* 계정 잠금이 걸린 순간 알림 (5회마다) */
 async function lockAlert(guardKeyName, fails, ip, label) {
   if (!fails || fails % LOGIN_MAX_FAILS !== 0) return;
-  const isAdminKey = guardKeyName === 'admin';
+  const isAdminKey = guardKeyName === 'admin' || String(guardKeyName).indexOf('adm_') === 0;
   await securityAlert({ type: isAdminKey ? 'admin-lock' : 'login-lock', target: label || guardKeyName, fails, ip },
     isAdminKey ? '🚨 관리자 로그인 잠김' : '🛡 로그인 잠김',
     (isAdminKey ? '관리자 비밀번호가 ' : (label || '회원') + ' 계정 PIN이 ') + fails + '번 틀려 잠겼어요');
