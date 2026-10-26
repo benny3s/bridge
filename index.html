@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-26-467';
+  var APP_VERSION = '2026-10-26-468';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -8793,7 +8793,7 @@
         '</div>';
       }).join('') : '<p class="sub">신고된 대화가 없어요 🙆</p>'), false, 'reports');
     /* 🛡 보안 경고: 회원이 남의 데이터를 바꿈(되돌리기 가능)·로그인 잠금·IP 차단 */
-    var SEC_TYPE = { tamper: '🚨 이상 변경', 'login-lock': '🔒 회원 로그인 잠김', 'admin-lock': '🚨 관리자 로그인 잠김', 'ip-block': '🛡 IP 차단', suspicious: '👁 수상한 접속' };
+    var SEC_TYPE = { tamper: '🚨 이상 변경', 'login-lock': '🔒 회원 로그인 잠김', 'admin-lock': '🚨 관리자 로그인 잠김', 'ip-block': '🛡 IP 차단', suspicious: '👁 수상한 접속', 'vpn-hold': '🛂 VPN 로그인 검토' };
     var SUS_KIND = { ok: '로그인 성공', fail: '로그인 실패', blocked: '차단된 시도', notfound: '없는 계정', access: '앱 접속', weak: '쉬운 PIN 로그인(막음)' };
     var secOpen = _secAlerts.filter(function (a) { return !a.resolved; });
     var securitySection = adminFold('🛡 보안 경고' + (secOpen.length ? ' <span class="blink-soft" style="background:#c5221f;color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">확인 필요 ' + secOpen.length + '</span>' : ''), null,
@@ -8801,6 +8801,7 @@
       '<p class="sub">👁 수상한 접속 = VPN·공격 이력 IP·처음 보는 기기·오래 안 쓰던 계정·쉬운 PIN 대입 등. 모든 로그인 시도와 앱 접속(IP·기기·사이트)은 서버에 남아요.</p>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px;">' +
         '<button type="button" class="card-btn" data-action="sec-log" style="flex:none;">🔐 로그인·접속 기록</button>' +
+        '<button type="button" class="card-btn" data-action="sec-holds" style="flex:none;">🛂 VPN 로그인 검토</button>' +
         '<button type="button" class="card-btn" data-action="sec-pinaudit" style="flex:none;">🔑 쉬운 PIN 회원 찾기</button>' +
       '</div>' +
       (_secAlerts.length ? _secAlerts.map(function (a) {
@@ -8808,7 +8809,11 @@
         var body = '';
         if (a.type === 'tamper') body = escapeHtml(a.writerNick || a.writer || '') + '님 계정으로 ' + (a.issues || []).length + '건 — ' + escapeHtml(a.summary || '');
         else if (a.type === 'ip-block') body = '한 곳에서 1시간에 ' + (a.fails || 0) + '번 실패 → 1시간 차단';
-        else if (a.type === 'suspicious') body = '<b>' + escapeHtml(a.nickname || a.target || '') + '</b> · ' + escapeHtml(SUS_KIND[a.kind] || a.kind || '') +
+        else if (a.type === 'vpn-hold') body = '<b>' + escapeHtml(a.nickname || '') + '</b> · PIN은 맞았지만 VPN이라 보류' +
+          '<br><span class="sub">' + escapeHtml(a.ip || '') + ' (' + escapeHtml([a.intel && a.intel.provider, a.intel && a.intel.country].filter(Boolean).join(' · ')) + ') · ' + escapeHtml(a.device || '') + '</span>' +
+          ((a.reasons || []).length ? '<br>' + escapeHtml(a.reasons.join(' / ')) : '') +
+          '<br><button type="button" class="card-btn" data-action="sec-holds" style="flex:none;margin-top:4px;">🛂 허용·거부 하러 가기</button>';
+        else if (a.type === 'suspicious') body ='<b>' + escapeHtml(a.nickname || a.target || '') + '</b> · ' + escapeHtml(SUS_KIND[a.kind] || a.kind || '') +
           '<br>' + escapeHtml((a.reasons || []).join(' / ')) +
           '<br><span class="sub">' + escapeHtml(a.ip || '') + (a.intel && (a.intel.city || a.intel.provider) ? ' (' + escapeHtml([a.intel.city, a.intel.provider].filter(Boolean).join(' · ')) + ')' : '') + ' · ' + escapeHtml(a.device || '') + '</span>';
         else body = escapeHtml(a.target || '') + ' · ' + (a.fails || 0) + '번 틀림';
@@ -12300,6 +12305,41 @@
         '</div>';
     }).catch(function (e) { var m = ov.querySelector('.modal-msg'); if (m) m.textContent = '불러오지 못했어요: ' + ((e && e.message) || e); });
   }
+  /* 🛂 VPN 로그인 검토 (v468) — 데이터센터 VPN 으로 PIN 이 맞은 로그인은 서버가 보류(loginHold). 허용 = 그 계정·IP 7일 통과, 거부 = 막고 감시 IP */
+  function openLoginHolds() {
+    var ov = openModal('<h3>🛂 VPN 로그인 검토</h3><p class="modal-msg">불러오는 중…</p>' +
+      '<div class="modal-actions"><button type="button" class="card-btn primary" id="modal-ok">닫기</button></div>');
+    ov.querySelector('#modal-ok').addEventListener('click', function () { closeModal(ov); });
+    var ST = { pending: '⏳ 검토 대기', approved: '✅ 허용함', denied: '⛔ 거부함' };
+    function draw() {
+      callFn('adminLoginHold', { op: 'list' }).then(function (r) {
+        var hs = ((r && r.data) || {}).holds || [];
+        var html = hs.length ? hs.map(function (h) {
+          var it = h.intel || {};
+          return '<div style="border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;">' +
+            '<b>' + escapeHtml(h.nickname || '') + '</b> · ' + (ST[h.status] || escapeHtml(h.status || '')) + ' · ' + fmtDate(h.at) + (h.tries > 1 ? ' · ' + h.tries + '번 시도' : '') +
+            '<br><span class="sub">' + escapeHtml(h.ip || '') + ' (' + escapeHtml([it.provider, it.city, it.country].filter(Boolean).join(' · ')) + ') · ' + escapeHtml(h.device || '') + '</span>' +
+            (h.status === 'pending' ? '<div style="margin-top:6px;display:flex;gap:6px;">' +
+              '<button type="button" class="card-btn approve" data-hold="approve" data-id="' + escapeHtml(h.id) + '" style="flex:none;">허용 (7일)</button>' +
+              '<button type="button" class="card-btn danger" data-hold="deny" data-id="' + escapeHtml(h.id) + '" style="flex:none;">거부</button></div>' : '') +
+          '</div>';
+        }).join('') : '<p class="sub">검토할 VPN 로그인이 없어요 🙆</p>';
+        var msg = ov.querySelector('.modal-msg') || ov.querySelector('[data-holds]');
+        if (msg) msg.outerHTML = '<div data-holds style="max-height:60vh;overflow:auto;">' +
+          '<p class="sub">PIN은 맞았지만 데이터센터 VPN이라 보류한 로그인이에요. 본인인지 모르겠으면 그대로 두셔도 돼요 (회원은 VPN을 끄면 바로 들어와요). 허용하면 그 계정·IP는 7일간 통과, 거부하면 막고 감시 목록에 넣어요.</p>' + html + '</div>';
+        [].forEach.call(ov.querySelectorAll('[data-hold]'), function (b) {
+          b.addEventListener('click', function () {
+            var op = b.getAttribute('data-hold');
+            modalConfirm(op === 'approve' ? '허용할까요?' : '거부할까요?', op === 'approve' ? '이 계정이 이 IP(VPN)로 7일간 로그인할 수 있게 돼요.' : '이 VPN 접속을 막고, 이 IP를 감시 목록에 넣어요.', op === 'approve' ? '허용' : '거부', op === 'approve' ? 'primary' : 'danger').then(function (yes) {
+              if (!yes) return;
+              callFn('adminLoginHold', { op: op, id: b.getAttribute('data-id') }).then(draw).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); });
+            });
+          });
+        });
+      }).catch(function (e) { var m = ov.querySelector('.modal-msg'); if (m) m.textContent = '불러오지 못했어요: ' + ((e && e.message) || e); });
+    }
+    draw();
+  }
   /* 🔑 쉬운 PIN 회원 찾기 (v467) — 서버 adminPinAudit 가 흔한 PIN·출생연도를 대 보고 맞는 계정에 pinWeak 표시 → 그 회원은 앱 열면 새 PIN 정하기.
      PBKDF2 15만 회 × 회원 × 후보라 몇 분 걸림 → 긴 시간 제한으로 직접 호출 */
   function runPinAudit() {
@@ -12780,6 +12820,7 @@
       else if (action === 'cf-filter') { _contactFilter = id || 'all'; paint(currentState); var _sd = document.querySelector('[data-sec="stale"]'); if (_sd) _sd.open = true; return; }
       else if (action === 'sec-jump') { var _d = document.querySelector('[data-sec="' + id + '"]'); if (_d) { _d.open = true; _d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } return; }
       else if (action === 'sec-log') { if (isAdminUnlocked) openSecurityLog(); }
+      else if (action === 'sec-holds') { if (isAdminUnlocked) openLoginHolds(); }
       else if (action === 'sec-pinaudit') { if (isAdminUnlocked) runPinAudit(); }
       else if (action === 'sec-ack') { if (isAdminUnlocked) db.collection('securityAlerts').doc(id).update({ resolved: true, resolvedAt: new Date().toISOString() }).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); }); }
       else if (action === 'sec-restore') { if (isAdminUnlocked) restoreTamper(id); }

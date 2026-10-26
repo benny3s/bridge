@@ -232,6 +232,15 @@ exports.memberLogin = functions
       if (s && s.reasons.length) await suspiciousAlert(o, s).catch(() => {});
       throw new HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
     }
+    /* 데이터센터 VPN 으로 PIN 이 맞으면 바로 들이지 않고 관리자 검토 (2026-10-26 Benny: "VPN 접속 시도라서 관리자 검토 중이라고 띄우고 나한테 알려줘").
+       PIN 이 틀린 시도는 위에서 실패로 끝나 계정 잠금에 합산 → PIN 모르는 공격자는 검토 요청을 만들 수 없음. iCloud 비공개 릴레이는 해당 없음 */
+    {
+      const intel = await ipIntel(ip).catch(() => null);
+      if (intel && intel.dcvpn) {
+        const held = await loginHoldGate(entry, ip, intel, auditMeta);
+        if (held) throw held;
+      }
+    }
     await db.collection('loginAudit').add(Object.assign({ status: 'ok', nickname: entry.nickname }, auditMeta)).catch(() => {});
     {
       const o = Object.assign({}, audO, { status: 'ok' });
@@ -305,6 +314,34 @@ exports.adminPinAudit = functions
   });
 
 /* 관리자: 로그인 시도·앱 접속 기록 (어떤 기기·사이트·IP 로 들어왔는지) — 서버 전용 loginAudit·accessSeen 을 대신 읽어 줌 */
+/* 관리자: VPN 로그인 검토 목록·허용·거부 (loginHold, 서버 전용) */
+exports.adminLoginHold = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 30, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    if (claimsOf(context).admin !== 1) throw new HttpsError('permission-denied', '관리자만 쓸 수 있어요.');
+    const op = String((data && data.op) || 'list');
+    if (op === 'list') {
+      const q = await db.collection('loginHold').orderBy('at', 'desc').limit(50).get();
+      return { holds: q.docs.map((d) => { const x = Object.assign({ id: d.id }, d.data()); delete x.ua; return x; }) };
+    }
+    const id = String((data && data.id) || '');
+    if (!/^h_[A-Za-z0-9_-]{4,200}$/.test(id)) throw new HttpsError('invalid-argument', '잘못된 요청이에요.');
+    const ref = db.collection('loginHold').doc(id);
+    const h = await ref.get();
+    if (!h.exists) throw new HttpsError('not-found', '검토 요청을 찾을 수 없어요.');
+    if (op === 'approve') {
+      await ref.set({ status: 'approved', until: Date.now() + HOLD_ALLOW_MS, decidedAt: new Date().toISOString() }, { merge: true });
+      return { ok: true };
+    }
+    if (op === 'deny') {
+      await ref.set({ status: 'denied', decidedAt: new Date().toISOString() }, { merge: true });
+      await addWatchIp(h.data().ip);
+      return { ok: true };
+    }
+    throw new HttpsError('invalid-argument', '잘못된 요청이에요.');
+  });
+
 exports.adminSecurityLog = functions
   .region('asia-northeast3')
   .runWith({ timeoutSeconds: 30, memory: '256MB' })
@@ -1660,13 +1697,16 @@ function deviceOf(ua) {
 async function ipIntel(ip) {
   if (!ip || ip === 'unknown') return null;
   const ref = db.collection('ipIntel').doc(guardKey('i_', ip));
-  try { const c = (await ref.get()).data(); if (c && Date.now() - (c.at || 0) < 7 * 86400000) return c; } catch (e) {}
+  try { const c = (await ref.get()).data(); if (c && c.v === 2 && Date.now() - (c.at || 0) < 7 * 86400000) return c; } catch (e) {}
   try {
     const r = await fetch('https://proxycheck.io/v2/' + encodeURIComponent(ip) + '?vpn=1&asn=1', { signal: AbortSignal.timeout(2500) });
     const d = ((await r.json()) || {})[ip];
     if (!d) return null;
-    const out = { at: Date.now(), vpn: d.proxy === 'yes', type: String(d.type || ''), provider: String(d.provider || ''),
-      city: String(d.city || d.region || ''), country: String(d.isocode || '') };
+    /* relay = 아이폰 iCloud 비공개 릴레이 (일반 아이폰 사용자가 흔히 켬 — VPN 으로 치지 않음). dcvpn = 데이터센터 VPN·프록시 */
+    const org = String(d.organisation || '');
+    const relay = /iCloud Private Relay/i.test(org);
+    const out = { v: 2, at: Date.now(), vpn: d.proxy === 'yes', relay, dcvpn: d.proxy === 'yes' && !relay, type: String(d.type || ''),
+      provider: String(d.provider || ''), org, city: String(d.city || d.region || ''), country: String(d.isocode || '') };
     await ref.set(out).catch(() => {});
     return out;
   } catch (e) { return null; }
@@ -1709,6 +1749,34 @@ async function accountFailRecord(entry, ip) {
       '24시간 안에 ' + n + '번 틀림 (IP ' + ips.length + '곳) → 이 계정 하루 잠금. 본인이면 관리자탭에서 새 PIN 주면 풀려요');
   }
 }
+/* VPN 로그인 검토 (loginHold/{계정_IP}): pending → 관리자 approve(7일간 그 계정·IP 허용) / deny(거부 + 감시 IP).
+   통과면 null, 막으면 던질 HttpsError */
+const HOLD_ALLOW_MS = 7 * 86400000;
+const loginHoldRef = (entryId, ip) => db.collection('loginHold').doc(guardKey('h_', entryId + '_' + ip));
+async function loginHoldGate(entry, ip, intel, auditMeta) {
+  const ref = loginHoldRef(entry.id, ip);
+  const h = (await ref.get().catch(() => null));
+  const d = (h && h.exists) ? h.data() : {};
+  const now = Date.now();
+  if (d.status === 'approved' && d.until > now) return null;
+  if (d.status === 'denied') {
+    await db.collection('loginAudit').add(Object.assign({ status: 'vpn-denied', nickname: entry.nickname }, auditMeta)).catch(() => {});
+    return new HttpsError('permission-denied', '관리자가 이 VPN 접속을 허용하지 않았어요. VPN을 끄고 다시 로그인해 주세요.');
+  }
+  const fresh = d.status !== 'pending';
+  await ref.set({ entryId: entry.id, nickname: entry.nickname || '', ip, status: 'pending', at: new Date().toISOString(),
+    tries: (d.status === 'pending' ? (d.tries || 1) + 1 : 1), device: deviceOf(auditMeta.ua), ua: String(auditMeta.ua || '').slice(0, 300),
+    origin: String(auditMeta.origin || '').slice(0, 200), intel: { provider: intel.provider || '', org: intel.org || '', city: intel.city || '', country: intel.country || '', type: intel.type || '' } }, { merge: true });
+  await db.collection('loginAudit').add(Object.assign({ status: 'vpn-hold', nickname: entry.nickname }, auditMeta)).catch(() => {});
+  if (fresh) {
+    const s = await suspicionOf({ ip, ua: auditMeta.ua, origin: auditMeta.origin, entry, entryId: entry.id, uid: entry.id, status: 'ok' }).catch(() => ({ reasons: [] }));
+    await securityAlert({ type: 'vpn-hold', target: entry.id, nickname: entry.nickname || '', ip, device: deviceOf(auditMeta.ua),
+      intel: { provider: intel.provider || '', city: intel.city || '', country: intel.country || '' }, reasons: s.reasons || [] },
+      '🛂 VPN 로그인 검토 · ' + (entry.nickname || ''),
+      'PIN 은 맞았지만 VPN(' + (intel.provider || '') + (intel.country ? ', ' + intel.country : '') + ')이라 보류했어요 · ' + deviceOf(auditMeta.ua) + ' — 관리자탭 🛡 보안 경고에서 허용/거부');
+  }
+  return new HttpsError('failed-precondition', 'VPN 접속이라 관리자가 확인 중이에요. VPN을 끄고 다시 로그인하면 바로 들어올 수 있어요. (확인이 끝나면 VPN 그대로 다시 로그인해도 돼요)');
+}
 async function addWatchIp(ip) {
   if (!ip || ip === 'unknown') return;
   await db.doc('security/watch').set({ ips: admin.firestore.FieldValue.arrayUnion(ip) }, { merge: true }).catch(() => {});
@@ -1727,7 +1795,7 @@ async function suspicionOf(o) {
   ]);
   const device = deviceOf(o.ua);
   if (watch.has(o.ip)) reasons.push('공격·차단 이력 IP');
-  if (intel && intel.vpn) reasons.push((intel.type || 'VPN') + (intel.provider ? '·' + intel.provider : ''));
+  if (intel && intel.dcvpn) reasons.push((intel.type || 'VPN') + (intel.provider ? '·' + intel.provider : ''));   /* iCloud 비공개 릴레이는 사유 아님 */
   if (!o.origin) reasons.push('접속 사이트 정보 없음(스크립트 의심)');
   else if (o.origin.indexOf(APP_ORIGIN) !== 0) reasons.push('앱 밖 사이트에서 접속(' + o.origin.slice(0, 60) + ')');
   if (!/Mozilla\//.test(o.ua || '')) reasons.push('일반 브라우저 아님');
