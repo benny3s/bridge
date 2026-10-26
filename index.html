@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-26-465';
+  var APP_VERSION = '2026-10-26-466';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -3042,6 +3042,22 @@
       return { v: 2, salt: b64encode(salt.buffer), hash: hash };
     });
   }
+  /* 너무 쉬운 PIN 차단 (2026-10-26 보안): 반복·연속·생년월일·MMDD·흔한 조합 — 대입 공격에 바로 뚫림 */
+  function isWeakPin(pin) {
+    var p = String(pin || '');
+    if (!/^[0-9]{4,10}$/.test(p)) return false; /* 형식 오류는 따로 안내 */
+    if (/^(\d)\1+$/.test(p)) return true;                         /* 0000·1111·2222… */
+    if ('0123456789'.indexOf(p) >= 0 || '9876543210'.indexOf(p) >= 0) return true; /* 1234·4321·2345… */
+    if (['1004', '2580', '1010', '1212', '1122', '2468', '1324', '1379', '7979', '2424', '0420'].indexOf(p) >= 0) return true;
+    if (p.length === 4 && /^(19|20)\d\d$/.test(p)) return true;   /* 출생연도 */
+    if (p.length === 4 && /^(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(p)) return true; /* MMDD */
+    return false;
+  }
+  function pinProblem(pin) {
+    if (!/^[0-9]{4,10}$/.test(String(pin || ''))) return 'PIN은 숫자 4~10자리예요.';
+    if (isWeakPin(pin)) return '너무 쉬운 PIN이에요 (1234·0000·연속·생년월일 등). 추측하기 어려운 번호로 정해주세요.';
+    return null;
+  }
   /* 신·구 형식 모두 검증. 신규(pinAuth) 우선, 없으면 기존 sha256(pinHash) */
   function verifyPin(pin, entry) {
     if (entry && entry.pinAuth && entry.pinAuth.salt) {
@@ -3540,7 +3556,7 @@
     if (!sub || sub.ownerSelf) return modalNotice('안내', '내가 소개한 친구만 임시 PIN을 발급할 수 있어요.');
     modalNumericPinSetup('🔑 1일 임시 로그인 PIN 발급', '주선자(' + currentUser.nickname + ')님이 계속 관리하는 상태는 그대로예요. ' + sub.nickname + '님이 하루 동안 직접 로그인할 수 있는 임시 PIN을 발급해요. 사용할 PIN을 정해 ' + sub.nickname + '님께 알려주세요 (숫자 4~10자리). 로그인 후 ' + sub.nickname + '님이 직접 PIN을 바꿀 수도 있어요.', '발급').then(function (r) {
       if (!r) return;
-      if (!/^[0-9]{4,10}$/.test(r.p1)) return modalNotice('입력 오류', 'PIN은 숫자 4~10자리예요.');
+      var _pp = pinProblem(r.p1); if (_pp) return modalNotice('입력 오류', _pp);
       if (r.p1 !== r.p2) return modalNotice('오류', 'PIN이 일치하지 않아요.');
       var expiresAt = new Date(Date.now() + SUB_PIN_TTL_MS).toISOString();
       makePinAuth(r.p1).then(function (auth) {
@@ -3636,7 +3652,7 @@
       if (!ok) return;
       modalNumericPinSetup('🎓 독립(일반) 계정 PIN 설정', sub.nickname + '님을 독립(일반) 계정으로 전환해요. 앞으로 로그인에 사용할 개인 PIN을 정해 ' + sub.nickname + '님께 알려주세요 (숫자 4~10자리). 로그인 후 ' + sub.nickname + '님이 직접 PIN을 바꿀 수도 있어요.', '설정').then(function (r) {
         if (!r) return;
-        if (!/^[0-9]{4,10}$/.test(r.p1)) return modalNotice('입력 오류', 'PIN은 숫자 4~10자리예요.');
+        var _pp = pinProblem(r.p1); if (_pp) return modalNotice('입력 오류', _pp);
         if (r.p1 !== r.p2) return modalNotice('오류', 'PIN이 일치하지 않아요.');
         /* 연락처는 주선자 PIN으로 암호화돼 있으니, 새 PIN으로 다시 암호화 (실패 시 다음 번호처리 때 재입력) */
         var reEnc = sub.contactSelfEnc
@@ -6127,7 +6143,7 @@
     if (missing.length) return modalNotice('입력 오류', '다음을 채워주세요: ' + missing.join(', '));
     var _adminRel = (function () { var el = form.querySelector('[name="adminRel"]'); return el ? (el.value || '').trim() : ''; })();
     if (_adminRel) referrerText = referrerText + ' (베니와: ' + _adminRel + ')'; /* 관리자와의 관계는 경로 답변 뒤 괄호로 합침 */
-    if (!/^[0-9]{4,10}$/.test(pin)) return modalNotice('입력 오류', 'PIN은 숫자 4~10자리로 정해주세요.');
+    var _pp = pinProblem(pin); if (_pp) return modalNotice('입력 오류', _pp);
     var pin2El = form.querySelector('[name="pin2"]');
     if (pin !== ((pin2El && pin2El.value) || '').trim()) return modalNotice('PIN 불일치', '두 번 입력한 PIN이 서로 달라요. 다시 확인해주세요.');
     if (!/^01[0-9]{8,9}$/.test(contact)) return modalNotice('입력 오류', '전화번호는 01012345678 형식으로 입력해주세요.');
@@ -9574,7 +9590,7 @@
       ? '관리자가 보낸 임시 PIN으로 로그인했어요. 앞으로 쓸 PIN을 새로 정해주세요 (숫자 4~10자리).'
       : '새로 사용할 개인 PIN을 입력해주세요.', opts.forced ? '저장' : null).then(function (r) {
       if (!r) { if (opts.forced) modalNotice('안내', '임시 PIN은 그대로 쓸 수 있지만, 다음에 앱을 열 때 다시 물어볼게요.'); return; }
-      if (!/^[0-9]{4,10}$/.test(r.p1)) return modalNotice('입력 오류', 'PIN은 숫자 4~10자리예요.');
+      var _pp = pinProblem(r.p1); if (_pp) return modalNotice('입력 오류', _pp);
       if (r.p1 !== r.p2) return modalNotice('오류', 'PIN이 일치하지 않아요.');
       var oldPin = currentUser.pin, newPin = r.p1;
       /* 내가 관리하는 프로필들(친구·본인) — 연락처가 내 옛 PIN으로 암호화돼 있음 */
@@ -9732,10 +9748,10 @@
     if (ownerByMM && !referrerText) referrerText = '주선자 본인';
     var _adminRel = (function () { var el = form.querySelector('[name="adminRel"]'); return el ? (el.value || '').trim() : ''; })();
     if (_adminRel && referrerText) referrerText = referrerText + ' (베니와: ' + _adminRel + ')'; /* 관리자와의 관계는 경로 답변 뒤 괄호로 합침 (등록·비대리에서만 필드 노출) */
-    /* 사용자가 새로 '입력한' PIN만 6~10자리 검증 (기존 회원이 재사용/유지하는 값은 아래에서 대입되므로 제외) */
-    if (pin && !/^[0-9]{4,10}$/.test(pin)) {
-      modalNotice('입력 오류', 'PIN은 숫자 4~10자리로 정해주세요.');
-      return;
+    /* 사용자가 새로 '입력한' PIN만 검증 (기존 회원이 재사용/유지하는 값은 아래에서 대입되므로 제외) — 형식 + 너무 쉬운 PIN 차단 */
+    if (pin) {
+      var _pp = pinProblem(pin);
+      if (_pp) { modalNotice('입력 오류', _pp); return; }
     }
     /* PIN을 새로 입력했으면 확인 입력과 일치해야 함 (수정/로그인 상태에서 비워두면 검사 안 함) */
     if (pin) {
@@ -12086,7 +12102,7 @@
     if (!entry) return;
     modalNumericPinSetup('PIN 재설정', escapeHtml(entry.nickname) + '님에게 새로 부여할 PIN을 입력해주세요.').then(function (r) {
       if (!r) return;
-      if (!/^[0-9]{4,10}$/.test(r.p1)) return modalNotice('입력 오류', 'PIN은 숫자 4~10자리예요.');
+      var _pp = pinProblem(r.p1); if (_pp) return modalNotice('입력 오류', _pp);
       if (r.p1 !== r.p2) return modalNotice('오류', 'PIN이 일치하지 않아요.');
       var contactP = entry.contactEnc ? decryptWithAdmin(adminPrivateKey, entry.contactEnc).catch(function () { return null; }) : Promise.resolve(null);
       contactP.then(function (contact) {

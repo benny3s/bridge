@@ -621,6 +621,7 @@ exports.remindPending = functions
       await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
     }
     await purgeDeletedSecrets().catch((e) => console.error('purgeDeletedSecrets', e));
+    await maskOldContacts().catch((e) => console.error('maskOldContacts', e)); /* 매시간: 교환 확인·24h 지난 연락처 가림 */
     if (new Date().getUTCHours() === 19) {
       await purgeOldChats().catch((e) => console.error('purgeOldChats', e)); /* 매일 KST 04시 */
       const st = (await db.doc('app/state').get()).data() || {};
@@ -882,6 +883,18 @@ exports.applicantAction = functions
         });
       });
       if (photos && photos.length) await db.collection('photos').doc(id).set({ photos }, { merge: true });
+      /* 신청 때 실제 IP·기기 기록 (서버 전용 signups/{id} — state 에 안 넣어 회원에게 노출 안 됨). AI 최종 심사·사후 조사용 */
+      try {
+        const reqH = (context.rawRequest && context.rawRequest.headers) || {};
+        await db.collection('signups').doc(id).set({
+          at: entry.submittedAt, nickname: entry.nickname, kind,
+          realIp: clientIp(context),
+          appengineIp: String(reqH['x-appengine-user-ip'] || ''),
+          xff: String(reqH['x-forwarded-for'] || ''),
+          ua: String(reqH['user-agent'] || '').slice(0, 300),
+          country: String(reqH['x-appengine-country'] || '')
+        }, { merge: true }).catch(() => {});
+      } catch (e) {}
       const token = await admin.auth().createCustomToken(id, { p: 1 });
       return { ok: true, token };
     }
@@ -1423,7 +1436,40 @@ async function purgeOldChats(nowMs) {
   if (removed) console.log('purgeOldChats: removed ' + removed + ' rooms');
   return removed;
 }
-if (process.env.BRIDGE_LOCAL_TEST) { exports._purgeOldChatsForTest = purgeOldChats; exports._detectTamperIssuesForTest = (b, a) => detectTamperIssues(b, a); } /* 로컬 시험 전용 (배포 시 내보내지 않음) */
+/* 대화 속 연락처 자동 가림 (2026-10-26): 번호·카톡ID·오픈채팅·인스타·텔레그램 등이 담긴 메시지는
+   양쪽이 그 메시지 뒤로 읽었거나(교환 확인) 24시간이 지나면 서버가 원문을 가린다 → 계정이 나중에 털려도
+   지난 대화에 연락처가 안 남음. 교환 자체(실시간·상대 폰)는 그대로. 신고된 방은 조사 위해 보존. */
+const CONTACT_RE = /01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}|공\s*일\s*공|카\s*톡|카카오톡|카카오|kakao|오픈\s*채팅|open\.?kakao|텔레그램|telegram|인스타(그램)?|instagram|라인\s*아이디|line\s*id|아이디\s*[:：]\s*\S{3,}|\bid\s*[:：]\s*\S{3,}|@[A-Za-z0-9._]{3,}/i;
+function hasContact(text) { return CONTACT_RE.test(String(text || '')); }
+const CONTACT_MASK_TEXT = '🔒 연락처 (교환 완료 — 보안을 위해 가려졌어요)';
+async function maskOldContacts(nowMs) {
+  const now = nowMs || Date.now();
+  const qs = await db.collection('chats').get();
+  let masked = 0;
+  for (const d of qs.docs) {
+    const r = d.data();
+    if (r.reportedAt) continue;                                   /* 신고된 방은 보존 */
+    const members = r.members || [];
+    const readAt = r.readAt || {};
+    const bothReadMs = (members.length === 2)
+      ? Math.min.apply(null, members.map((id) => (readAt[id] ? new Date(readAt[id]).getTime() : 0)))
+      : 0;
+    let changed = false;
+    const msgs = (r.msgs || []).map((m) => {
+      if (m.masked || !hasContact(m.text)) return m;
+      const mAt = m.at ? new Date(m.at).getTime() : 0;
+      const bothRead = bothReadMs && mAt && (bothReadMs >= mAt);   /* 둘 다 그 뒤로 읽음 = 교환 확인 */
+      const old = mAt && (now - mAt > 24 * 3600000);               /* 24시간 지남 */
+      if (!bothRead && !old) return m;
+      changed = true;
+      return Object.assign({}, m, { text: CONTACT_MASK_TEXT, masked: true });
+    });
+    if (changed) { await d.ref.update({ msgs }); masked++; }
+  }
+  if (masked) console.log('maskOldContacts: masked rooms ' + masked);
+  return masked;
+}
+if (process.env.BRIDGE_LOCAL_TEST) { exports._purgeOldChatsForTest = purgeOldChats; exports._detectTamperIssuesForTest = (b, a) => detectTamperIssues(b, a); exports._maskOldContactsForTest = maskOldContacts; exports._hasContactForTest = hasContact; } /* 로컬 시험 전용 (배포 시 내보내지 않음) */
 
 /* ══ 3단계-③: 사진 원본 열람 권한 ══
    photos/{id} 에 서버가 viewers(볼 수 있는 uid)·owners(고칠 수 있는 uid)를 유지 → 규칙이 이 목록으로 판단.
@@ -1936,6 +1982,18 @@ exports.aiConcierge = functions
             if ((ao && ao.contactEnc) || p.contactEnc || p.pinSet) phoneStr = '010-암호화보관확인';
           } catch (e) {}
         }
+        /* 신청 IP·기기 신호 (서버 전용 signups/{id}) — AI 최종 심사가 VPN·공격 IP·중복을 함께 보도록 전달 */
+        let sig = {};
+        try {
+          const su = (await db.collection('signups').doc(p.id).get()).data();
+          if (su) {
+            sig.ip = su.realIp || ''; sig.country = su.country || ''; sig.ua = String(su.ua || '').slice(0, 160);
+            if (su.realIp) {
+              const li = (await db.collection('loginIp').doc(guardKey('ip_', su.realIp)).get()).data();
+              sig.ipKnownAttacker = !!(li && (li.blockedUntil || (Array.isArray(li.fails) && li.fails.length >= 5)));
+            }
+          }
+        } catch (e) {}
         pendingItems.push({
           id: p.id,
           nickname: p.nickname || '',
@@ -1950,7 +2008,8 @@ exports.aiConcierge = functions
           submittedAt: p.submittedAt || '',
           photoCount: p.photoCount || (photoUrl ? 1 : 0),
           photoDataUrl: photoUrl || '',
-          phone: phoneStr
+          phone: phoneStr,
+          signupIp: sig.ip || '', signupCountry: sig.country || '', signupUa: sig.ua || '', ipKnownAttacker: !!sig.ipKnownAttacker
         });
       }
 
