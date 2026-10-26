@@ -2677,7 +2677,9 @@ function callAnthropicHaiku(apiKey, sysPrompt, userPrompt, maxTokens, temperatur
     const payload = {
       model: 'claude-haiku-5-5',
       max_tokens: maxTokens || 550,
-      temperature: typeof temperature === 'number' ? temperature : 0.35,
+      /* Haiku 5.5 는 기본값이 아닌 temperature 를 400 으로 거절 → 보내지 않음(인자는 호환용으로만 남김).
+         생각(thinking)이 기본으로 켜져 짧은 max_tokens 를 다 쓸 수 있어 끔(effort medium 이하에서 허용) */
+      thinking: { type: 'disabled' },
       messages: [{ role: 'user', content: userPrompt }]
     };
     if (sysPrompt) payload.system = sysPrompt;
@@ -2699,7 +2701,8 @@ function callAnthropicHaiku(apiKey, sysPrompt, userPrompt, maxTokens, temperatur
       res.on('end', () => {
         try {
           const j = JSON.parse(raw);
-          const txt = j && Array.isArray(j.content) && j.content[0] && j.content[0].text;
+          const tb = j && Array.isArray(j.content) && j.content.find((b) => b.type === 'text');
+          const txt = tb && tb.text;
           if (res.statusCode >= 200 && res.statusCode < 300 && txt) {
             resolve({ text: String(txt).trim(), model: j.model || 'claude-haiku-5-5' });
           } else {
