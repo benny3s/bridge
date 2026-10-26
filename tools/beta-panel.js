@@ -3,7 +3,7 @@
      시험 계정 비밀번호·PIN 은 아래 상수 (가짜 데이터 전용 — 운영과 무관). */
   (function betaPanel() {
     var BETA_ADMIN_PW = 'Beta!Admin2026';
-    var BETA_PIN = '0000';
+    var BETA_PIN = '582941';   /* 흔한 PIN(0000 등)은 v467 부터 서버가 로그인 거부 → 시험 계정도 흔하지 않은 PIN */
     var COLORS = ['#E58C96', '#8DB4E2', '#9CCB9A', '#F2C46D', '#B79AD8', '#F09E6E', '#7FC8C2', '#D7A6C8'];
 
     function fakePhoto(label, i) {
