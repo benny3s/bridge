@@ -170,18 +170,26 @@ exports.memberLogin = functions
     } catch (blockErr) {
       console.info('[LOGIN_AUDIT_BLOCKED]', JSON.stringify(Object.assign({ pinLen: pin.length, weakPin: COMMON_WEAK_PINS.has(pin) }, auditMeta)));
       await db.collection('loginAudit').add(Object.assign({ status: 'blocked', weakPin: COMMON_WEAK_PINS.has(pin) }, auditMeta)).catch(() => {});
-      if (COMMON_WEAK_PINS.has(pin)) {
-        await ipFailRecord(ip, 'honeypot', entryId).catch(() => {});
-        await securityAlert({ type: 'ip-block', ip, what: 'honeypot', target: entryId, ua: auditMeta.ua, xff: auditMeta.xff, fails: 1 }, '🚨 탈취 의심 계정 재접속 포착', '실제 IP: ' + ip + ' 에서 단순 PIN 재접속을 시도해 즉시 채증·차단했어요').catch(() => {});
-      }
+      if (COMMON_WEAK_PINS.has(pin)) await ipFailRecord(ip, 'honeypot', entryId).catch(() => {});
+      try {
+        const st0 = (await db.doc('app/state').get()).data() || {};
+        const e0 = (st0.entries || []).concat(st0.pendingEntries || []).find((e) => e.id === entryId) || null;
+        const o = { ip, ua: auditMeta.ua, origin: auditMeta.origin, entry: e0, entryId, status: 'blocked' };
+        await suspiciousAlert(o, await suspicionOf(o), [COMMON_WEAK_PINS.has(pin) ? '차단 중 쉬운 PIN 시도' : '차단·잠김 상태에서 다시 시도']);
+      } catch (e) { console.error('blockedAlert', e); }
       throw blockErr;
     }
     const state = stSnap.data() || {};
     let entry = (state.entries || []).find((e) => e.id === entryId);
     let pending = false;
     if (!entry) { entry = (state.pendingEntries || []).find((e) => e.id === entryId); pending = !!entry; }
+    const audO = { ip, ua: auditMeta.ua, origin: auditMeta.origin, entry, entryId, uid: entryId, pin };
     if (!entry) {
       console.info('[LOGIN_AUDIT_NOTFOUND]', JSON.stringify(auditMeta));
+      await db.collection('loginAudit').add(Object.assign({ status: 'notfound' }, auditMeta)).catch(() => {});
+      await ipFailRecord(ip, 'member', entryId).catch(() => {});
+      const o = Object.assign({}, audO, { status: 'notfound', uid: '' });
+      await suspiciousAlert(o, await suspicionOf(o)).catch(() => {});
       throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
     }
     if (entry.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
@@ -189,6 +197,18 @@ exports.memberLogin = functions
       throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
     }
     const src = await pinSourceFor(entry, state);
+    /* 흔한 PIN(1234·0000…)은 맞든 틀리든 같은 안내로 로그인 거부 (2026-10-26 대입 공격으로 4계정 탈취) — 맞으면 계정에 pinWeak 표시해 새 PIN 받게.
+       같은 안내라 공격자는 그 PIN 이 맞았는지 알 수 없다 */
+    if (COMMON_WEAK_PINS.has(pin)) {
+      const real = verifyPinServer(pin, src);
+      await db.collection('loginAudit').add(Object.assign({ status: 'weak-refused', nickname: entry.nickname, correct: real }, auditMeta)).catch(() => {});
+      if (real) await markPinWeak([entry.id]).catch((e) => console.error('markPinWeak', e));
+      else { await loginGuardResult(guard, false); await ipFailRecord(ip, 'member', entryId); }
+      const o = Object.assign({}, audO, { status: real ? 'weak' : 'fail', fails: 1 });
+      const s = await suspicionOf(o);
+      if (real || s.reasons.length) await suspiciousAlert(o, s, real ? ['흔한 PIN 계정 — 로그인 막고 새 PIN 필요(관리자탭 PIN 재설정)'] : []).catch(() => {});
+      throw new HttpsError('failed-precondition', '보안을 위해 1234·0000 같은 쉬운 PIN으로는 로그인할 수 없어요. 아래 \'PIN을 잊으셨나요? PIN 재설정 요청\'으로 관리자에게 새 PIN을 받아 주세요.');
+    }
     const ok = verifyPinServer(pin, src);
     const fails = await loginGuardResult(guard, ok);
     console.info('[LOGIN_AUDIT]', JSON.stringify(Object.assign({ nickname: entry.nickname, ok, fails }, auditMeta)));
@@ -196,9 +216,19 @@ exports.memberLogin = functions
       await db.collection('loginAudit').add(Object.assign({ status: 'fail', nickname: entry.nickname, fails }, auditMeta)).catch(() => {});
       await ipFailRecord(ip, 'member', entryId);
       await lockAlert(gk, fails, ip, entry.nickname);
+      const o = Object.assign({}, audO, { status: 'fail', fails });
+      const s = await suspicionOf(o).catch(() => null);
+      if (s && s.reasons.length) await suspiciousAlert(o, s).catch(() => {});
       throw new HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
     }
     await db.collection('loginAudit').add(Object.assign({ status: 'ok', nickname: entry.nickname }, auditMeta)).catch(() => {});
+    {
+      const o = Object.assign({}, audO, { status: 'ok' });
+      const s = await suspicionOf(o).catch(() => null);    /* 기기 비교는 기록 남기기 전에 */
+      await noteAccess(entryId, entryId, entry.nickname, ip, auditMeta.ua, auditMeta.origin).catch(() => {});
+      if (s && s.reasons.length) await suspiciousAlert(o, s).catch(() => {});
+      if (isWeakPinServer(pin)) await markPinWeak([entry.id]).catch(() => {});   /* 생년·MMDD·연속 등 → 로그인은 되지만 새 PIN 정하기 창 */
+    }
     if (!src.pinAuth && src.pinHash) {
       /* 옛 방식(솔트 없는 sha256) → PBKDF2로 올림 (서버 전용 금고에만 저장) */
       const salt = nodeCrypto.randomBytes(16);
@@ -229,6 +259,60 @@ exports.adminLogin = functions
     }
     const token = await admin.auth().createCustomToken('admin', { admin: 1 });
     return { token };
+  });
+
+/* 관리자: 쉬운 PIN 회원 찾기 (2026-10-26) — 흔한 PIN·출생연도로 PIN 확인값을 대 보고, 맞는 계정에 pinWeak 표시(mark:true)
+   → 그 회원은 앱을 열면 새 PIN 정하기 창, 흔한 PIN 로그인은 막힘. PIN 자체는 돌려주지 않음(종류만) */
+exports.adminPinAudit = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 540, memory: '2GB' })
+  .https.onCall(async (data, context) => {
+    if (claimsOf(context).admin !== 1) throw new HttpsError('permission-denied', '관리자만 쓸 수 있어요.');
+    const state = (await db.doc('app/state').get()).data() || {};
+    const queue = (state.entries || []).concat(state.pendingEntries || []).filter((e) => !e.deactivated && !e.testAccount);
+    const pbk = (pin, salt) => new Promise((res, rej) => nodeCrypto.pbkdf2(String(pin), salt, 150000, 32, 'sha256', (err, k) => (err ? rej(err) : res(k.toString('base64')))));
+    const weak = [];
+    let checked = 0;
+    async function worker() {
+      while (queue.length) {
+        const e = queue.shift();
+        const src = await pinSourceFor(e, state).catch(() => null);
+        if (!src || (!src.pinAuth && !src.pinHash)) continue;
+        checked++;
+        const cands = new Set(Array.from(COMMON_WEAK_PINS).concat(e.birthYear ? [String(e.birthYear)] : []));
+        for (const c of cands) {
+          const ok = (src.pinAuth && src.pinAuth.salt)
+            ? (await pbk(c, Buffer.from(src.pinAuth.salt, 'base64'))) === src.pinAuth.hash
+            : nodeCrypto.createHash('sha256').update(c, 'utf8').digest('hex') === src.pinHash;
+          if (ok) { weak.push({ id: e.id, nickname: e.nickname, kind: COMMON_WEAK_PINS.has(c) ? '흔한 PIN' : '출생연도' }); break; }
+        }
+      }
+    }
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    const marked = (data && data.mark) ? await markPinWeak(weak.map((w) => w.id)) : 0;
+    return { checked, weak, marked };
+  });
+
+/* 관리자: 로그인 시도·앱 접속 기록 (어떤 기기·사이트·IP 로 들어왔는지) — 서버 전용 loginAudit·accessSeen 을 대신 읽어 줌 */
+exports.adminSecurityLog = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 30, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    if (claimsOf(context).admin !== 1) throw new HttpsError('permission-denied', '관리자만 쓸 수 있어요.');
+    const [la, ac] = await Promise.all([
+      db.collection('loginAudit').orderBy('at', 'desc').limit(150).get(),
+      db.collection('accessSeen').orderBy('lastAt', 'desc').limit(300).get()
+    ]);
+    const logins = la.docs.map((d) => { const x = d.data(); return { at: x.at, status: x.status, nickname: x.nickname || '', entryId: x.entryId || '', ip: x.realIp || '', device: deviceOf(x.ua), origin: x.origin || '', correct: x.correct }; });
+    const access = ac.docs.map((d) => { const x = d.data(); return { nickname: x.nickname || '', entryId: x.entryId || '', ip: x.ip || '', device: x.device || '', origin: x.origin || '', firstAt: x.firstAt || '', lastAt: x.lastAt || '', count: x.count || 0 }; });
+    const ips = Array.from(new Set(logins.map((l) => l.ip).concat(access.map((a) => a.ip)).filter(Boolean))).slice(0, 200);
+    const intel = {};
+    if (ips.length) {
+      const snaps = await db.getAll(...ips.map((ip) => db.collection('ipIntel').doc(guardKey('i_', ip))));
+      snaps.forEach((s, i) => { if (s.exists) { const x = s.data(); intel[ips[i]] = { vpn: !!x.vpn, type: x.type || '', provider: x.provider || '', city: x.city || '' }; } });
+    }
+    const watch = Array.from(await watchIpSet().catch(() => new Set(WATCH_IPS)));
+    return { logins, access, intel, watch };
   });
 
 /* 회원 전화번호를 안전 저장 (가입/수정 시 클라이언트가 호출). PIN 검증으로 본인만 저장 가능. */
@@ -338,6 +422,7 @@ exports.getHiddenIds = functions
     if (!(await callerOwns(context, state, entry, pin))) {
       throw new functions.https.HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
     }
+    const auditP = accessAudit(context, entry);   /* 앱 열 때마다 접속 기록·수상함 판단 (아래 계산과 동시에) */
     const myFilter = (await db.doc('acqFilter/' + entryId).get()).data() || {};
     const myFh = new Set(Array.isArray(myFilter.fh) ? myFilter.fh : []);
     const myPh = ((await db.doc('sendContacts/' + entryId).get()).data() || {}).ph || null;
@@ -352,6 +437,7 @@ exports.getHiddenIds = functions
       const q = await db.collection('acqFilter').where('fh', 'array-contains', myPh).get();
       q.forEach((d) => { if (d.id !== entryId) hide.add(d.id); });
     }
+    await auditP;
     return { ids: Array.from(hide), filterCount: myFh.size, hiddenCount: hide.size };
   });
 
@@ -1529,6 +1615,170 @@ async function syncPhotoAcl(state, force) {
 const IP_FAIL_LIMIT = 10;
 const IP_MULTI_TARGET_LIMIT = 3;
 const COMMON_WEAK_PINS = new Set(['0000', '1111', '1234', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999', '123456', '000000', '111111', '1004', '2580', '4860']);
+/* 앱 isWeakPin 과 같은 기준 (반복·연속·흔한 조합·출생연도·MMDD) */
+function isWeakPinServer(pin) {
+  const p = String(pin || '');
+  if (!/^[0-9]{4,10}$/.test(p)) return false;
+  if (/^(\d)\1+$/.test(p)) return true;
+  if ('0123456789'.indexOf(p) >= 0 || '9876543210'.indexOf(p) >= 0) return true;
+  if (['1004', '2580', '1010', '1212', '1122', '2468', '1324', '1379', '7979', '2424', '0420'].indexOf(p) >= 0) return true;
+  if (p.length === 4 && /^(19|20)\d\d$/.test(p)) return true;
+  if (p.length === 4 && /^(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(p)) return true;
+  return COMMON_WEAK_PINS.has(p);
+}
+
+/* ══ 접속 기록 · 수상한 행적 알림 (2026-10-26 PIN 대입 사고 후, Benny: "로그인 시도가 보일 때마다 저장하고 조금만 행적이 이상해도 알려줘") ══
+   로그인 시도(성공·실패·차단·없는 계정)는 loginAudit, 앱을 열 때(getHiddenIds)는 accessSeen/{회원_IP_기기} 에 IP·기기·접속 사이트를 남긴다(서버 전용).
+   이상하면 바로 관리자 알림: 공격·차단 이력 IP / VPN·데이터센터 / 탈취 이력 계정 / 30일+ 안 쓰던 계정 / 그 계정에서 처음 보는 기기 종류 /
+   앱 밖 사이트·일반 브라우저 아님 / 쉬운 PIN 대입 / 2번째 이상 실패 / 없는 계정.
+   공격자가 VPN 을 끄고 자기 계정으로 같은 집 IP 에서 앱을 열면 '공격·차단 이력 IP' 로 바로 잡힌다. */
+const WATCH_IPS = ['180.65.139.114', '45.80.212.81', '45.80.212.84', '135.136.27.15', '2a04:4e41:2201:7dfb::3d3e:7dfb'];   /* 10-26 공격자 */
+const BREACHED_IDS = new Set(['9cc9116d-7bc6-481c-a280-81c6ef2a82ff', '24d69624-2988-45e1-911e-ce9df19c0613', 'a061a706-0554-449c-bec8-6bd699e5b7dc', '161e4ad5-1eee-412a-a762-8d7511240980']);
+const APP_ORIGIN = 'https://benny3s.github.io';
+function deviceOf(ua) {
+  const u = String(ua || '');
+  const os = /iPhone|iPod/.test(u) ? '아이폰' : /iPad/.test(u) ? '아이패드' : /Android/.test(u) ? '안드로이드'
+    : /Macintosh/.test(u) ? 'Mac' : /Windows/.test(u) ? 'Windows' : /Linux|CrOS/.test(u) ? 'Linux' : '기타';
+  const br = /KAKAOTALK/i.test(u) ? '카카오톡' : /SamsungBrowser/.test(u) ? '삼성 인터넷' : /NAVER\(inapp/i.test(u) ? '네이버 앱'
+    : /Whale/.test(u) ? '웨일' : /Edg(A|iOS)?\//.test(u) ? 'Edge' : /FxiOS|Firefox/.test(u) ? 'Firefox'
+    : /CriOS|Chrome\//.test(u) ? 'Chrome' : /Safari\//.test(u) ? 'Safari' : '기타';
+  return os + ' ' + br;
+}
+/* IP 성격(VPN·데이터센터·가정용) — proxycheck.io, 7일 캐시(ipIntel). 실패해도 본 처리는 그대로 */
+async function ipIntel(ip) {
+  if (!ip || ip === 'unknown') return null;
+  const ref = db.collection('ipIntel').doc(guardKey('i_', ip));
+  try { const c = (await ref.get()).data(); if (c && Date.now() - (c.at || 0) < 7 * 86400000) return c; } catch (e) {}
+  try {
+    const r = await fetch('https://proxycheck.io/v2/' + encodeURIComponent(ip) + '?vpn=1&asn=1', { signal: AbortSignal.timeout(2500) });
+    const d = ((await r.json()) || {})[ip];
+    if (!d) return null;
+    const out = { at: Date.now(), vpn: d.proxy === 'yes', type: String(d.type || ''), provider: String(d.provider || ''),
+      city: String(d.city || d.region || ''), country: String(d.isocode || '') };
+    await ref.set(out).catch(() => {});
+    return out;
+  } catch (e) { return null; }
+}
+/* 감시 IP = 공격자 IP + 자동 차단됐던 IP(ipFailRecord 가 security/watch 에 붙임) */
+async function watchIpSet() {
+  const s = await db.doc('security/watch').get().catch(() => null);
+  const extra = (s && s.exists && Array.isArray(s.data().ips)) ? s.data().ips : [];
+  return new Set(WATCH_IPS.concat(extra));
+}
+async function knownDevices(uid) {
+  const q = await db.collection('accessSeen').where('uid', '==', uid).limit(60).get();
+  const set = new Set(); q.forEach((d) => { if (d.data().device) set.add(d.data().device); });
+  return set;
+}
+/* o = { ip, ua, origin, entry, entryId, uid, status: ok|fail|blocked|notfound|access, fails, pin } */
+async function suspicionOf(o) {
+  const reasons = [];
+  const [watch, intel, devs] = await Promise.all([
+    watchIpSet().catch(() => new Set(WATCH_IPS)), ipIntel(o.ip),
+    o.uid ? knownDevices(o.uid).catch(() => new Set()) : Promise.resolve(new Set())
+  ]);
+  const device = deviceOf(o.ua);
+  if (watch.has(o.ip)) reasons.push('공격·차단 이력 IP');
+  if (intel && intel.vpn) reasons.push((intel.type || 'VPN') + (intel.provider ? '·' + intel.provider : ''));
+  if (!o.origin) reasons.push('접속 사이트 정보 없음(스크립트 의심)');
+  else if (o.origin.indexOf(APP_ORIGIN) !== 0) reasons.push('앱 밖 사이트에서 접속(' + o.origin.slice(0, 60) + ')');
+  if (!/Mozilla\//.test(o.ua || '')) reasons.push('일반 브라우저 아님');
+  if (o.entry && BREACHED_IDS.has(o.entry.id)) reasons.push('탈취 이력 계정');
+  if (o.entry && o.entry.lastSeenAt && o.status !== 'access') {
+    const days = Math.floor((Date.now() - Date.parse(o.entry.lastSeenAt)) / 86400000);
+    if (days >= 30) reasons.push(days + '일 만의 접속');
+  }
+  if (devs.size && !devs.has(device)) reasons.push('처음 보는 기기(전엔 ' + Array.from(devs).slice(0, 3).join('·') + ')');
+  if (o.status === 'fail' && o.pin && isWeakPinServer(o.pin)) reasons.push('쉬운 PIN 대입');
+  if (o.status === 'fail' && o.fails >= 2) reasons.push(o.fails + '번째 실패');
+  if (o.status === 'notfound') reasons.push('없는 계정');
+  return { reasons, intel, device };
+}
+/* 수상함 푸시는 같은 IP·계정 10분에 1번, 전체 1시간 20번까지 (대입 공격 때 폰이 수백 번 울리지 않게). 기록(securityAlerts)은 매번 남김 */
+async function alertAllowed(key) {
+  const ref = db.doc('security/alertRate');
+  const now = Date.now();
+  let ok = false, skipped = 0;
+  await db.runTransaction(async (tx) => {
+    const d = (await tx.get(ref)).data() || {};
+    const per = {};
+    Object.keys(d.per || {}).forEach((k) => { if (now - d.per[k] < 600000) per[k] = d.per[k]; });
+    let hourStart = d.hourStart || now, count = d.count || 0, sk = d.skipped || 0;
+    if (now - hourStart > 3600000) { hourStart = now; count = 0; }
+    ok = !per[key] && count < 20;
+    if (ok) { per[key] = now; count++; skipped = sk; sk = 0; } else sk++;
+    tx.set(ref, { per, hourStart, count, skipped: sk });
+  });
+  return { ok, skipped };
+}
+async function suspiciousAlert(o, s, extra) {
+  const label = { ok: '로그인 성공', fail: '로그인 실패', blocked: '로그인 차단', notfound: '없는 계정 로그인', access: '앱 접속', weak: '쉬운 PIN 로그인' }[o.status] || o.status;
+  const who = (o.entry && o.entry.nickname) || o.entryId || '?';
+  const where = o.ip + (s.intel && (s.intel.city || s.intel.provider) ? ' (' + [s.intel.city, s.intel.provider].filter(Boolean).join(' · ') + ')' : '');
+  const reasons = s.reasons.concat(extra || []);
+  try {
+    await db.collection('securityAlerts').add({ at: new Date().toISOString(), resolved: false, type: 'suspicious', kind: o.status,
+      target: o.entryId || '', nickname: who, ip: o.ip, ua: String(o.ua || '').slice(0, 300), origin: String(o.origin || '').slice(0, 200),
+      device: s.device, reasons, intel: s.intel || null });
+  } catch (e) { console.error('suspiciousAlert', e); }
+  const gate = await alertAllowed(guardKey('k_', o.ip + '_' + (o.entryId || ''))).catch(() => ({ ok: true, skipped: 0 }));
+  if (!gate.ok) return;
+  try {
+    await sendToAdmin((o.status === 'ok' || o.status === 'access' ? '⚠️ 수상한 ' : '🚨 수상한 ') + label + ' · ' + who,
+      reasons.join(' / ') + ' — ' + where + ' · ' + s.device + (gate.skipped ? ' (그 사이 알림 생략 ' + gate.skipped + '건 — 보안 경고에 기록)' : ''));
+  } catch (e) { /* 알림 실패 무시 */ }
+}
+/* 쉬운 PIN 계정 표시(pinWeak) — 앱이 새 PIN 정하기 창을 띄움. 서버 쓰기(_w·_wn 그대로)라 조작 감지 대상 아님 */
+async function markPinWeak(ids) {
+  const want = new Set(ids);
+  if (!want.size) return 0;
+  let n = 0;
+  await db.runTransaction(async (tx) => {
+    const ref = db.doc('app/state');
+    const s = (await tx.get(ref)).data() || {};
+    const mark = (arr) => (arr || []).map((e) => { if (want.has(e.id) && !e.pinWeak) { n++; return Object.assign({}, e, { pinWeak: true }); } return e; });
+    const entries = mark(s.entries), pendingEntries = mark(s.pendingEntries);
+    if (n) tx.update(ref, { entries, pendingEntries });
+  });
+  return n;
+}
+/* 이 계정의 접속 흔적(IP·기기·사이트) 남김 → 처음 보는 조합이면 true */
+async function noteAccess(uid, entryId, nickname, ip, ua, origin) {
+  const device = deviceOf(ua);
+  const ref = db.collection('accessSeen').doc(guardKey('a_', uid + '_' + ip + '_' + device));
+  const now = new Date().toISOString();
+  let fresh = false, doc = {};
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref);
+    doc = s.exists ? s.data() : {};
+    fresh = !s.exists;
+    tx.set(ref, Object.assign({ uid, entryId, nickname: nickname || '', ip, device, ua: String(ua || '').slice(0, 300),
+      origin: String(origin || '').slice(0, 200), lastAt: now, count: (doc.count || 0) + 1 }, fresh ? { firstAt: now } : {}), { merge: true });
+  });
+  return { fresh, ref, doc };
+}
+/* 앱을 열 때(getHiddenIds) — 기록 + 처음 보는 조합이면 수상함 판단, 감시 IP 는 6시간마다 다시 알림 */
+async function accessAudit(context, entry) {
+  try {
+    const uid = context.auth && context.auth.uid;
+    if (!uid || uid === 'admin') return;
+    const ip = clientIp(context);
+    const h = (context.rawRequest && context.rawRequest.headers) || {};
+    const ua = String(h['user-agent'] || ''), origin = String(h['origin'] || h['referer'] || '');
+    const o = { ip, ua, origin, entry, entryId: entry.id, uid, status: 'access' };
+    const before = await knownDevices(uid).catch(() => new Set());
+    const n = await noteAccess(uid, entry.id, entry.nickname, ip, ua, origin);
+    const watched = (await watchIpSet().catch(() => new Set(WATCH_IPS))).has(ip);
+    const recentAlert = n.doc.alertAt && Date.now() - Date.parse(n.doc.alertAt) < 6 * 3600000;
+    if (!n.fresh && !(watched && !recentAlert)) return;
+    const s = await suspicionOf(Object.assign({}, o, { uid: '' }));   /* 기기 비교는 방금 남긴 기록 말고 그 전 목록(before)으로 */
+    if (before.size && !before.has(s.device)) s.reasons.push('처음 보는 기기(전엔 ' + Array.from(before).slice(0, 3).join('·') + ')');
+    if (s.reasons.length) {
+      await suspiciousAlert(o, s);
+      await n.ref.set({ alertAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+    }
+  } catch (e) { console.error('accessAudit', e); }
+}
 function clientIp(context) {
   const req = (context && context.rawRequest) || {};
   const h = req.headers || {};
@@ -1580,6 +1830,8 @@ async function ipFailRecord(ip, what, targetId) {
     tx.set(ref, upd, { merge: true });
   });
   if (blockedNow) {
+    /* 차단된 IP 는 감시 목록에 — 나중에 이 IP 로 회원 계정 접속이 보이면 알림 (accessAudit) */
+    await db.doc('security/watch').set({ ips: admin.firestore.FieldValue.arrayUnion(ip) }, { merge: true }).catch(() => {});
     const reason = targetCount >= IP_MULTI_TARGET_LIMIT
       ? ('한 IP(' + ip + ')에서 ' + targetCount + '개 계정을 연속 시도해 24시간 차단했어요')
       : ('한 IP(' + ip + ')에서 1시간에 ' + n + '번 로그인 실패 → 24시간 차단했어요');
