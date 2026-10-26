@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-27-470';
+  var APP_VERSION = '2026-10-27-471';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -8932,12 +8932,25 @@
         '</div>';
       }).join('') : '<p class="sub">신고된 대화가 없어요 🙆</p>'), false, 'reports');
     /* 🛡 보안 경고: 회원이 남의 데이터를 바꿈(되돌리기 가능)·로그인 잠금·IP 차단 */
+    /* 서버 triageSecurityAlert 의 판단 한 줄 */
+    function secAiLine(t) {
+      if (!t || !t.state || t.state === 'skip') return '';
+      var who = /opus/.test(t.by || '') ? 'Opus' : (/haiku/.test(t.by || '') ? 'Haiku' : (t.by === 'rule' ? '규칙' : ''));
+      var v = t.state === 'noted' ? t.ai : t.state;
+      var lab = { pending: '🤖 AI 판단 중…', note: '🤖 AI 의견 기다리는 중', benign: '🤖 본인으로 보임 — 알림 안 보냄', suspicious: '🤖 수상함', unsure: '🤖 판단 어려움', error: '🤖 AI 판단 실패', timeout: '🤖 AI 시간 초과' }[v] || ('🤖 ' + v);
+      if (t.state === 'noted' && v === 'benign') lab = '🤖 AI 의견: 본인일 수도 있음';
+      var col = v === 'benign' ? '#137333' : (v === 'suspicious' ? '#c5221f' : '#8a6d00');
+      return '<br><span style="color:' + col + ';">' + escapeHtml(lab) + (who ? ' (' + who + ')' : '') + (t.reason ? ' — ' + escapeHtml(t.reason) : '') + (t.state !== 'noted' && t.pushed ? ' · 알림 보냄' : '') + '</span>';
+    }
     var SEC_TYPE = { tamper: '🚨 이상 변경', 'login-lock': '🔒 회원 로그인 잠김', 'admin-lock': '🚨 관리자 로그인 잠김', 'ip-block': '🛡 IP 차단', suspicious: '👁 수상한 접속', 'vpn-hold': '🛂 VPN 로그인 검토' };
     var SUS_KIND = { ok: '로그인 성공', fail: '로그인 실패', blocked: '차단된 시도', notfound: '없는 계정', access: '앱 접속', weak: '쉬운 PIN 로그인(막음)' };
-    var secOpen = _secAlerts.filter(function (a) { return !a.resolved; });
+    /* AI 가 '본인으로 보임' 판정한 건(알림 안 보냄)은 확인 필요 수에서 빼고 흐리게 */
+    var secQuiet = function (a) { return !!(a.triage && a.triage.state === 'benign'); };
+    var secOpen = _secAlerts.filter(function (a) { return !a.resolved && !secQuiet(a); });
     var securitySection = adminFold('🛡 보안 경고' + (secOpen.length ? ' <span class="blink-soft" style="background:#c5221f;color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">확인 필요 ' + secOpen.length + '</span>' : ''), null,
       '<p class="sub">회원 계정으로 <b>다른 회원 데이터가 바뀌면</b>(개발자 도구 조작 의심) 바뀌기 전 내용과 함께 기록돼요. [되돌리기]로 원래대로 돌릴 수 있어요. 로그인 잠금·IP 차단도 여기 표시돼요. (7일 이내면 전체 시점 복구도 가능)</p>' +
       '<p class="sub">👁 수상한 접속 = VPN·공격 이력 IP·처음 보는 기기·오래 안 쓰던 계정·쉬운 PIN 대입 등. 모든 로그인 시도와 앱 접속(IP·기기·사이트)은 서버에 남아요.</p>' +
+      '<p class="sub">🤖 \'새 기기·오래만의 접속\'뿐인 경고는 AI(Claude)가 먼저 봐요 — 본인으로 보이면 알림 없이 기록만(흐리게), 수상하거나 애매하면 알림. 나머지 경고는 바로 알림 + AI 의견만 덧붙여요.</p>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px;">' +
         '<button type="button" class="card-btn" data-action="sec-log" style="flex:none;">🔐 로그인·접속 기록</button>' +
         '<button type="button" class="card-btn" data-action="sec-holds" style="flex:none;">🛂 VPN 로그인 검토</button>' +
@@ -8957,11 +8970,13 @@
           '<br>' + escapeHtml((a.reasons || []).join(' / ')) +
           '<br><span class="sub">' + escapeHtml(a.ip || '') + (a.intel && (a.intel.city || a.intel.provider) ? ' (' + escapeHtml([a.intel.city, a.intel.provider].filter(Boolean).join(' · ')) + ')' : '') + ' · ' + escapeHtml(a.device || '') + '</span>';
         else body = escapeHtml(a.target || '') + ' · ' + (a.fails || 0) + '번 틀림';
+        body += secAiLine(a.triage);
         var btns = '';
         if (!a.resolved && a.type === 'tamper' && !a.restoredAt) btns += '<button type="button" class="card-btn danger" data-action="sec-restore" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">되돌리기</button> ';
-        if (!a.resolved) btns += '<button type="button" class="card-btn" data-action="sec-ack" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">확인함</button>';
+        if (!a.resolved && !secQuiet(a)) btns += '<button type="button" class="card-btn" data-action="sec-ack" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">확인함</button>';
         if (a.restoredAt) body += ' <span style="color:#137333;">(되돌림 ' + fmtDate(a.restoredAt) + ')</span>';
-        return '<div style="border:1px solid ' + (a.resolved ? 'var(--line)' : '#f1b0ab') + ';background:' + (a.resolved ? 'transparent' : '#fdecea') + ';border-radius:10px;padding:8px 11px;margin-bottom:6px;' + (a.resolved ? 'opacity:.6;' : '') + '">' +
+        var calm = a.resolved || secQuiet(a);
+        return '<div style="border:1px solid ' + (calm ? 'var(--line)' : '#f1b0ab') + ';background:' + (calm ? 'transparent' : '#fdecea') + ';border-radius:10px;padding:8px 11px;margin-bottom:6px;' + (calm ? 'opacity:.6;' : '') + '">' +
           '<div style="font-size:0.86rem;">' + head + '</div><div style="font-size:0.84rem;margin:3px 0 5px;">' + body + '</div>' + btns + '</div>';
       }).join('') : '<p class="sub">경고가 없어요 🙆</p>'), !!secOpen.length, 'security');
     var secHtml = {

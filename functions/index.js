@@ -970,6 +970,7 @@ exports.remindPending = functions
       await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
     }
     await purgeDeletedSecrets().catch((e) => console.error('purgeDeletedSecrets', e));
+    await flushStaleTriage().catch((e) => console.error('flushStaleTriage', e));   /* AI 판단 못 받은 경고는 그냥 푸시 */
     /* 연락처 자동 가림은 중단(2026-10-27): '카톡·인스타' 단어만으로 일반 대화까지 가리고 지난 대화를 소급해 덮어씀 → 새 방식(안전 전달 버튼·실제 번호만) 나올 때까지 끔 */
     if (new Date().getUTCHours() === 19) {
       await purgeOldChats().catch((e) => console.error('purgeOldChats', e)); /* 매일 KST 04시 */
@@ -2108,17 +2109,164 @@ async function suspiciousAlert(o, s, extra) {
   const who = (o.entry && o.entry.nickname) || o.entryId || '?';
   const where = o.ip + (s.intel && (s.intel.city || s.intel.provider) ? ' (' + [s.intel.city, s.intel.provider].filter(Boolean).join(' · ') + ')' : '');
   const reasons = s.reasons.concat(extra || []);
+  const title = (o.status === 'ok' || o.status === 'access' ? '⚠️ 수상한 ' : '🚨 수상한 ') + label + ' · ' + who;
+  const body = reasons.join(' / ') + ' — ' + where + ' · ' + s.device;
+  /* 맞는 PIN·앱 열기인데 사유가 '새 기기·오래만의 접속'뿐이면 AI 가 먼저 봄(triageSecurityAlert) → 괜찮으면 기록만, 수상·애매하면 그때 푸시.
+     그 밖(감시 IP·VPN·탈취 계정·틀린 PIN·스크립트 등)은 지금처럼 바로 푸시 + AI 의견은 기록에만 */
+  const quiet = (o.status === 'ok' || o.status === 'access') && !(extra && extra.length) && reasons.length && reasons.every((r) => TRIAGE_LOW_RE.test(r));
+  const gate = quiet ? null : await alertAllowed(guardKey('k_', o.ip + '_' + (o.entryId || ''))).catch(() => ({ ok: true, skipped: 0 }));
   try {
     await db.collection('securityAlerts').add({ at: new Date().toISOString(), resolved: false, type: 'suspicious', kind: o.status,
       target: o.entryId || '', nickname: who, ip: o.ip, ua: String(o.ua || '').slice(0, 300), origin: String(o.origin || '').slice(0, 200),
-      device: s.device, reasons, intel: s.intel || null });
+      device: s.device, reasons, intel: s.intel || null,
+      triage: quiet ? { state: 'pending', title, body } : (gate.ok ? { state: 'note' } : { state: 'skip' }) });
   } catch (e) { console.error('suspiciousAlert', e); }
-  const gate = await alertAllowed(guardKey('k_', o.ip + '_' + (o.entryId || ''))).catch(() => ({ ok: true, skipped: 0 }));
-  if (!gate.ok) return;
+  if (quiet || !gate.ok) return;
   try {
-    await sendToAdmin((o.status === 'ok' || o.status === 'access' ? '⚠️ 수상한 ' : '🚨 수상한 ') + label + ' · ' + who,
-      reasons.join(' / ') + ' — ' + where + ' · ' + s.device + (gate.skipped ? ' (그 사이 알림 생략 ' + gate.skipped + '건 — 보안 경고에 기록)' : ''));
+    await sendToAdmin(title, body + (gate.skipped ? ' (그 사이 알림 생략 ' + gate.skipped + '건 — 보안 경고에 기록)' : ''));
   } catch (e) { /* 알림 실패 무시 */ }
+}
+
+/* ── 보안 경고 AI 판단 (서버에서 Claude API — PC 꺼져도 동작) ──
+   규칙 → Claude Haiku 5.5 → 애매하면 Claude Opus 5.5. AI 에는 닉네임·IP 원문을 보내지 않고 정리한 특징(통신사·도시·기기·전 기록과 같은 회선인지)만 보냄.
+   어느 단계든 실패·시간 초과면 그냥 푸시(알림을 놓치지 않는 쪽). 10분 넘게 'pending' 인 건 remindPending 이 푸시 */
+const TRIAGE_LOW_RE = /^(처음 보는 기기|\d+일 만의 접속)/;
+const TRIAGE_SYS = [
+  '너는 작은 지인 소개팅 웹앱(회원 약 150명, 4자리 PIN 로그인)의 보안 경고를 분류하는 보조야.',
+  '2026-10-26 외부 공격자가 흔한 PIN 을 대입해 계정 4개를 탈취했고, 그 뒤 Mac OS X·Chrome 154 브라우저와 상용 VPN·가정용 SK브로드밴드 회선으로 재시도했어.',
+  '지금 볼 경고는 PIN 이 맞았거나 이미 로그인된 회원이 앱을 연 기록인데 "처음 보는 기기" 또는 "오래만의 접속" 이라서 걸린 거야.',
+  '회원 본인이 새 폰·PC·브라우저를 쓰거나 집·회사·이동통신망을 바꾸는 일은 흔해. 같은 회선(같은 IP 또는 같은 IPv6 /64), 같은 통신사·도시, 같은 기기 종류(아이폰↔아이폰 다른 브라우저 등)면 본인일 가능성이 높아.',
+  '공격 특징(Mac Chrome 154, 데이터센터 VPN, 처음 보는 통신사·나라, 탈취 이력 계정)과 겹치거나 평소 기록과 동떨어지면 수상해.',
+  '판단: benign = 본인으로 보여 알림 필요 없음 / suspicious = 관리자가 바로 알아야 함 / unsure = 근거가 부족해 판단 어려움.',
+  '확신이 없으면 benign 대신 unsure. reason 은 한국어 한 문장(60자 이내)으로 근거만.'
+].join('\n');
+const TRIAGE_SCHEMA = {
+  type: 'object',
+  properties: { verdict: { type: 'string', enum: ['benign', 'suspicious', 'unsure'] }, reason: { type: 'string' } },
+  required: ['verdict', 'reason'], additionalProperties: false
+};
+function callClaudeJson(apiKey, model, sysPrompt, userPrompt, schema, opts) {
+  opts = opts || {};
+  return new Promise((resolve, reject) => {
+    const payload = {
+      model, max_tokens: opts.maxTokens || 2000, system: sysPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      output_config: { effort: opts.effort || 'low', format: { type: 'json_schema', schema } }
+    };
+    if (opts.fallbacks) payload.fallbacks = 'default';   /* 안전 분류기가 거절하면 Anthropic 기본 대체 모델로 다시 */
+    const body = JSON.stringify(payload);
+    const headers = { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
+    if (opts.fallbacks) headers['anthropic-beta'] = 'server-side-fallback-2026-07-01';
+    const req = https.request({ hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST', headers, timeout: opts.timeout || 30000 }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(raw);
+          if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error((j && j.error && j.error.message) || ('HTTP ' + res.statusCode)));
+          if (j.stop_reason === 'refusal') return resolve({ refused: true, model: j.model || model });
+          const t = (j.content || []).find((b) => b.type === 'text');   /* 생각(thinking) 블록 다음의 text 가 JSON */
+          if (!t) return reject(new Error('no text (' + j.stop_reason + ')'));
+          resolve({ out: JSON.parse(t.text), model: j.model || model });
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+/* AI 에 보낼 특징: 이 경고 + 이 계정의 지난 접속(같은 회선인지·통신사·도시·기기·횟수). 원문 IP·닉네임 없음 */
+async function triageFacts(d) {
+  const net = ipNet(d.ip);
+  const since = Date.parse(d.at) - 10 * 60000;   /* 이 경고 때 방금 생긴 기록은 '전 기록'에서 뺌 */
+  const q = d.target ? await db.collection('accessSeen').where('entryId', '==', d.target).limit(100).get().catch(() => null) : null;
+  const past = [];
+  if (q) q.forEach((x) => { const v = x.data(); if (Date.parse(v.firstAt || v.lastAt || 0) < since) past.push(v); });
+  past.sort((a, b) => String(b.lastAt || '').localeCompare(String(a.lastAt || '')));
+  const ips = Array.from(new Set(past.map((v) => v.ip))).slice(0, 6);
+  const intels = {};
+  await Promise.all(ips.map((ip) => ipIntel(ip).then((i) => { intels[ip] = i || {}; }).catch(() => { intels[ip] = {}; })));
+  const cur = d.intel || {};
+  const sameNet = past.some((v) => ipNet(v.ip) === net);
+  const history = past.slice(0, 15).map((v) => {
+    const i = intels[v.ip] || {};
+    return { device: v.device || '', sameLineAsNow: ipNet(v.ip) === net, provider: i.provider || '', city: i.city || '', country: i.country || '',
+      vpn: !!i.dcvpn, relay: !!i.relay, firstAt: v.firstAt || '', lastAt: v.lastAt || '', count: v.count || 1 };
+  });
+  return {
+    sameNet,
+    facts: {
+      kind: d.kind === 'access' ? '이미 로그인된 회원이 앱을 엶' : 'PIN 로그인 성공',
+      reasons: d.reasons || [], at: d.at, device: d.device || '', userAgent: String(d.ua || '').slice(0, 200),
+      fromAppSite: String(d.origin || '').indexOf(APP_ORIGIN) === 0,
+      network: { provider: cur.provider || '', org: cur.org || '', city: cur.city || '', country: cur.country || '', type: cur.type || '', vpn: !!cur.dcvpn, icloudRelay: !!cur.relay },
+      breachedAccount: BREACHED_IDS.has(d.target),
+      sameLineSeenBefore: sameNet,
+      pastAccessCount: past.length,
+      history
+    }
+  };
+}
+async function triagePush(ref, d, verdict, note) {
+  const gate = await alertAllowed(guardKey('k_', d.ip + '_' + (d.target || ''))).catch(() => ({ ok: true, skipped: 0 }));
+  if (gate.ok) await sendToAdmin(d.triage.title || '⚠️ 수상한 접속', (d.triage.body || '') + (note ? ' · ' + note : '')).catch(() => {});
+  await ref.set({ triage: Object.assign({}, d.triage, verdict, { pushed: gate.ok, at: new Date().toISOString() }) }, { merge: true }).catch(() => {});
+}
+async function runTriage(ref, d) {
+  const urgent = d.triage.state === 'note';   /* 이미 푸시한 경고 → AI 의견만 기록 */
+  const r = await triageFacts(d);
+  if (!urgent && r.sameNet && !BREACHED_IDS.has(d.target)) {
+    const v = { state: 'benign', by: 'rule', reason: '전에 이 계정이 쓰던 같은 회선(IP)에서 새 기기 — 같은 집·회사 기기로 보임' };
+    await ref.set({ triage: Object.assign({}, d.triage, v, { pushed: false, at: new Date().toISOString() }) }, { merge: true });
+    return v;
+  }
+  const key = (process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!key) throw new Error('no ANTHROPIC_API_KEY');
+  const prompt = '다음 경고를 판단해 줘.\n' + JSON.stringify(r.facts, null, 1);
+  let v = null;
+  try {
+    const h = await callClaudeJson(key, 'claude-haiku-5-5', TRIAGE_SYS, prompt, TRIAGE_SCHEMA, { effort: 'low', timeout: 25000 });
+    if (!h.refused && h.out && h.out.verdict !== 'unsure') v = { state: h.out.verdict, by: h.model, reason: String(h.out.reason || '').slice(0, 200) };
+  } catch (e) { console.error('triage haiku', e.message); }
+  if (!v) {
+    const o = await callClaudeJson(key, 'claude-opus-5-5', TRIAGE_SYS, prompt, TRIAGE_SCHEMA, { effort: 'medium', timeout: 70000, maxTokens: 6000, fallbacks: true });
+    v = (o.refused || !o.out) ? { state: 'unsure', by: o.model, reason: 'AI 가 판단을 거절함' }
+      : { state: o.out.verdict, by: o.model, reason: String(o.out.reason || '').slice(0, 200) };
+  }
+  if (urgent) {
+    await ref.set({ triage: Object.assign({}, d.triage, { state: 'noted', ai: v.state, by: v.by, reason: v.reason, at: new Date().toISOString() }) }, { merge: true });
+  } else if (v.state === 'benign') {
+    await ref.set({ triage: Object.assign({}, d.triage, v, { pushed: false, at: new Date().toISOString() }) }, { merge: true });
+  } else {
+    await triagePush(ref, d, v, 'AI(' + (v.state === 'suspicious' ? '수상' : '판단 어려움') + '): ' + v.reason);
+  }
+  return v;
+}
+exports.triageSecurityAlert = functions
+  .region('asia-northeast3')
+  .runWith({ maxInstances: 5, timeoutSeconds: 120, memory: '256MB' })
+  .firestore.document('securityAlerts/{id}')
+  .onCreate(async (snap) => {
+    const d = snap.data() || {};
+    if (!d.triage || (d.triage.state !== 'pending' && d.triage.state !== 'note')) return;
+    try {
+      await runTriage(snap.ref, d);
+    } catch (e) {
+      console.error('triageSecurityAlert', e.message);
+      if (d.triage.state === 'pending') await triagePush(snap.ref, d, { state: 'error', by: 'none', reason: String(e.message || e).slice(0, 120) }, 'AI 판단 실패 — 직접 확인');
+      else await snap.ref.set({ triage: Object.assign({}, d.triage, { state: 'noted', ai: 'error' }) }, { merge: true }).catch(() => {});
+    }
+  });
+/* 시간 초과 안전망: 10분 넘게 'pending' 이면(트리거가 죽었거나 배포 전) 그냥 푸시 */
+async function flushStaleTriage() {
+  const q = await db.collection('securityAlerts').where('triage.state', '==', 'pending').limit(30).get();
+  const cut = Date.now() - 10 * 60000;
+  const jobs = [];
+  q.forEach((x) => { const d = x.data(); if (Date.parse(d.at) < cut) jobs.push(triagePush(x.ref, d, { state: 'timeout', by: 'none', reason: 'AI 판단 시간 초과' }, 'AI 판단 시간 초과 — 직접 확인')); });
+  await Promise.all(jobs);
+  return jobs.length;
 }
 /* 쉬운 PIN 계정 표시(pinWeak) — 앱이 새 PIN 정하기 창을 띄움. 서버 쓰기(_w·_wn 그대로)라 조작 감지 대상 아님 */
 async function markPinWeak(ids) {
