@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-20-464';
+  var APP_VERSION = '2026-10-26-465';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -11143,31 +11143,21 @@
         });
         return;
       }
-      var fromEntry = (state.entries || []).find(function (e) { return e.id === req.fromId; });
-      var toEntry = (state.entries || []).find(function (e) { return e.id === req.toId; });
-      var decryptPromises = [];
-      if (fromEntry && fromEntry.contactEnc && adminPrivateKey) {
-        decryptPromises.push(decryptWithAdmin(adminPrivateKey, fromEntry.contactEnc).catch(function () { return ''; }));
-      } else { decryptPromises.push(Promise.resolve('')); }
-      if (toEntry && toEntry.contactEnc && adminPrivateKey) {
-        decryptPromises.push(decryptWithAdmin(adminPrivateKey, toEntry.contactEnc).catch(function () { return ''; }));
-      } else { decryptPromises.push(Promise.resolve('')); }
-      Promise.all(decryptPromises).then(function (contacts) {
-        return db.runTransaction(function (tx) {
-          return tx.get(stateRef).then(function (doc) {
-            var s = doc.data();
-            var reqs = (s.dateRequests || []).map(function (r) {
-              if (r.id === id) {
-                var copy = JSON.parse(JSON.stringify(r));
-                copy.approved = true; copy.held = false;
-                copy.revealedContact = { from: contacts[0], to: contacts[1] };
-                if (replyMsg) copy.approveMessage = replyMsg;
-                return copy;
-              }
-              return r;
-            });
-            tx.update(stateRef, { dateRequests: reqs, connEver: connEverNext(s), connLog: connLogAdd(s, req.fromId, req.toId) }); /* 누적 연결 +1 · 이력 기록 */
+      /* 번호는 관리자만 본다 — 대화 승인은 앱 안 대화만 열고, 두 사람 번호를 state(회원 누구나 읽음)에 쓰지 않는다 (2026-10-26 보안 사고 후) */
+      db.runTransaction(function (tx) {
+        return tx.get(stateRef).then(function (doc) {
+          var s = doc.data();
+          var reqs = (s.dateRequests || []).map(function (r) {
+            if (r.id === id) {
+              var copy = JSON.parse(JSON.stringify(r));
+              copy.approved = true; copy.held = false;
+              delete copy.revealedContact; delete copy.fromContact; delete copy.toContact;
+              if (replyMsg) copy.approveMessage = replyMsg;
+              return copy;
+            }
+            return r;
           });
+          tx.update(stateRef, { dateRequests: reqs, connEver: connEverNext(s), connLog: connLogAdd(s, req.fromId, req.toId) }); /* 누적 연결 +1 · 이력 기록 */
         });
       }).then(function () {
         appendLog('admin', '관리자', '대화 신청 수락');
@@ -12232,9 +12222,43 @@
         '</div>' +
       '</div>';
     }).join('');
-    return adminFold('🔑 PIN 재설정 요청', list.length,
+    /* 새 PIN 정하기 대기 계정(pinMustChange): 관리자가 임시 PIN을 걸었지만 아직 새 PIN을 안 정한 계정 — 버튼으로 새 임시 PIN을 걸고 내 폰 문자앱을 연다 */
+    var forced = ((state.entries || []).concat(state.pendingEntries || [])).filter(function (e) { return e.pinMustChange && !e.deactivated; });
+    var forcedRows = forced.map(function (e) {
+      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin-bottom:6px;background:var(--paper);">' +
+        '<span><b>' + escapeHtml(e.nickname || '회원') + '</b> <span style="color:var(--muted);font-size:0.8rem;">' + escapeHtml(formatUid(e) || '') + '</span></span>' +
+        '<button type="button" class="card-btn primary" data-action="pinforce-temp" data-id="' + escapeHtml(e.id) + '" style="flex:none;">📱 새 임시 PIN 문자 보내기</button>' +
+      '</div>';
+    }).join('');
+    var forcedBlock = forced.length
+      ? '<h4 style="margin:14px 0 6px;">🔐 새 PIN 정하기 대기 (' + forced.length + ')</h4>' +
+        '<p class="sub">아직 새 PIN을 안 정한 계정이에요. 누르면 <b>새 6자리 임시 PIN</b>이 걸리고(이전 임시 PIN은 무효), 내 폰 문자앱이 문구까지 채워진 채 열려요.</p>' + forcedRows
+      : '';
+    return adminFold('🔑 PIN 재설정 요청', list.length + forced.length,
       '<p class="sub">번호가 <b>✅ 일치</b>하면 <b>임시 PIN 보내기</b>만 누르세요. 6자리 임시 PIN이 걸리고, 내 폰 문자앱이 <b>가입 때 등록한 번호</b>·문구까지 채워진 채 열려요. 회원이 로그인하면 새 PIN을 정하게 돼요.</p>' +
-      (rows || '<p class="sub">대기 중인 요청이 없어요 🙆</p>'), list.length > 0, 'pinreset');
+      (rows || '<p class="sub">대기 중인 요청이 없어요 🙆</p>') + forcedBlock, (list.length + forced.length) > 0, 'pinreset');
+  }
+  /* 새 PIN 정하기 대기 계정에 새 임시 PIN 걸고 문자앱 열기 (연락처 없으면 PIN을 화면에 보여 줘 직접 전달) */
+  function handleAdminForceTemp(entryId) {
+    if (!isAdminUnlocked || !adminPrivateKey) return modalNotice('안내', '관리자 모드에서만 가능해요.');
+    var all = (currentState.entries || []).concat(currentState.pendingEntries || []);
+    var entry = all.find(function (e) { return e.id === entryId; });
+    if (!entry) return modalNotice('안내', '계정을 찾을 수 없어요.');
+    var mm = (entry.managedBy && !entry.ownerSelf) ? all.find(function (e) { return e.id === entry.managedBy; }) : null;
+    var hasNum = !!(entry.contactEnc || (mm && mm.contactEnc));
+    modalConfirm('새 임시 PIN 보내기', entry.nickname + '님에게 새 6자리 임시 PIN을 걸까요? 전에 보낸 임시 PIN은 더 이상 안 돼요.' + (hasNum ? '' : ' (등록된 번호가 없어 PIN을 화면에 보여 드려요)'), '걸기', 'approve').then(function (ok) {
+      if (!ok) return;
+      var a = new Uint32Array(1); crypto.getRandomValues(a);
+      var temp = String(100000 + (a[0] % 900000));
+      var text = '[베니브릿지] ' + entry.nickname + '님, 보안 조치로 PIN이 초기화됐어요. 임시 PIN은 ' + temp + ' 입니다.\n로그인하면 새 PIN을 정하게 돼요.\nhttps://benny3s.github.io/bridge/';
+      adminApplyPin(entry, temp, true).then(function () {
+        appendLog('admin', '관리자', '임시 PIN 재발급 · ' + entry.nickname);
+        return refreshNow();
+      }).then(function () {
+        if (hasNum) openSmsNative(entry.id, text);
+        else modalNotice('임시 PIN 🔑', entry.nickname + '님 임시 PIN: ' + temp + ' — 카톡 등으로 직접 전달해 주세요.');
+      }).catch(function (err) { modalNotice('오류', '임시 PIN을 걸지 못했어요: ' + (err.message || err)); });
+    });
   }
   /* 관리자 쪽 PIN 걸기 (재설정·임시 PIN 공용) — 연락처도 새 PIN 으로 다시 잠근다 */
   function adminApplyPin(entry, pin, mustChange) {
@@ -12566,6 +12590,7 @@
       else if (action === 'contact-tpl') { openSmsTplEditor(); return; }
       else if (action === 'privacy-policy') { e.preventDefault(); showPrivacyPolicy(); return; }
       else if (action === 'pinreset-temp') handleAdminPinTemp(id);
+      else if (action === 'pinforce-temp') handleAdminForceTemp(id);
       else if (action === 'pinreset-dismiss') handleAdminPinDismiss(id);
       else if (action === 'stale-nudge') { showStaleNudge(); return; }
       else if (action === 'del-tombstone') handleDeleteTombstone(id);
