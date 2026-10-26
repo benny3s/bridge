@@ -757,7 +757,7 @@ exports.remindPending = functions
       await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
     }
     await purgeDeletedSecrets().catch((e) => console.error('purgeDeletedSecrets', e));
-    await maskOldContacts().catch((e) => console.error('maskOldContacts', e)); /* 매시간: 교환 확인·24h 지난 연락처 가림 */
+    /* 연락처 자동 가림은 중단(2026-10-27): '카톡·인스타' 단어만으로 일반 대화까지 가리고 지난 대화를 소급해 덮어씀 → 새 방식(안전 전달 버튼·실제 번호만) 나올 때까지 끔 */
     if (new Date().getUTCHours() === 19) {
       await purgeOldChats().catch((e) => console.error('purgeOldChats', e)); /* 매일 KST 04시 */
       const st = (await db.doc('app/state').get()).data() || {};
@@ -1606,6 +1606,48 @@ async function maskOldContacts(nowMs) {
   if (masked) console.log('maskOldContacts: masked rooms ' + masked);
   return masked;
 }
+/* 가린 메시지 원문 복구 (관리자 전용, 2026-10-27): maskOldContacts 가 덮어쓴 메시지를 PITR(읽기 시점 지정)로
+   덮어쓰기 전 원문에서 찾아 되돌림. 결과엔 건수만(내용 미반환). dryRun 이면 쓰지 않고 세기만. */
+const RESTORE_READ_TIME = '2026-10-26T13:49:00Z';   /* 첫 가림 실행(13:50:05Z) 직전, PITR 은 정분 단위 */
+const STRICT_PHONE_RE = /01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}/;
+exports.adminRestoreMaskedChats = functions
+  .region('asia-northeast3')
+  .runWith({ timeoutSeconds: 300, memory: '512MB' })
+  .https.onCall(async (data, context) => {
+    if (!(context.auth && context.auth.token && context.auth.token.admin === 1)) throw new HttpsError('permission-denied', '관리자만 할 수 있어요.');
+    const dryRun = !!(data && data.dryRun);
+    const readTime = admin.firestore.Timestamp.fromDate(new Date(RESTORE_READ_TIME));
+    const qs = await db.collection('chats').get();
+    const out = { dryRun, rooms: 0, restored: 0, missing: 0, phoneInRestored: 0, perRoom: {} };
+    for (const d of qs.docs) {
+      const cur = d.data();
+      const maskedIds = (cur.msgs || []).filter((m) => m.masked && m.text === CONTACT_MASK_TEXT).map((m) => m.id);
+      if (!maskedIds.length) continue;
+      const oldSnap = await db.runTransaction((tx) => tx.get(d.ref), { readOnly: true, readTime });
+      const oldMap = {}; ((oldSnap.exists && oldSnap.data().msgs) || []).forEach((m) => { oldMap[m.id] = m; });
+      let roomRestored = 0, roomMissing = 0, roomPhone = 0;
+      maskedIds.forEach((id) => {
+        const o = oldMap[id];
+        if (o && typeof o.text === 'string') { roomRestored++; if (STRICT_PHONE_RE.test(o.text)) roomPhone++; } else roomMissing++;
+      });
+      if (!dryRun && roomRestored) {
+        await db.runTransaction(async (tx) => {
+          const s = await tx.get(d.ref);
+          const msgs = ((s.data() || {}).msgs || []).map((m) => {
+            const o = oldMap[m.id];
+            if (!(m.masked && m.text === CONTACT_MASK_TEXT && o && typeof o.text === 'string')) return m;
+            const r = Object.assign({}, m, { text: o.text }); delete r.masked; return r;
+          });
+          tx.update(d.ref, { msgs });
+        });
+      }
+      out.rooms++; out.restored += roomRestored; out.missing += roomMissing; out.phoneInRestored += roomPhone;
+      out.perRoom[d.id.slice(0, 8)] = { masked: maskedIds.length, restorable: roomRestored, phone: roomPhone };
+    }
+    console.log('adminRestoreMaskedChats', JSON.stringify({ dryRun, rooms: out.rooms, restored: out.restored, missing: out.missing }));
+    return out;
+  });
+
 if (process.env.BRIDGE_LOCAL_TEST) { exports._purgeOldChatsForTest = purgeOldChats; exports._detectTamperIssuesForTest = (b, a) => detectTamperIssues(b, a); exports._maskOldContactsForTest = maskOldContacts; exports._hasContactForTest = hasContact; } /* 로컬 시험 전용 (배포 시 내보내지 않음) */
 
 /* ══ 3단계-③: 사진 원본 열람 권한 ══
