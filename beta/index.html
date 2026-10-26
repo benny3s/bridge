@@ -7426,6 +7426,620 @@
     return body;
   }
 
+  /* ════ 👑 관리자 탭 상단 AI 인텔리전스 3대 요약 보드 (① 오늘 AI가 한 일 · ② 일주일 동향 분석 · ③ 장기 분석 + 전망·전략 표) ════ */
+  var _aiIntelTab = (function () { try { return localStorage.getItem('bb_ai_intel_tab') || 'today'; } catch (e) { return 'today'; } })();
+  var _aiIntelFolded = (function () { try { return localStorage.getItem('bb_ai_intel_fold') === '1'; } catch (e) { return false; } })();
+  var _aiStrategyBrief = (function () { try { var s = localStorage.getItem('bb_ai_strategy_brief'); return s ? JSON.parse(s) : null; } catch (e) { return null; } })();
+  var _aiStrategyLoading = false;
+
+  function computeAdminAiMetrics(state) {
+    var st = state || {};
+    var entries = st.entries || [];
+    var pending = st.pendingEntries || [];
+    var reqs = st.dateRequests || [];
+    var logs = st.logs || [];
+    var msgs = st.messages || [];
+    var nowMs = Date.now();
+    var DAY_MS = 86400000;
+    var todayD = kstDay(new Date().toISOString());
+
+    function addDayStr(dstr, n) {
+      var d = new Date(dstr + 'T00:00:00Z');
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    }
+    /* 베타 스냅샷 등 최근 7일 내 실활동이 0건이면 DB 최신 실활동일(refD)을 주간 동향 기준일로 자동 보정 */
+    var dayCut6 = addDayStr(todayD, -6);
+    var recent7Cnt = 0, latestActiveDay = '';
+    entries.forEach(function (e) {
+      if (e && e.submittedAt && !e.testAccount) {
+        var d = kstDay(e.submittedAt);
+        if (d >= dayCut6 && d <= todayD) recent7Cnt++;
+        if (d <= todayD && d > latestActiveDay) latestActiveDay = d;
+      }
+    });
+    reqs.forEach(function (r) {
+      if (r && r.submittedAt) {
+        var d = kstDay(r.submittedAt);
+        if (d >= dayCut6 && d <= todayD) recent7Cnt++;
+        if (d <= todayD && d > latestActiveDay) latestActiveDay = d;
+      }
+    });
+    var refD = (recent7Cnt === 0 && latestActiveDay) ? latestActiveDay : todayD;
+    var dayMinus6 = addDayStr(refD, -6);
+    var dayMinus13 = addDayStr(refD, -13);
+
+    /* 1) 오늘 AI가 한 일 & 당일 활동 */
+    var aiApproveToday = 0, aiHoldToday = 0, aiEditConfirmToday = 0, aiBroadcastToday = 0, adminApproveToday = 0;
+    var signupToday = 0, resubmitToday = 0;
+    var todayTimeline = [];
+    var recentAiLogs = [];
+
+    logs.slice().reverse().forEach(function (l) {
+      if (!l || !l.at) return;
+      var d = kstDay(l.at);
+      var isToday = (d === todayD);
+      var actor = l.actor || '';
+      var detail = l.detail || '';
+      var isAi = (actor === 'AI 부관리자');
+      var isAdminAct = (l.type === 'admin' || isAi);
+      var isSignupOrEdit = (l.type === 'signup' || (l.type === 'edit' && detail.indexOf('신청서') >= 0));
+
+      if (isToday) {
+        if (isAi) {
+          if (detail.indexOf('승인') >= 0) aiApproveToday++;
+          else if (detail.indexOf('보류') >= 0) aiHoldToday++;
+          else if (detail.indexOf('변경 확인') >= 0) aiEditConfirmToday++;
+          else if (detail.indexOf('발송') >= 0) aiBroadcastToday++;
+        } else if (l.type === 'admin' && detail.indexOf('신청 승인') >= 0) {
+          adminApproveToday++;
+        }
+        if (l.type === 'signup') signupToday++;
+        if (l.type === 'edit' && detail.indexOf('신청서') >= 0) resubmitToday++;
+      }
+
+      if (isToday && (isAi || isAdminAct || isSignupOrEdit)) {
+        if (todayTimeline.length < 14) todayTimeline.push(l);
+      } else if (isAi && recentAiLogs.length < 8) {
+        recentAiLogs.push(l);
+      }
+    });
+
+    var todayPhotoReq = 0, todayTalkReq = 0, todayMatch = 0;
+    reqs.forEach(function (r) {
+      if (!r) return;
+      var sd = r.submittedAt ? kstDay(r.submittedAt) : '';
+      var dd = r.decidedAt ? kstDay(r.decidedAt) : sd;
+      var tp = r.type || 'contact';
+      if (sd === todayD || sd === refD) {
+        if (tp === 'photo') todayPhotoReq++;
+        else todayTalkReq++;
+      }
+      if (r.approved && (dd === todayD || dd === refD) && tp === 'contact') todayMatch++;
+    });
+
+    var pendNew = pending.filter(function (p) { return !p.heldReason && !p.rejectedAt; }).length;
+    var pendHeld = pending.filter(function (p) { return !!p.heldReason; }).length;
+    var editWait = entries.filter(function (e) { return e.editReviewAt && !e.deactivated; }).length;
+    var unreadQna = msgs.filter(function (m) { return m && m.from === 'user' && !m.readByAdmin && !m.hiddenByAdmin; }).length;
+
+    /* 2) 최근 7일(오늘 포함 7일) vs 직전 7일(8~14일 전) 동향 비교 */
+    var cand = entries.filter(function (e) { return !e.isMatchmaker; });
+    var candActive = cand.filter(function (e) { return !e.deactivated && !e.managedBy; });
+    var candDeac = cand.filter(function (e) { return !!e.deactivated; }).length;
+    var mmCount = entries.filter(function (e) { return !!e.isMatchmaker && !e.deactivated; }).length;
+
+    var join7 = 0, join7M = 0, join7F = 0, joinPrev7 = 0;
+    var wau7 = 0, inactive14 = 0, shortIntroCount = 0;
+    var maleActive = 0, femaleActive = 0;
+    var age20s = 0, ageEarly30s = 0, ageLate30s = 0, capRegionCount = 0;
+
+    cand.forEach(function (e) {
+      var sd = e.submittedAt ? kstDay(e.submittedAt) : '';
+      if (sd >= dayMinus6 && sd <= refD) {
+        join7++;
+        if (e.gender === 'male') join7M++; else if (e.gender === 'female') join7F++;
+      } else if (sd >= dayMinus13 && sd < dayMinus6) {
+        joinPrev7++;
+      }
+    });
+
+    candActive.forEach(function (e) {
+      if (e.gender === 'male') maleActive++;
+      else if (e.gender === 'female') femaleActive++;
+      var seenMs = e.lastSeenAt ? new Date(e.lastSeenAt).getTime() : 0;
+      if (seenMs && (nowMs - seenMs <= 7 * DAY_MS)) wau7++;
+      if (!seenMs || (nowMs - seenMs > 14 * DAY_MS)) inactive14++;
+      if (((e.intro || '').trim()).length < 20) shortIntroCount++;
+      var by = Number(e.birthYear) || 0;
+      if (by >= 1995) age20s++;
+      else if (by >= 1990) ageEarly30s++;
+      else if (by > 0) ageLate30s++;
+      var rg = String(e.region || '');
+      if (/서울|경기|인천|판교|분당|수원|성남|용인|고양|일산|하남|광명|안양|부천/.test(rg)) capRegionCount++;
+    });
+
+    var photo7 = 0, photo7Ap = 0, photoPrev7 = 0;
+    var talk7 = 0, talk7Ap = 0, talkPrev7 = 0;
+    var stale48 = 0, waitReqTotal = 0;
+    var popCountByTo = {};
+    var dailyMap = {};
+    for (var di = 0; di < 7; di++) {
+      var dKey = addDayStr(refD, -di);
+      dailyMap[dKey] = { join: 0, photo: 0, talk: 0, match: 0 };
+    }
+    cand.forEach(function (e) {
+      var sd = e.submittedAt ? kstDay(e.submittedAt) : '';
+      if (dailyMap[sd]) dailyMap[sd].join++;
+    });
+
+    var totalPhoto = 0, totalPhotoAp = 0, totalTalk = 0, totalTalkAp = 0;
+    reqs.forEach(function (r) {
+      if (!r) return;
+      var tp = r.type || 'contact';
+      var stStr = reqStatus(r);
+      var sd = r.submittedAt ? kstDay(r.submittedAt) : '';
+      var subMs = r.submittedAt ? new Date(r.submittedAt).getTime() : 0;
+      if (tp === 'photo') {
+        totalPhoto++;
+        if (stStr === 'approved') totalPhotoAp++;
+      } else {
+        totalTalk++;
+        if (stStr === 'approved') totalTalkAp++;
+      }
+      if (stStr === 'pending') {
+        waitReqTotal++;
+        if (subMs && (nowMs - subMs > 48 * 3600 * 1000)) stale48++;
+      }
+      if (sd >= dayMinus6 && sd <= refD) {
+        if (tp === 'photo') {
+          photo7++;
+          if (stStr === 'approved') photo7Ap++;
+          if (dailyMap[sd]) dailyMap[sd].photo++;
+        } else {
+          talk7++;
+          if (stStr === 'approved') talk7Ap++;
+          if (dailyMap[sd]) dailyMap[sd].talk++;
+        }
+        if (stStr === 'approved' && dailyMap[sd]) dailyMap[sd].match++;
+        if (r.toId) popCountByTo[r.toId] = (popCountByTo[r.toId] || 0) + 1;
+      } else if (sd >= dayMinus13 && sd < dayMinus6) {
+        if (tp === 'photo') photoPrev7++;
+        else talkPrev7++;
+      }
+    });
+
+    var topPopList = Object.keys(popCountByTo).map(function (eid) {
+      var ent = entries.find(function (x) { return x.id === eid; });
+      return { id: eid, nick: ent ? (ent.nickname || '회원') : '회원', cnt: popCountByTo[eid] };
+    }).sort(function (a, b) { return b.cnt - a.cnt; }).slice(0, 5);
+
+    var connNow = reqs.filter(function (r) { return (r.type || 'contact') === 'contact' && r.approved; }).length;
+    var connEver = Array.isArray(st.connLog) ? st.connLog.length : Math.max((typeof st.connEver === 'number' ? st.connEver : 0), connNow);
+    var coupleCnt = Array.isArray(st.coupleReports) ? st.coupleReports.filter(function (r) { return r && r.confirmed; }).length : (Array.isArray(st.couples) ? st.couples.length : 0);
+
+    /* 향후 30일 전망치 (최근 14일 일평균 속도 기반) */
+    var join14 = join7 + joinPrev7;
+    var req14 = photo7 + photoPrev7 + talk7 + talkPrev7;
+    var estJoin30 = Math.max(2, Math.round((join14 / 14) * 30));
+    var estReq30 = Math.max(5, Math.round((req14 / 14) * 30));
+    var talkApRate = totalTalk ? (totalTalkAp / totalTalk) : 0.35;
+    var estMatch30 = Math.max(1, Math.round(((talk7 + talkPrev7) / 14) * 30 * Math.max(0.2, talkApRate)));
+
+    return {
+      todayD: todayD,
+      aiApproveToday: aiApproveToday,
+      aiHoldToday: aiHoldToday,
+      aiEditConfirmToday: aiEditConfirmToday,
+      aiBroadcastToday: aiBroadcastToday,
+      adminApproveToday: adminApproveToday,
+      signupToday: signupToday,
+      resubmitToday: resubmitToday,
+      todayPhotoReq: todayPhotoReq,
+      todayTalkReq: todayTalkReq,
+      todayMatch: todayMatch,
+      pendNew: pendNew,
+      pendHeld: pendHeld,
+      editWait: editWait,
+      unreadQna: unreadQna,
+      todayTimeline: todayTimeline,
+      recentAiLogs: recentAiLogs,
+      join7: join7,
+      join7M: join7M,
+      join7F: join7F,
+      joinPrev7: joinPrev7,
+      photo7: photo7,
+      photo7Ap: photo7Ap,
+      photoPrev7: photoPrev7,
+      talk7: talk7,
+      talk7Ap: talk7Ap,
+      talkPrev7: talkPrev7,
+      wau7: wau7,
+      candTotal: cand.length,
+      candActiveCount: candActive.length,
+      candDeac: candDeac,
+      mmCount: mmCount,
+      maleActive: maleActive,
+      femaleActive: femaleActive,
+      age20s: age20s,
+      ageEarly30s: ageEarly30s,
+      ageLate30s: ageLate30s,
+      capRegionCount: capRegionCount,
+      inactive14: inactive14,
+      shortIntroCount: shortIntroCount,
+      stale48: stale48,
+      waitReqTotal: waitReqTotal,
+      dailyMap: dailyMap,
+      topPopList: topPopList,
+      totalPhoto: totalPhoto,
+      totalPhotoAp: totalPhotoAp,
+      totalTalk: totalTalk,
+      totalTalkAp: totalTalkAp,
+      connNow: connNow,
+      connEver: connEver,
+      coupleCnt: coupleCnt,
+      estJoin30: estJoin30,
+      estReq30: estReq30,
+      estMatch30: estMatch30
+    };
+  }
+
+  function refreshAiIntelBrief() {
+    if (_aiStrategyLoading || !isAdminUnlocked) return;
+    _aiStrategyLoading = true;
+    paint(currentState);
+    var m = computeAdminAiMetrics(currentState);
+    var statsPayload = {
+      today_ai_approve: m.aiApproveToday,
+      today_ai_hold: m.aiHoldToday,
+      today_ai_edit_confirm: m.aiEditConfirmToday,
+      today_signup: m.signupToday,
+      join_7d: m.join7,
+      photo_7d: m.photo7,
+      talk_7d: m.talk7,
+      wau_7d: m.wau7,
+      active_candidates: m.candActiveCount,
+      male_active: m.maleActive,
+      female_active: m.femaleActive,
+      stale_48h: m.stale48,
+      inactive_14d: m.inactive14,
+      short_intro: m.shortIntroCount,
+      conn_ever: m.connEver
+    };
+    var p = (typeof window.__callBennyAiHeal === 'function')
+      ? window.__callBennyAiHeal({ op: 'strategy_brief', stats: statsPayload })
+      : callFn('aiConcierge', { op: 'strategy_brief', stats: statsPayload }).then(function (r) { return (r && r.data) ? r.data : r; });
+    Promise.resolve(p).then(function (res) {
+      _aiStrategyLoading = false;
+      if (res && (res.strategy_comment || res.today_comment)) {
+        _aiStrategyBrief = {
+          today_comment: res.today_comment || '',
+          weekly_comment: res.weekly_comment || '',
+          strategy_comment: res.strategy_comment || '',
+          at: new Date().toISOString()
+        };
+        try { localStorage.setItem('bb_ai_strategy_brief', JSON.stringify(_aiStrategyBrief)); } catch (e) {}
+      }
+      paint(currentState);
+    }).catch(function () {
+      _aiStrategyLoading = false;
+      paint(currentState);
+    });
+  }
+
+  function adminAiIntelBoardHtml(state) {
+    var m = computeAdminAiMetrics(state);
+    var tab = _aiIntelTab || 'today';
+    var todayAiTotal = m.aiApproveToday + m.aiHoldToday + m.aiEditConfirmToday + m.aiBroadcastToday;
+    var pct = function (num, den) { return den > 0 ? Math.round((num / den) * 100) : 0; };
+    var deltaBadge = function (cur, prev, unit) {
+      var diff = cur - prev;
+      if (diff > 0) return '<span style="color:#137333;font-weight:700;">▲ +' + diff + (unit || '') + '</span>';
+      if (diff < 0) return '<span style="color:#c5221f;font-weight:700;">▼ ' + diff + (unit || '') + '</span>';
+      return '<span style="color:var(--muted);">― 보합</span>';
+    };
+
+    var tabBtnStyle = function (active) {
+      return 'flex:1;min-width:110px;padding:8px 10px;border-radius:10px;font-size:0.8rem;font-weight:700;cursor:pointer;border:1px solid ' +
+        (active ? 'var(--accent,#B23A48)' : 'var(--line,#e2d5c8)') + ';background:' +
+        (active ? 'var(--accent,#B23A48)' : 'var(--card,#fff)') + ';color:' +
+        (active ? '#fff' : 'var(--ink,#2c221e)') + ';transition:all 0.15s;';
+    };
+
+    /* ── 카테고리 1: 🤖 오늘 AI가 한 일 ── */
+    var logListToShow = m.todayTimeline.length ? m.todayTimeline : m.recentAiLogs;
+    var logRowsHtml = logListToShow.length ? logListToShow.map(function (l) {
+      var tm = (l.at && typeof fmtDate === 'function') ? fmtDate(l.at) : (l.at || '').slice(5, 16).replace('T', ' ');
+      var isAi = (l.actor === 'AI 부관리자');
+      var det = l.detail || '';
+      var badge = '<span class="chip" style="background:#f1f3f4;color:#444;font-size:0.7rem;padding:1px 6px;">기록</span>';
+      if (det.indexOf('승인') >= 0) badge = '<span class="chip" style="background:#e6f4ea;color:#137333;font-size:0.7rem;padding:1px 6px;">✅ 승인</span>';
+      else if (det.indexOf('보류') >= 0) badge = '<span class="chip" style="background:#fef7e0;color:#b06000;font-size:0.7rem;padding:1px 6px;">🟡 보류안내</span>';
+      else if (det.indexOf('변경 확인') >= 0) badge = '<span class="chip" style="background:#e8f0fe;color:#1967d2;font-size:0.7rem;padding:1px 6px;">🔍 변경확인</span>';
+      else if (l.type === 'signup') badge = '<span class="chip" style="background:#e8f0fe;color:#1a73e8;font-size:0.7rem;padding:1px 6px;">🆕 신규제출</span>';
+      else if (l.type === 'edit') badge = '<span class="chip" style="background:#f3e8fd;color:#7627bb;font-size:0.7rem;padding:1px 6px;">✏️ 수정·재신청</span>';
+      var whoBadge = isAi
+        ? '<b style="color:var(--accent,#B23A48);">🤖 AI 부관리자</b>'
+        : (l.type === 'admin' ? '<b style="color:#8a5a10;">👑 관리자</b>' : '<span>🙋 ' + escapeHtml(l.actor || '-') + '</span>');
+      return '<tr>' +
+        '<td style="white-space:nowrap;font-size:0.75rem;color:var(--muted);padding:6px 8px;">' + escapeHtml(tm) + '</td>' +
+        '<td style="white-space:nowrap;font-size:0.77rem;padding:6px 8px;">' + whoBadge + '</td>' +
+        '<td style="white-space:nowrap;padding:6px 8px;">' + badge + '</td>' +
+        '<td style="font-size:0.78rem;padding:6px 8px;word-break:break-word;">' + escapeHtml(det) + '</td>' +
+      '</tr>';
+    }).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:12px;">오늘 기록된 심사·변경 내역이 아직 없어요 ✨</td></tr>';
+
+    var todayCommentHtml = (_aiStrategyBrief && _aiStrategyBrief.today_comment)
+      ? '<div style="margin-bottom:8px;padding:7px 10px;background:var(--gold-soft,#f6ecd9);border-left:3px solid var(--gold,#C08A34);border-radius:6px;font-size:0.79rem;color:var(--ink);">💡 <b>AI 일일 브리핑</b>: ' + escapeHtml(_aiStrategyBrief.today_comment) + '</div>'
+      : '';
+
+    var paneTodayHtml =
+      '<div style="margin-top:10px;">' +
+        '<div style="font-size:0.76rem;color:var(--muted);background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:7px 10px;margin-bottom:8px;line-height:1.45;">' +
+          '🛡️ <b>현재 심사 정책 (방식 A + C 동시 가동 중)</b>: ① 정면 사진·<code>010</code> 정상 시 <b>자기소개가 짧아도 보류 없이 즉시 승인</b> 후 다정한 소개글 다듬기 팁 동봉(A) · ② 보류된 신청자가 수정 후 <b>[재신청]하면 AI가 즉시 자동 재심사·승인</b>(C)' +
+        '</div>' +
+        todayCommentHtml +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:10px;">' +
+          '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
+            '<div style="font-size:0.73rem;color:var(--muted);">🤖 오늘 신청서 심사</div>' +
+            '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">AI 승인 <span style="color:#137333;">' + m.aiApproveToday + '</span> · 보류 <span style="color:#b06000;">' + m.aiHoldToday + '</span></div>' +
+            '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">관리자 직접 승인 ' + m.adminApproveToday + '건</div>' +
+          '</div>' +
+          '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
+            '<div style="font-size:0.73rem;color:var(--muted);">✏️ 오늘 프로필 변경 검토</div>' +
+            '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">AI 확인완료 <span style="color:#1967d2;">' + m.aiEditConfirmToday + '</span>건</div>' +
+            '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">현재 변경 미검토 대기 ' + m.editWait + '건</div>' +
+          '</div>' +
+          '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
+            '<div style="font-size:0.73rem;color:var(--muted);">🌱 오늘 유입 · 매칭 활동</div>' +
+            '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">가입 ' + m.signupToday + '명 <span style="font-size:0.75rem;font-weight:400;color:var(--muted);">(재신청 ' + m.resubmitToday + ')</span></div>' +
+            '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">📷 사진 ' + m.todayPhotoReq + '건 · 💌 대화 ' + m.todayTalkReq + '건 (성사 ' + m.todayMatch + ')</div>' +
+          '</div>' +
+          '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
+            '<div style="font-size:0.73rem;color:var(--muted);">⏳ 현재 실시간 대기열</div>' +
+            '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">신규 대기 <span style="color:var(--accent);">' + m.pendNew + '</span> · 보류 ' + m.pendHeld + '</div>' +
+            '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">미읽음 회원 문의 ' + m.unreadQna + '건</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="font-size:0.8rem;font-weight:700;margin:6px 0 5px;color:var(--ink);">📋 ' + (m.todayTimeline.length ? '오늘(' + m.todayD.slice(5).replace('-', '/') + ') AI 부관리자 & 심사 상세 타임라인' : '최근 AI 부관리자 활동 내역') + '</div>' +
+        '<div style="max-height:210px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper);">' +
+          '<table class="stats-table" style="margin:0;width:100%;border-collapse:collapse;">' +
+            '<thead><tr style="background:var(--card);border-bottom:1px solid var(--line);font-size:0.74rem;"><th style="text-align:left;padding:6px 8px;">시각</th><th style="text-align:left;padding:6px 8px;">주체</th><th style="text-align:left;padding:6px 8px;">구분</th><th style="text-align:left;padding:6px 8px;">처리 내역</th></tr></thead>' +
+            '<tbody>' + logRowsHtml + '</tbody>' +
+          '</table>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' +
+          '<button type="button" class="card-btn primary" data-action="ai-intel-open-modal" data-modal-tab="coadmin" style="flex:none;padding:5px 11px;font-size:0.76rem;">👑 AI 부관리자 심사창 열기</button>' +
+          '<button type="button" class="card-btn" data-action="sec-jump" data-id="pending" style="flex:none;padding:5px 11px;font-size:0.76rem;">⏳ 승인 대기 (' + (m.pendNew + m.pendHeld) + ')</button>' +
+          '<button type="button" class="card-btn" data-action="sec-jump" data-id="editrev" style="flex:none;padding:5px 11px;font-size:0.76rem;">📝 프로필 변경 (' + m.editWait + ')</button>' +
+          '<button type="button" class="card-btn" data-action="sec-jump" data-id="log" style="flex:none;padding:5px 11px;font-size:0.76rem;">📜 전체 활동 기록</button>' +
+        '</div>' +
+      '</div>';
+
+    /* ── 카테고리 2: 📈 일주일 동향 분석 ── */
+    var dayNames = ['일', '월', '화', '수', '목', '금', '토'];
+    var dailyKeys = Object.keys(m.dailyMap).sort().reverse();
+    var dailyRowsHtml = dailyKeys.map(function (dk, idx) {
+      var row = m.dailyMap[dk];
+      var dtObj = new Date(dk + 'T00:00:00Z');
+      var dow = dayNames[dtObj.getUTCDay()];
+      var md = dk.slice(5).replace('-', '/') + '(' + dow + ')' + (idx === 0 ? ' <span style="color:var(--accent);font-weight:700;">오늘</span>' : '');
+      var totAct = row.join + row.photo + row.talk;
+      var barCnt = Math.min(10, Math.max(totAct > 0 ? 1 : 0, Math.round(totAct / 2)));
+      var barStr = barCnt ? '<span style="color:var(--accent);letter-spacing:1px;">' + new Array(barCnt + 1).join('■') + '</span>' : '<span style="color:var(--muted);">-</span>';
+      return '<tr>' +
+        '<td style="padding:5px 8px;font-size:0.76rem;">' + md + '</td>' +
+        '<td style="padding:5px 8px;font-size:0.77rem;text-align:center;"><b>' + row.join + '</b>명</td>' +
+        '<td style="padding:5px 8px;font-size:0.77rem;text-align:center;">' + row.photo + '건</td>' +
+        '<td style="padding:5px 8px;font-size:0.77rem;text-align:center;">' + row.talk + '건</td>' +
+        '<td style="padding:5px 8px;font-size:0.77rem;text-align:center;color:#137333;font-weight:700;">' + row.match + '건</td>' +
+        '<td style="padding:5px 8px;font-size:0.75rem;">' + barStr + '</td>' +
+      '</tr>';
+    }).join('');
+
+    var popStr = m.topPopList.length
+      ? m.topPopList.map(function (x, i) { return (i + 1) + '위 <b>' + escapeHtml(x.nick) + '</b>(' + x.cnt + '건)'; }).join(' · ')
+      : '최근 7일 수신 요청 집계 중';
+
+    var weeklyCommentHtml = (_aiStrategyBrief && _aiStrategyBrief.weekly_comment)
+      ? '<div style="margin-bottom:8px;padding:7px 10px;background:var(--gold-soft,#f6ecd9);border-left:3px solid var(--gold,#C08A34);border-radius:6px;font-size:0.79rem;color:var(--ink);">📈 <b>AI 주간 동향 진단</b>: ' + escapeHtml(_aiStrategyBrief.weekly_comment) + '</div>'
+      : '';
+
+    var paneWeeklyHtml =
+      '<div style="margin-top:10px;">' +
+        weeklyCommentHtml +
+        '<div style="font-size:0.8rem;font-weight:700;margin:0 0 5px;color:var(--ink);">📊 최근 7일 vs 직전 7일 핵심 지표 비교 표</div>' +
+        '<div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper);margin-bottom:10px;">' +
+          '<table class="stats-table" style="margin:0;width:100%;border-collapse:collapse;">' +
+            '<thead><tr style="background:var(--card);border-bottom:1px solid var(--line);font-size:0.74rem;">' +
+              '<th style="text-align:left;padding:6px 8px;">지표 구분</th>' +
+              '<th style="text-align:center;padding:6px 8px;">최근 7일</th>' +
+              '<th style="text-align:center;padding:6px 8px;">직전 7일</th>' +
+              '<th style="text-align:center;padding:6px 8px;">증감 추세</th>' +
+              '<th style="text-align:left;padding:6px 8px;">수락률 · 세부 동향</th>' +
+            '</tr></thead>' +
+            '<tbody style="font-size:0.78rem;">' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;">👥 신규 회원 합류</td>' +
+                '<td style="padding:6px 8px;text-align:center;"><b>' + m.join7 + '명</b></td>' +
+                '<td style="padding:6px 8px;text-align:center;color:var(--muted);">' + m.joinPrev7 + '명</td>' +
+                '<td style="padding:6px 8px;text-align:center;">' + deltaBadge(m.join7, m.joinPrev7, '명') + '</td>' +
+                '<td style="padding:6px 8px;">남성 <b>' + m.join7M + '명</b> · 여성 <b>' + m.join7F + '명</b> 합류</td>' +
+              '</tr>' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;">📷 사진 보기 요청</td>' +
+                '<td style="padding:6px 8px;text-align:center;"><b>' + m.photo7 + '건</b></td>' +
+                '<td style="padding:6px 8px;text-align:center;color:var(--muted);">' + m.photoPrev7 + '건</td>' +
+                '<td style="padding:6px 8px;text-align:center;">' + deltaBadge(m.photo7, m.photoPrev7, '건') + '</td>' +
+                '<td style="padding:6px 8px;">수락 <b>' + m.photo7Ap + '건</b> (주간 수락률 <b>' + pct(m.photo7Ap, m.photo7) + '%</b>)</td>' +
+              '</tr>' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;">💌 대화(연락처) 신청</td>' +
+                '<td style="padding:6px 8px;text-align:center;"><b>' + m.talk7 + '건</b></td>' +
+                '<td style="padding:6px 8px;text-align:center;color:var(--muted);">' + m.talkPrev7 + '건</td>' +
+                '<td style="padding:6px 8px;text-align:center;">' + deltaBadge(m.talk7, m.talkPrev7, '건') + '</td>' +
+                '<td style="padding:6px 8px;">성사 <b>' + m.talk7Ap + '쌍</b> (주간 성사율 <b>' + pct(m.talk7Ap, m.talk7) + '%</b>)</td>' +
+              '</tr>' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;">🔥 주간 활성 회원(WAU)</td>' +
+                '<td style="padding:6px 8px;text-align:center;"><b>' + m.wau7 + '명</b></td>' +
+                '<td style="padding:6px 8px;text-align:center;color:var(--muted);">활동 ' + m.candActiveCount + '명</td>' +
+                '<td style="padding:6px 8px;text-align:center;"><span style="color:#1967d2;font-weight:700;">가동률 ' + pct(m.wau7, m.candActiveCount) + '%</span></td>' +
+                '<td style="padding:6px 8px;">최근 7일 이내 접속한 실활동 회원 비중</td>' +
+              '</tr>' +
+            '</tbody>' +
+          '</table>' +
+        '</div>' +
+        '<div style="font-size:0.8rem;font-weight:700;margin:6px 0 5px;color:var(--ink);">📅 최근 7일 일자별 활동 흐름</div>' +
+        '<div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper);margin-bottom:8px;">' +
+          '<table class="stats-table" style="margin:0;width:100%;border-collapse:collapse;">' +
+            '<thead><tr style="background:var(--card);border-bottom:1px solid var(--line);font-size:0.73rem;">' +
+              '<th style="text-align:left;padding:5px 8px;">날짜</th>' +
+              '<th style="text-align:center;padding:5px 8px;">신규합류</th>' +
+              '<th style="text-align:center;padding:5px 8px;">📷 사진요청</th>' +
+              '<th style="text-align:center;padding:5px 8px;">💌 대화신청</th>' +
+              '<th style="text-align:center;padding:5px 8px;">✅ 승인성사</th>' +
+              '<th style="text-align:left;padding:5px 8px;">활동량</th>' +
+            '</tr></thead>' +
+            '<tbody>' + dailyRowsHtml + '</tbody>' +
+          '</table>' +
+        '</div>' +
+        '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:8px 11px;font-size:0.77rem;line-height:1.5;">' +
+          '🏆 <b>최근 7일 인기 집중 회원 TOP 5</b>: ' + popStr + '<br>' +
+          '⏰ <b>주간 응답 병목 체크</b>: 현재 전체 대기 요청 <b>' + m.waitReqTotal + '건</b> 중 48시간 이상 지연된 요청이 <b style="color:var(--accent);">' + m.stale48 + '건</b> 있습니다.' +
+        '</div>' +
+      '</div>';
+
+    /* ── 카테고리 3: 🔭 장기 분석 + 전망 · 운영 전략 (표 포함) ── */
+    var mPct = pct(m.maleActive, m.candActiveCount);
+    var fPct = pct(m.femaleActive, m.candActiveCount);
+    var genderGap = Math.abs(m.maleActive - m.femaleActive);
+    var scarceGender = m.maleActive > m.femaleActive ? '여성' : (m.femaleActive > m.maleActive ? '남성' : '남녀 균형');
+    var avgReqPerPerson = m.candTotal ? ((m.totalPhoto + m.totalTalk) / m.candTotal).toFixed(1) : '0.0';
+    var photoToTalkPct = m.totalPhotoAp ? pct(m.totalTalk, m.totalPhotoAp) : 0;
+
+    var autoStrategySummary = (_aiStrategyBrief && _aiStrategyBrief.strategy_comment)
+      ? _aiStrategyBrief.strategy_comment
+      : ('현재 활동 후보 ' + m.candActiveCount + '명(남 ' + m.maleActive + ' : 여 ' + m.femaleActive + ') 기준 ' +
+         (genderGap >= 3 ? (scarceGender + ' 회원 +' + genderGap + '명 보강 시 성비 균형(5:5)에 도달하여 매칭 효율이 극대화됩니다. ') : '남녀 성비 밸런스가 매우 이상적으로 유지되고 있습니다. ') +
+         '또한 48시간 이상 미응답 요청 ' + m.stale48 + '건에 다정한 확인 리마인드를 발송하고, 14일 이상 미접속 회원 ' + m.inactive14 + '명에게 신규 합류 소식을 전하면 향후 30일간 약 +' + m.estMatch30 + '쌍의 추가 연결 성사가 전망됩니다.');
+
+    var paneStrategyHtml =
+      '<div style="margin-top:10px;">' +
+        '<div style="margin-bottom:10px;padding:9px 12px;background:linear-gradient(135deg,var(--gold-soft,#f6ecd9),var(--paper,#fbf3ee));border:1px solid var(--gold,#C08A34);border-radius:10px;font-size:0.8rem;line-height:1.55;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;">' +
+            '<b style="color:var(--accent,#B23A48);">🧠 AI 수석 전략가 종합 전망 & 브리핑</b>' +
+            '<button type="button" class="card-btn" data-action="ai-intel-refresh" style="flex:none;padding:3px 9px;font-size:0.72rem;"' + (_aiStrategyLoading ? ' disabled' : '') + '>' + (_aiStrategyLoading ? '⏳ AI 분석 중…' : '✨ AI 전략 코멘트 새로고침') + '</button>' +
+          '</div>' +
+          '<div style="color:var(--ink);">' + escapeHtml(autoStrategySummary) + '</div>' +
+        '</div>' +
+        '<div style="font-size:0.8rem;font-weight:700;margin:0 0 5px;color:var(--ink);">🔭 [표 1] 장기 구조 · 매칭 퍼널(Funnel) · 향후 30일 전망 표</div>' +
+        '<div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper);margin-bottom:10px;">' +
+          '<table class="stats-table" style="margin:0;width:100%;border-collapse:collapse;">' +
+            '<thead><tr style="background:var(--card);border-bottom:1px solid var(--line);font-size:0.74rem;">' +
+              '<th style="text-align:left;padding:6px 8px;width:24%;">분석 영역</th>' +
+              '<th style="text-align:left;padding:6px 8px;width:38%;">누적 구조 · 핵심 데이터</th>' +
+              '<th style="text-align:left;padding:6px 8px;width:38%;">장기 진단 및 30일 전망</th>' +
+            '</tr></thead>' +
+            '<tbody style="font-size:0.78rem;">' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;">⚖️ 성비 · 풀(Pool) 구조</td>' +
+                '<td style="padding:6px 8px;">활동 <b>' + m.candActiveCount + '명</b> (남 <b>' + m.maleActive + '명·' + mPct + '%</b> / 여 <b>' + m.femaleActive + '명·' + fPct + '%</b>)<br><span style="font-size:0.72rem;color:var(--muted);">휴면 ' + m.candDeac + '명 · 주선자 ' + m.mmCount + '명</span></td>' +
+                '<td style="padding:6px 8px;">' + (genderGap >= 2 ? ('5:5 균형까지 <b style="color:var(--accent);">' + scarceGender + ' +' + genderGap + '명</b> 확충 권장') : '<b style="color:#137333;">황금 성비(5:5 근접) 달성 중</b>') + '</td>' +
+              '</tr>' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;">🎂 연령 · 지역 밀도</td>' +
+                '<td style="padding:6px 8px;">95년생+(20대) <b>' + m.age20s + '명</b> · 90~94년생 <b>' + m.ageEarly30s + '명</b> · 89년생↑ <b>' + m.ageLate30s + '명</b></td>' +
+                '<td style="padding:6px 8px;">수도권 거주 비중 <b>' + pct(m.capRegionCount, m.candActiveCount) + '%</b> · 주력 연령대(90~97년생) 매칭 풀 탄탄</td>' +
+              '</tr>' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;">🌪️ 누적 매칭 퍼널</td>' +
+                '<td style="padding:6px 8px;">사진 <b>' + m.totalPhoto + '건</b>(수락 <b>' + pct(m.totalPhotoAp, m.totalPhoto) + '%</b>) → 대화 <b>' + m.totalTalk + '건</b>(성사 <b>' + pct(m.totalTalkAp, m.totalTalk) + '%</b>) → 연결 <b>' + m.connEver + '쌍</b>(커플 <b>' + m.coupleCnt + '쌍</b>)</td>' +
+                '<td style="padding:6px 8px;">1인당 평균 <b>' + avgReqPerPerson + '건</b> 신청 · 사진승인 후 대화신청 전환율 <b>' + photoToTalkPct + '%</b></td>' +
+              '</tr>' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;">🔭 향후 30일 전망</td>' +
+                '<td style="padding:6px 8px;">최근 14일 유입·교류 속도 기반 추세 시뮬레이션</td>' +
+                '<td style="padding:6px 8px;">30일 내 <b style="color:#1967d2;">신규 +' + m.estJoin30 + '명</b> · <b style="color:#1967d2;">요청 +' + m.estReq30 + '건</b> · <b style="color:#137333;">신규 성사 +' + m.estMatch30 + '쌍</b> 전망</td>' +
+              '</tr>' +
+            '</tbody>' +
+          '</table>' +
+        '</div>' +
+        '<div style="font-size:0.8rem;font-weight:700;margin:6px 0 5px;color:var(--ink);">🎯 [표 2] 지금 바로 실행할 AI 추천 3대 운영 전략 표</div>' +
+        '<div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper);">' +
+          '<table class="stats-table" style="margin:0;width:100%;border-collapse:collapse;">' +
+            '<thead><tr style="background:var(--card);border-bottom:1px solid var(--line);font-size:0.74rem;">' +
+              '<th style="text-align:left;padding:6px 8px;width:18%;">우선순위</th>' +
+              '<th style="text-align:left;padding:6px 8px;width:28%;">핵심 전략 과제</th>' +
+              '<th style="text-align:left;padding:6px 8px;width:36%;">데이터 근거 & 기대 효과</th>' +
+              '<th style="text-align:center;padding:6px 8px;width:18%;">바로 실행</th>' +
+            '</tr></thead>' +
+            '<tbody style="font-size:0.78rem;">' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;color:var(--accent);">1순위 · 풀 확장</td>' +
+                '<td style="padding:6px 8px;font-weight:700;">' + (genderGap >= 2 ? (scarceGender + ' 타겟 지인 초대 캠페인') : '주선자·친구 초대 활성화') + '</td>' +
+                '<td style="padding:6px 8px;">남 ' + m.maleActive + ' : 여 ' + m.femaleActive + ' 구조 — 친구 공유 팝업·공지로 ' + scarceGender + ' 유입 시 성사율 약 1.3배 상승</td>' +
+                '<td style="padding:6px 8px;text-align:center;"><button type="button" class="card-btn primary" data-action="ai-intel-open-modal" data-modal-tab="broadcast" style="padding:4px 8px;font-size:0.72rem;">💌 소개공지</button></td>' +
+              '</tr>' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;color:#b06000;">2순위 · 병목 해소</td>' +
+                '<td style="padding:6px 8px;font-weight:700;">48시간+ 미응답 골든타임 케어</td>' +
+                '<td style="padding:6px 8px;">현재 48h+ 미응답 <b>' + m.stale48 + '건</b>(대기 총 ' + m.waitReqTotal + '건) — 다정한 확인 안내 시 수락률 대폭 개선</td>' +
+                '<td style="padding:6px 8px;text-align:center;"><button type="button" class="card-btn" data-action="sec-jump" data-id="stale" style="padding:4px 8px;font-size:0.72rem;">📞 연락필요(' + m.stale48 + ')</button></td>' +
+              '</tr>' +
+              '<tr>' +
+                '<td style="padding:6px 8px;font-weight:700;color:#1967d2;">3순위 · 리텐션</td>' +
+                '<td style="padding:6px 8px;font-weight:700;">장기 미접속 깨우기 & 소개 보완</td>' +
+                '<td style="padding:6px 8px;">14일+ 미접속 <b>' + m.inactive14 + '명</b> · 짧은 소개(20자↓) <b>' + m.shortIntroCount + '명</b> — 주말 신규 합류 소식 발송 권장</td>' +
+                '<td style="padding:6px 8px;text-align:center;"><button type="button" class="card-btn approve" data-action="ai-intel-open-modal" data-modal-tab="broadcast" style="padding:4px 8px;font-size:0.72rem;">🎉 주말케어</button></td>' +
+              '</tr>' +
+            '</tbody>' +
+          '</table>' +
+        '</div>' +
+      '</div>';
+
+    var bodyHtml = '';
+    if (!_aiIntelFolded) {
+      if (tab === 'all') {
+        bodyHtml =
+          '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);">' +
+            '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);">🤖 ① 오늘 AI가 한 일</div>' + paneTodayHtml +
+            '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);">📈 ② 일주일 동향 분석</div>' + paneWeeklyHtml +
+            '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);">🔭 ③ 장기 분석 + 전망 · 운영 전략</div>' + paneStrategyHtml +
+          '</div>';
+      } else if (tab === 'weekly') {
+        bodyHtml = paneWeeklyHtml;
+      } else if (tab === 'strategy') {
+        bodyHtml = paneStrategyHtml;
+      } else {
+        bodyHtml = paneTodayHtml;
+      }
+    }
+
+    return (
+      '<div id="bai-admin-intel-board" style="background:var(--card,#fff);border:2px solid var(--gold,#C08A34);border-radius:14px;padding:12px 14px;margin:0 0 14px;box-shadow:0 2px 8px rgba(0,0,0,0.04);">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+            '<span style="font-size:0.96rem;font-weight:800;color:var(--ink);">👑 AI 부관리자 브리핑 & 전략 요약</span>' +
+            '<span class="chip" style="background:var(--gold-soft,#f6ecd9);color:#8a5a10;font-size:0.72rem;font-weight:700;">오늘 AI 처리 ' + todayAiTotal + '건 · 7일 가입 +' + m.join7 + '명 · 누적 연결 ' + m.connEver + '쌍</span>' +
+          '</div>' +
+          '<div style="display:flex;gap:5px;align-items:center;">' +
+            '<button type="button" class="card-btn" data-action="ai-intel-tab" data-itab="' + (tab === 'all' ? 'today' : 'all') + '" style="flex:none;padding:4px 9px;font-size:0.73rem;">' + (tab === 'all' ? '🗂️ 탭별로 보기' : '📑 3개 전체 펼치기') + '</button>' +
+            '<button type="button" class="card-btn" data-action="ai-intel-fold" style="flex:none;padding:4px 9px;font-size:0.73rem;">' + (_aiIntelFolded ? '▼ 펼치기' : '▲ 접기') + '</button>' +
+          '</div>' +
+        '</div>' +
+        (!_aiIntelFolded ? (
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">' +
+            '<button type="button" data-action="ai-intel-tab" data-itab="today" style="' + tabBtnStyle(tab === 'today') + '">🤖 ① 오늘 AI가 한 일 (' + todayAiTotal + ')</button>' +
+            '<button type="button" data-action="ai-intel-tab" data-itab="weekly" style="' + tabBtnStyle(tab === 'weekly') + '">📈 ② 일주일 동향 분석 (+' + m.join7 + '명)</button>' +
+            '<button type="button" data-action="ai-intel-tab" data-itab="strategy" style="' + tabBtnStyle(tab === 'strategy') + '">🔭 ③ 장기 분석 · 전망 · 전략</button>' +
+          '</div>' +
+          bodyHtml
+        ) : '') +
+      '</div>'
+    );
+  }
+
   function renderAdmin(state) {
     if (!isAdminUnlocked) {
       return '<div class="admin-panel"><h2>관리자 모드</h2><p class="sub">위쪽 "관리자" 버튼으로 PIN을 입력하면 승인 대기 명단, 실명, 연락처, 알게 된 경로, 대화 신청함을 볼 수 있어요.</p></div>';
@@ -8258,6 +8872,7 @@
       '<div class="admin-panel">' +
         headerBtns +
         (quickBar ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px;">' + quickBar + '</div>' : '') +
+        adminAiIntelBoardHtml(state) +
         order.map(function (k) { return secHtml[k] || ''; }).join('') +
       '</div>'
     );
@@ -9267,7 +9882,7 @@
                   /* PIN: 새로 입력했으면 신형(pinAuth)으로 교체, 아니면 기존 형식 유지 */
                   if (results[3]) { u.pinAuth = results[3]; delete u.pinHash; }
                   /* 승인 대기(보류/반려) 상태에서 수정·재제출 → 반려/보류 해제하고 다시 대기열로 */
-                  if (isPending) { delete u.rejectedReason; delete u.rejectedAt; delete u.heldReason; delete u.heldAt; u.submittedAt = new Date().toISOString(); }
+                  if (isPending) { delete u.rejectedReason; delete u.rejectedAt; delete u.heldReason; delete u.heldAt; delete u.aiAuditedAt; u.submittedAt = new Date().toISOString(); }
                   /* 승인된 회원이 프로필을 직접 수정 → 관리자 리뷰 대기 + 변경 내역(전/후) 기록. 관리자 본인 수정은 제외 */
                   else if (!isAdminUnlocked) {
                     u.editReviewAt = new Date().toISOString();
@@ -12157,6 +12772,35 @@
       else if (action === 'fold-all') { toggleFoldAll(); return; }
       else if (action === 'broadcast') { handleBroadcast(); return; }
       else if (action === 'sms-custom') { openSmsCustom(); return; }
+      else if (action === 'ai-intel-tab') {
+        _aiIntelTab = actionBtn.getAttribute('data-itab') || actionBtn.getAttribute('data-tab') || 'today';
+        _aiIntelFolded = false;
+        try { localStorage.setItem('bb_ai_intel_tab', _aiIntelTab); localStorage.setItem('bb_ai_intel_fold', '0'); } catch (e2) {}
+        paint(currentState);
+        return;
+      }
+      else if (action === 'ai-intel-fold') {
+        _aiIntelFolded = !_aiIntelFolded;
+        try { localStorage.setItem('bb_ai_intel_fold', _aiIntelFolded ? '1' : '0'); } catch (e2) {}
+        paint(currentState);
+        return;
+      }
+      else if (action === 'ai-intel-refresh') {
+        refreshAiIntelBrief();
+        return;
+      }
+      else if (action === 'ai-intel-open-modal') {
+        var mtab = actionBtn.getAttribute('data-modal-tab') || 'coadmin';
+        if (typeof window.__openBennyAiModal === 'function') {
+          window.__openBennyAiModal(mtab);
+        } else if (mtab === 'broadcast') {
+          handleBroadcast();
+        } else {
+          var pendEl = document.querySelector('details.admin-fold[data-sec="pending"]');
+          if (pendEl) { pendEl.open = true; pendEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+        }
+        return;
+      }
       else if (action === 'admin-msg-delall') {
         if (isAdminUnlocked) modalConfirm('목록에서 숨기기', nickForEntry(currentState, id) + '님과의 대화를 관리자 목록에서 숨길까요? 회원 쪽 메시지는 그대로이고, 새 메시지가 오면 다시 보여요. (탈퇴·삭제 요청이면 회원 카드의 \'보류·삭제\'에서 처리해 주세요)', '숨기기').then(function (ok) { if (ok) deleteAdminThread(id); });
       }
@@ -13717,7 +14361,7 @@
           });
         }
       }
-      var timeoutMs = (payload && (payload.op === 'coadmin_audit' || payload.op === 'draft_broadcast')) ? 22000 : 4500;
+      var timeoutMs = (payload && (payload.op === 'coadmin_audit' || payload.op === 'draft_broadcast' || payload.op === 'strategy_brief')) ? 22000 : 4500;
       function callCloudFallback() {
         if (typeof callFn === 'function') {
           var fnOp = payload.op === 'list'
@@ -13730,7 +14374,9 @@
                         ? 'coadmin_audit'
                         : (payload.op === 'draft_broadcast'
                             ? 'draft_broadcast'
-                            : (payload.op === 'confirm_forward' ? 'confirm_forward' : 'heal_submit')))));
+                            : (payload.op === 'strategy_brief'
+                                ? 'strategy_brief'
+                                : (payload.op === 'confirm_forward' ? 'confirm_forward' : 'heal_submit'))))));
           return callFn('aiConcierge', Object.assign({}, payload, { op: fnOp })).then(function (r) {
             return (r && r.data) ? r.data : r;
           });
@@ -13830,6 +14476,7 @@
             intro: p.intro || '',
             idealType: p.idealType || '',
             dealbreaker: p.dealbreaker || '',
+            submittedAt: p.submittedAt || '',
             photoCount: p.photoCount || (finalUrl ? 1 : 0),
             photoDataUrl: finalUrl || '',
             phone: phoneStr
@@ -13926,12 +14573,15 @@
           tx.update(stateRef, { pendingEntries: nextPend, entries: entries });
         });
       }).then(function () {
-        /* 환영 안내 메시지 및 활동 로그 기록 */
+        /* 환영 안내 메시지(방식 A: 짧은 소개글은 승인 후 다듬기 팁 동봉) 및 활동 로그 기록 */
         approvedList.forEach(function (entry) {
-          if (typeof appendLog === 'function') appendLog('admin', 'AI 부관리자', '신청 자동 승인 · ' + (entry.nickname || ''));
+          var rObj = approveMap[entry.id] || {};
+          var polishTip = String(rObj.polish_tip || '').trim();
+          if (typeof appendLog === 'function') appendLog('admin', 'AI 부관리자', '신청 자동 승인' + (polishTip ? '(소개글 다듬기 팁 안내)' : '') + ' · ' + (entry.nickname || ''));
           var welcome = entry.isMatchmaker
             ? (typeof APPROVE_MSG_MM !== 'undefined' ? APPROVE_MSG_MM : '')
             : (typeof APPROVE_MSG_DEFAULT !== 'undefined' ? APPROVE_MSG_DEFAULT : '');
+          if (!entry.isMatchmaker && polishTip) welcome = (welcome ? (welcome + '\n\n') : '') + polishTip;
           if (welcome && typeof sendMessageTo === 'function') {
             sendMessageTo(entry.id, 'admin', welcome, '', { auto: true }).catch(function () {});
           }
@@ -14910,7 +15560,7 @@
       }
     }
 
-    /* 자동 부관리자 모드 ON 일 때: 미처리 신청서·프로필 변경이 있으면 중복 없이 자동 심사·집행 */
+    /* 자동 부관리자 모드 ON 일 때: 미처리 신청서·프로필 변경이 있으면 중복 없이 자동 심사·집행 (방식 C: 재신청 시 submittedAt 갱신 감지 후 즉시 재심사) */
     var _autoProcessedIds = {};
     var _autoRunning = false;
     function maybeRunAutoCoAdmin() {
@@ -14921,12 +15571,12 @@
       if (!autoOn) return;
 
       var st = (typeof currentState !== 'undefined' && currentState) ? currentState : {};
-      var pend = (st.pendingEntries || []).filter(function (p) { return !p.heldReason && !p.rejectedAt && !_autoProcessedIds['p:' + p.id]; });
+      var pend = (st.pendingEntries || []).filter(function (p) { return !p.heldReason && !p.rejectedAt && !_autoProcessedIds['p:' + p.id + ':' + (p.submittedAt || '')]; });
       var edits = (st.entries || []).filter(function (e) { return e.editReviewAt && !e.deactivated && !_autoProcessedIds['e:' + e.id + ':' + e.editReviewAt]; });
       if (!pend.length && !edits.length) return;
 
       _autoRunning = true;
-      pend.forEach(function (p) { _autoProcessedIds['p:' + p.id] = true; });
+      pend.forEach(function (p) { _autoProcessedIds['p:' + p.id + ':' + (p.submittedAt || '')] = true; });
       edits.forEach(function (e) { _autoProcessedIds['e:' + e.id + ':' + e.editReviewAt] = true; });
 
       gatherCoAdminTargets().then(function (targets) {
@@ -15028,6 +15678,9 @@
         '</button></div>';
       };
     }
+
+    window.__openBennyAiModal = openSelfHealModal;
+    window.__callBennyAiHeal = callHealBackend;
 
     if (typeof paint === 'function') {
       var _origPaint = paint;

@@ -194,7 +194,7 @@
           });
         }
       }
-      var timeoutMs = (payload && (payload.op === 'coadmin_audit' || payload.op === 'draft_broadcast')) ? 22000 : 4500;
+      var timeoutMs = (payload && (payload.op === 'coadmin_audit' || payload.op === 'draft_broadcast' || payload.op === 'strategy_brief')) ? 22000 : 4500;
       function callCloudFallback() {
         if (typeof callFn === 'function') {
           var fnOp = payload.op === 'list'
@@ -207,7 +207,9 @@
                         ? 'coadmin_audit'
                         : (payload.op === 'draft_broadcast'
                             ? 'draft_broadcast'
-                            : (payload.op === 'confirm_forward' ? 'confirm_forward' : 'heal_submit')))));
+                            : (payload.op === 'strategy_brief'
+                                ? 'strategy_brief'
+                                : (payload.op === 'confirm_forward' ? 'confirm_forward' : 'heal_submit'))))));
           return callFn('aiConcierge', Object.assign({}, payload, { op: fnOp })).then(function (r) {
             return (r && r.data) ? r.data : r;
           });
@@ -307,6 +309,7 @@
             intro: p.intro || '',
             idealType: p.idealType || '',
             dealbreaker: p.dealbreaker || '',
+            submittedAt: p.submittedAt || '',
             photoCount: p.photoCount || (finalUrl ? 1 : 0),
             photoDataUrl: finalUrl || '',
             phone: phoneStr
@@ -403,12 +406,15 @@
           tx.update(stateRef, { pendingEntries: nextPend, entries: entries });
         });
       }).then(function () {
-        /* 환영 안내 메시지 및 활동 로그 기록 */
+        /* 환영 안내 메시지(방식 A: 짧은 소개글은 승인 후 다듬기 팁 동봉) 및 활동 로그 기록 */
         approvedList.forEach(function (entry) {
-          if (typeof appendLog === 'function') appendLog('admin', 'AI 부관리자', '신청 자동 승인 · ' + (entry.nickname || ''));
+          var rObj = approveMap[entry.id] || {};
+          var polishTip = String(rObj.polish_tip || '').trim();
+          if (typeof appendLog === 'function') appendLog('admin', 'AI 부관리자', '신청 자동 승인' + (polishTip ? '(소개글 다듬기 팁 안내)' : '') + ' · ' + (entry.nickname || ''));
           var welcome = entry.isMatchmaker
             ? (typeof APPROVE_MSG_MM !== 'undefined' ? APPROVE_MSG_MM : '')
             : (typeof APPROVE_MSG_DEFAULT !== 'undefined' ? APPROVE_MSG_DEFAULT : '');
+          if (!entry.isMatchmaker && polishTip) welcome = (welcome ? (welcome + '\n\n') : '') + polishTip;
           if (welcome && typeof sendMessageTo === 'function') {
             sendMessageTo(entry.id, 'admin', welcome, '', { auto: true }).catch(function () {});
           }
@@ -1387,7 +1393,7 @@
       }
     }
 
-    /* 자동 부관리자 모드 ON 일 때: 미처리 신청서·프로필 변경이 있으면 중복 없이 자동 심사·집행 */
+    /* 자동 부관리자 모드 ON 일 때: 미처리 신청서·프로필 변경이 있으면 중복 없이 자동 심사·집행 (방식 C: 재신청 시 submittedAt 갱신 감지 후 즉시 재심사) */
     var _autoProcessedIds = {};
     var _autoRunning = false;
     function maybeRunAutoCoAdmin() {
@@ -1398,12 +1404,12 @@
       if (!autoOn) return;
 
       var st = (typeof currentState !== 'undefined' && currentState) ? currentState : {};
-      var pend = (st.pendingEntries || []).filter(function (p) { return !p.heldReason && !p.rejectedAt && !_autoProcessedIds['p:' + p.id]; });
+      var pend = (st.pendingEntries || []).filter(function (p) { return !p.heldReason && !p.rejectedAt && !_autoProcessedIds['p:' + p.id + ':' + (p.submittedAt || '')]; });
       var edits = (st.entries || []).filter(function (e) { return e.editReviewAt && !e.deactivated && !_autoProcessedIds['e:' + e.id + ':' + e.editReviewAt]; });
       if (!pend.length && !edits.length) return;
 
       _autoRunning = true;
-      pend.forEach(function (p) { _autoProcessedIds['p:' + p.id] = true; });
+      pend.forEach(function (p) { _autoProcessedIds['p:' + p.id + ':' + (p.submittedAt || '')] = true; });
       edits.forEach(function (e) { _autoProcessedIds['e:' + e.id + ':' + e.editReviewAt] = true; });
 
       gatherCoAdminTargets().then(function (targets) {
@@ -1505,6 +1511,9 @@
         '</button></div>';
       };
     }
+
+    window.__openBennyAiModal = openSelfHealModal;
+    window.__callBennyAiHeal = callHealBackend;
 
     if (typeof paint === 'function') {
       var _origPaint = paint;

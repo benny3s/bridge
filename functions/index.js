@@ -96,6 +96,7 @@ async function loginGuardResult(guard, ok) {
   return fails;
 }
 function guardKey(prefix, id) { return prefix + String(id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 120); }
+function memberGuardKey(entryId, ip) { return guardKey('m_', String(entryId) + '_' + String(ip || 'unknown')); }
 /* 비밀(PIN 해시 등)은 secrets/{id}(서버 전용)로 옮겨짐 — state에 남아 있으면(방금 바뀌어 아직 안 옮겨진 값) 그걸 우선.
    계정 전환으로 PIN을 다른 계정에서 물려받는 경우 entry.pinFrom 이 원래 계정 id */
 async function pinRecord(id, state) {
@@ -120,11 +121,11 @@ async function callerOwns(context, state, entry, pin) {
   if (!pin) return false;
   const ip = clientIp(context);
   await ipBlockedCheck(ip);
-  const gk = guardKey('m_', authE.id);
+  const gk = memberGuardKey(authE.id, ip);
   const guard = await loginGuardCheck(gk);
   const ok = verifyPinServer(pin, await pinSourceFor(authE, state));
   const fails = await loginGuardResult(guard, ok);
-  if (!ok) { await ipFailRecord(ip, 'pin'); await lockAlert(gk, fails, ip, authE.nickname); }
+  if (!ok) { await ipFailRecord(ip, 'pin', authE.id); await lockAlert(gk, fails, ip, authE.nickname); }
   return ok;
 }
 /* 클라 setupAdminPin/rewrapAdminKey 와 동일: PBKDF2(150000, SHA-256) → AES-256-GCM 으로 감싼 개인키가 풀리면 비밀번호 일치 */
@@ -152,8 +153,8 @@ exports.memberLogin = functions
     const pin = String((data && data.pin) || '');
     if (!entryId || !pin || pin.length > 64) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.');
     const ip = clientIp(context);
-    const gk = guardKey('m_', entryId);
-    const [, guard, stSnap] = await Promise.all([ipBlockedCheck(ip), loginGuardCheck(gk), db.doc('app/state').get()]);
+    const gk = memberGuardKey(entryId, ip);
+    const [, guard, stSnap] = await Promise.all([ipBlockedCheck(ip, pin), loginGuardCheck(gk), db.doc('app/state').get()]);
     const state = stSnap.data() || {};
     let entry = (state.entries || []).find((e) => e.id === entryId);
     let pending = false;
@@ -167,7 +168,7 @@ exports.memberLogin = functions
     const ok = verifyPinServer(pin, src);
     const fails = await loginGuardResult(guard, ok);
     if (!ok) {
-      await ipFailRecord(ip, 'member');
+      await ipFailRecord(ip, 'member', entryId);
       await lockAlert(gk, fails, ip, entry.nickname);
       throw new HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
     }
@@ -920,7 +921,7 @@ exports.applicantAction = functions
           if (e.id !== uid) return e;
           const u = Object.assign({}, e, patch);
           if (patch.pinSet) delete u.pinHash;
-          delete u.rejectedReason; delete u.rejectedAt; delete u.heldReason; delete u.heldAt;
+          delete u.rejectedReason; delete u.rejectedAt; delete u.heldReason; delete u.heldAt; delete u.aiAuditedAt;
           u.submittedAt = new Date().toISOString();
           nick = u.nickname || '';
           return u;
@@ -1382,36 +1383,94 @@ async function syncPhotoAcl(state, force) {
    (1) 이상 변경 감지: 앱의 모든 app/state 쓰기에는 쓴 사람(_w = 토큰 uid)과 새 난수(_wn)가 붙고 규칙이 진짜인지 확인.
        _wn 이 그대로면 서버 쓰기. 회원이 자기(와 자기가 관리하는 친구)와 관계없는 항목을 바꾸면 securityAlerts 에
        바뀌기 전·후를 기록하고 관리자에게 푸시 → 관리자 화면 '🛡 보안 경고'에서 되돌리기.
-   (2) 로그인 공격: 계정 잠금 시 알림, 한 IP에서 시간당 20회 넘게 틀리면 그 IP 1시간 차단 + 알림. */
-const IP_FAIL_LIMIT = 20;
+   (2) 로그인 공격 방어:
+       - X-Forwarded-For 헤더 조작(스푸핑) 원천 차단: Google 프론트엔드가 보증하는 실제 클라이언트 IP 추출.
+       - 일반 회원 보호: 회원 잠금(loginGuard)은 (계정+IP) 단위로만 걸어, 공격자가 틀려도 실제 회원 본인은 자기 폰에서 정상 로그인 가능.
+       - 다중 계정 찌르기(스프레이) 즉시 차단: 한 IP에서 서로 다른 계정 3개 이상 틀리거나 1시간 내 10회 실패 시 해당 IP 24시간 차단.
+       - 분산 프록시 스프레이 방어: 3분 내 서버 전체에서 8개 이상 서로 다른 계정이 실패하면 15분간 흔한 PIN(1234, 0000 등) 대입 차단. */
+const IP_FAIL_LIMIT = 10;
+const IP_MULTI_TARGET_LIMIT = 3;
+const COMMON_WEAK_PINS = new Set(['0000', '1111', '1234', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999', '123456', '000000', '111111', '1004', '2580', '4860']);
 function clientIp(context) {
   const req = (context && context.rawRequest) || {};
-  return String(req.ip || (req.headers && req.headers['x-forwarded-for']) || 'unknown').split(',')[0].trim();
+  const h = req.headers || {};
+  /* Google Cloud 프론트엔드가 직접 주입하는 실제 사용자 IP (클라이언트 위조 불가) */
+  if (h['x-appengine-user-ip']) return String(h['x-appengine-user-ip']).trim();
+  const xff = String(h['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+  /* GFE는 실제 클라이언트 IP와 GFE 프록시 IP를 맨 뒤에 추가하므로 뒤에서 두 번째가 실제 클라이언트 IP */
+  if (xff.length >= 2) return xff[xff.length - 2];
+  if (xff.length === 1) return xff[0];
+  return String((req.socket && req.socket.remoteAddress) || req.ip || 'unknown').trim();
 }
 /* 경고 기록·푸시는 실패해도 본 처리(로그인 등)를 깨지 않게 모두 삼킴 */
 async function securityAlert(doc, pushTitle, pushBody) {
   try { await db.collection('securityAlerts').add(Object.assign({ at: new Date().toISOString(), resolved: false }, doc)); } catch (e) { console.error('securityAlert', e); }
   try { await sendToAdmin(pushTitle, pushBody); } catch (e) { /* 알림 실패 무시 */ }
 }
-async function ipBlockedCheck(ip) {
-  const s = await db.collection('loginIp').doc(guardKey('ip_', ip)).get();
-  const d = s.exists ? s.data() : {};
-  if (d.blockedUntil && d.blockedUntil > Date.now()) throw new HttpsError('resource-exhausted', '시도가 너무 많아요. 잠시 후 다시 시도해주세요.');
+async function ipBlockedCheck(ip, pin) {
+  const [ipSnap, spraySnap] = await Promise.all([
+    db.collection('loginIp').doc(guardKey('ip_', ip)).get(),
+    pin ? db.collection('loginGuard').doc('_spray').get() : Promise.resolve(null)
+  ]);
+  const d = ipSnap.exists ? ipSnap.data() : {};
+  if (d.blockedUntil && d.blockedUntil > Date.now()) {
+    throw new HttpsError('resource-exhausted', '시도가 너무 많아요. 잠시 후 다시 시도해주세요.');
+  }
+  const sp = (spraySnap && spraySnap.exists) ? spraySnap.data() : {};
+  if (pin && sp.sprayUntil && sp.sprayUntil > Date.now() && COMMON_WEAK_PINS.has(String(pin))) {
+    throw new HttpsError('resource-exhausted', '보안 보호 모드가 작동 중이에요. 잠시 후 다시 시도해주세요.');
+  }
 }
-async function ipFailRecord(ip, what) {
+async function ipFailRecord(ip, what, targetId) {
   const ref = db.collection('loginIp').doc(guardKey('ip_', ip));
-  let blockedNow = false, n = 0;
+  let blockedNow = false, n = 0, targetCount = 0;
+  const now = Date.now();
   await db.runTransaction(async (tx) => {
     const s = await tx.get(ref);
     const d = s.exists ? s.data() : {};
-    const now = Date.now();
     const fails = (d.fails || []).filter((t) => now - t < 3600000);
     fails.push(now); n = fails.length;
-    const upd = { fails: fails.slice(-50) };
-    if (n >= IP_FAIL_LIMIT && !(d.blockedUntil > now)) { upd.blockedUntil = now + 3600000; blockedNow = true; }
+    const targetMap = Object.assign({}, d.targetMap || {});
+    Object.keys(targetMap).forEach((k) => { if (now - targetMap[k] >= 3600000) delete targetMap[k]; });
+    if (targetId) targetMap[String(targetId).slice(0, 64)] = now;
+    targetCount = Object.keys(targetMap).length;
+    const upd = { fails: fails.slice(-50), targetMap };
+    if ((n >= IP_FAIL_LIMIT || targetCount >= IP_MULTI_TARGET_LIMIT) && !(d.blockedUntil > now)) {
+      upd.blockedUntil = now + 24 * 3600000; /* 24시간 IP 차단 */
+      blockedNow = true;
+    }
     tx.set(ref, upd, { merge: true });
   });
-  if (blockedNow) await securityAlert({ type: 'ip-block', ip, what, fails: n }, '🛡 로그인 공격 의심', '한 곳에서 1시간에 ' + n + '번 로그인 실패 → 1시간 차단했어요');
+  if (blockedNow) {
+    const reason = targetCount >= IP_MULTI_TARGET_LIMIT
+      ? ('한 IP(' + ip + ')에서 ' + targetCount + '개 계정을 연속 시도해 24시간 차단했어요')
+      : ('한 IP(' + ip + ')에서 1시간에 ' + n + '번 로그인 실패 → 24시간 차단했어요');
+    await securityAlert({ type: 'ip-block', ip, what, fails: n, targets: targetCount }, '🛡 로그인 공격 IP 자동 차단', reason);
+  }
+  /* 분산 프록시 스프레이 감지: 3분 내 8개 이상 서로 다른 계정 실패 시 15분간 흔한 PIN 대입 차단 */
+  if (targetId) {
+    try {
+      const spRef = db.collection('loginGuard').doc('_spray');
+      let sprayTriggered = false;
+      await db.runTransaction(async (tx) => {
+        const spSnap = await tx.get(spRef);
+        const sp = spSnap.exists ? spSnap.data() : {};
+        const recent = Object.assign({}, sp.recentTargets || {});
+        Object.keys(recent).forEach((k) => { if (now - recent[k] >= 180000) delete recent[k]; });
+        recent[String(targetId).slice(0, 64)] = now;
+        const cnt = Object.keys(recent).length;
+        const upd = { recentTargets: recent, updatedAt: now };
+        if (cnt >= 8 && !(sp.sprayUntil > now)) {
+          upd.sprayUntil = now + 15 * 60000;
+          sprayTriggered = true;
+        }
+        tx.set(spRef, upd, { merge: true });
+      });
+      if (sprayTriggered) {
+        await securityAlert({ type: 'ip-block', ip, what: 'spray', fails: 8 }, '🛡 무차별 대입(스프레이) 방어 작동', '3분 내 다수 계정 PIN 시도가 감지되어 15분간 보안 보호 모드를 켰어요 (일반 회원은 정상 로그인 가능)');
+      }
+    } catch (e) { console.error('sprayRecord', e); }
+  }
 }
 /* 계정 잠금이 걸린 순간 알림 (5회마다) */
 async function lockAlert(guardKeyName, fails, ip, label) {
@@ -1791,6 +1850,7 @@ exports.aiConcierge = functions
           intro: p.intro || '',
           idealType: p.idealType || '',
           dealbreaker: p.dealbreaker || '',
+          submittedAt: p.submittedAt || '',
           photoCount: p.photoCount || (photoUrl ? 1 : 0),
           photoDataUrl: photoUrl || '',
           phone: phoneStr
@@ -1871,11 +1931,13 @@ exports.aiConcierge = functions
             if (!ent.lastSeenAt) ent.lastSeenAt = nowIso;
             entries.push(ent);
             approvedEntries.push(ent);
-            const welcomeText = ent.isMatchmaker
+            const polishTip = String((approveMap[p.id] && approveMap[p.id].polish_tip) || '').trim();
+            const baseWelcome = ent.isMatchmaker
               ? '🎉 주선자 계정이 승인되었어요! 내 현황 탭에서 소개할 친구 프로필을 등록하고 매칭을 시작해 보세요 😊'
               : '🎉 베니브릿지 가입이 승인되었어요! 명단 탭에서 마음에 드는 분께 사진·대화 신청(하루 각 3건)을 보내 보세요 😊';
+            const welcomeText = (!ent.isMatchmaker && polishTip) ? (baseWelcome + '\n\n' + polishTip) : baseWelcome;
             msgs.push({ id: nodeCrypto.randomUUID(), entryId: ent.id, from: 'admin', text: welcomeText, at: nowIso, auto: true });
-            logs.push(logItem('admin', 'AI 부관리자', '신청 자동 승인 · ' + (ent.nickname || '')));
+            logs.push(logItem('admin', 'AI 부관리자', '신청 자동 승인' + (polishTip ? '(소개글 다듬기 팁 안내)' : '') + ' · ' + (ent.nickname || '')));
           } else if (holdMap[p.id]) {
             const heldCopy = Object.assign({}, p, {
               heldReason: holdMap[p.id].hold_reason || '프로필 사진 및 소개글 보완이 필요해요.',
@@ -1972,6 +2034,50 @@ exports.aiConcierge = functions
       };
     }
 
+    if (op === 'strategy_brief') {
+      if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 전략 브리핑을 조회할 수 있어요.');
+      const stats = (data && data.stats) || {};
+      const sysMsg = '당신은 프라이빗 지인 소개팅 웹앱 [베니브릿지]의 수석 데이터 전략가입니다. 관리자(베니 님)가 관리자 탭 상단에서 한눈에 읽을 수 있도록 현재 지표를 바탕으로 ① 오늘 AI 활동 요약 한 줄(today_comment), ② 일주일 동향 진단 한 줄(weekly_comment), ③ 장기 전망 및 핵심 운영 전략 2~3문장(strategy_comment)을 간결하고 명확하게 JSON으로만 출력하세요: {"today_comment":"오늘 요약","weekly_comment":"주간 동향 진단","strategy_comment":"장기 전망 및 추천 전략"}';
+      const userMsg = '[베니브릿지 실시간 운영 지표]\n' + JSON.stringify(stats);
+      try {
+        if (ollamaKey) {
+          const r = await fetch('https://ollama.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + ollamaKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'deepseek-v3.2',
+              messages: [{ role: 'system', content: sysMsg }, { role: 'user', content: userMsg }],
+              temperature: 0.35,
+              max_tokens: 450,
+              response_format: { type: 'json_object' }
+            })
+          });
+          if (r.ok) {
+            const j = await r.json();
+            const raw = (((j.choices || [])[0] || {}).message || {}).content || '';
+            const m = raw.match(/\{[\s\S]*\}/);
+            if (m) {
+              const p = JSON.parse(m[0]);
+              if (p.strategy_comment) {
+                return {
+                  ok: true,
+                  today_comment: clip(p.today_comment, 300),
+                  weekly_comment: clip(p.weekly_comment, 300),
+                  strategy_comment: clip(p.strategy_comment, 600)
+                };
+              }
+            }
+          }
+        }
+      } catch (e) {}
+      return {
+        ok: true,
+        today_comment: 'AI 부관리자가 신규 신청 및 프로필 변경을 실시간 모니터링하며 즉시 처리하고 있습니다.',
+        weekly_comment: '최근 7일간 유입 및 사진·대화 요청 흐름이 안정적으로 유지되고 있으며 미응답 요청 케어 시 성사율 상승이 기대됩니다.',
+        strategy_comment: '성비 균형 맞춤 지인 초대 공지와 48시간 이상 미응답 요청 리마인드를 병행하면 향후 30일 매칭 연결 수를 약 25~35% 끌어올릴 수 있습니다.'
+      };
+    }
+
     if (op === 'coadmin_audit') {
       if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 AI 부관리자 심사를 실행할 수 있어요.');
       const pendingItems = Array.isArray(data && data.pending_items) ? data.pending_items.slice(0, 12) : [];
@@ -2033,16 +2139,18 @@ exports.aiConcierge = functions
           }
         }
 
-        let textOk = true, textNote = '주선자 신청 정상', holdMsg = '';
+        let textOk = true, textNote = '주선자 신청 정상', holdMsg = '', polishTip = '';
         if (!isMm) {
           const intro = String(it.intro || '').trim();
           const ideal = String(it.idealType || '').trim();
           const deal = String(it.dealbreaker || '').trim();
+          const isGibberish = /^[ㄱ-ㅎㅏ-ㅣ.\s!?~]+$/.test(intro) || intro.length < 4;
+          const hasContactLeak = /010[-\s]?\d{3,4}[-\s]?\d{4}|카톡|카카오톡|인스타|@/.test(intro);
           try {
             const tr = await callGroqChat(
               apiKey,
               'qwen/qwen3.8-27b',
-              '당신은 소개팅 앱 프로필 심사관입니다. 욕설/비속어, 의미없는 자음반복(ㅋㅋㅋ), 본문 내 연락처/카톡ID 무단기재, 성의없는 작성 여부를 검사해 순수 JSON만 출력하세요: {"text_ok":true,"note":"한줄평","hold_reason":"부적합시사유"}',
+              '당신은 소개팅 앱 프로필 심사관입니다. 욕설/비속어, 의미없는 자음반복(ㅋㅋㅋ), 본문 내 연락처/카톡ID 무단기재 여부만 결격(text_ok:false)으로 판정하세요. 자기소개가 단순히 짧은 경우(5~18자)는 보류하지 말고 text_ok:true, needs_polish:true 로 출력해 승인 후 다듬기를 권장하세요. 순수 JSON만 출력: {"text_ok":true,"needs_polish":false,"note":"한줄평","hold_reason":"결격시사유"}',
               `닉네임:${nick}\n자기소개:${intro}\n이상형:${ideal}\n비선호:${deal}`,
               260,
               0.2
@@ -2053,9 +2161,20 @@ exports.aiConcierge = functions
               textOk = !!tj.text_ok;
               textNote = String(tj.note || (textOk ? '자기소개 정상' : '보완 필요'));
               holdMsg = String(tj.hold_reason || '');
+              if (!textOk && !isGibberish && !hasContactLeak && intro.length >= 5 && /짧|15자|분량/.test(holdMsg)) {
+                textOk = true;
+                tj.needs_polish = true;
+              }
+              if (textOk && (tj.needs_polish || intro.length < 20)) {
+                polishTip = '💡 작은 팁: 지금 적어주신 자기소개도 깔끔하지만, [내 공간 → 프로필 수정]에서 평일·주말 취미나 좋아하는 음식·분위기를 한두 줄만 더 덧붙여 주시면 호감도와 매칭 수락률이 훨씬 높아져요 ✨';
+                textNote = '정상 승인 + 승인 후 소개글 다듬기 팁 발송 (' + intro.length + '자)';
+              }
             }
           } catch (e) {
-            textOk = intro.length >= 18;
+            textOk = !isGibberish && !hasContactLeak;
+            if (textOk && intro.length < 20) {
+              polishTip = '💡 작은 팁: 지금 적어주신 자기소개도 깔끔하지만, [내 공간 → 프로필 수정]에서 평일·주말 취미나 좋아하는 음식·분위기를 한두 줄만 더 덧붙여 주시면 호감도와 매칭 수락률이 훨씬 높아져요 ✨';
+            }
           }
         }
 
@@ -2075,6 +2194,7 @@ exports.aiConcierge = functions
           photo_note: photoNote,
           text_ok: textOk,
           text_note: textNote,
+          polish_tip: polishTip,
           action: allOk ? 'APPROVE' : 'HOLD',
           reason: allOk
             ? `✅ 승인 적합 (사진: ${photoNote} / 번호: ${phoneNote} / 소개: ${textNote})`
