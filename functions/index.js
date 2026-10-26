@@ -197,7 +197,9 @@ exports.memberLogin = functions
     if (entry.managedBy && entry.pinExpiresAt && Date.now() > new Date(entry.pinExpiresAt).getTime()) {
       throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
     }
-    const acctLock = await accountLockCheck(entry.id).catch(() => null);
+    /* 익숙한 곳(이 계정이 전에 앱을 열던 IP) — 계정 잠금 예외 + 그곳 실패는 계정 잠금에 안 셈 → 남이 일부러 틀려 회원을 쫓아낼 수 없음 */
+    const familiar = await familiarIp(entry.id, ip).catch(() => false);
+    const acctLock = familiar ? null : await accountLockCheck(entry.id).catch(() => null);
     if (acctLock) {
       await db.collection('loginAudit').add(Object.assign({ status: 'acct-locked', nickname: entry.nickname }, auditMeta)).catch(() => {});
       if (COMMON_WEAK_PINS.has(pin) && BREACHED_IDS.has(entry.id)) await addWatchIp(ip);
@@ -212,7 +214,7 @@ exports.memberLogin = functions
       const real = verifyPinServer(pin, src);
       await db.collection('loginAudit').add(Object.assign({ status: 'weak-refused', nickname: entry.nickname, correct: real }, auditMeta)).catch(() => {});
       if (real) await markPinWeak([entry.id]).catch((e) => console.error('markPinWeak', e));
-      else { await loginGuardResult(guard, false); await ipFailRecord(ip, 'member', entryId); await accountFailRecord(entry, ip); }
+      else { await loginGuardResult(guard, false); await ipFailRecord(ip, 'member', entryId); if (!familiar) await accountFailRecord(entry, ip); }
       if (BREACHED_IDS.has(entry.id)) await addWatchIp(ip);
       const o = Object.assign({}, audO, { status: real ? 'weak' : 'fail', fails: 1 });
       const s = await suspicionOf(o);
@@ -226,7 +228,7 @@ exports.memberLogin = functions
       await db.collection('loginAudit').add(Object.assign({ status: 'fail', nickname: entry.nickname, fails }, auditMeta)).catch(() => {});
       await ipFailRecord(ip, 'member', entryId);
       await lockAlert(gk, fails, ip, entry.nickname);
-      await accountFailRecord(entry, ip);
+      if (!familiar) await accountFailRecord(entry, ip);
       const o = Object.assign({}, audO, { status: 'fail', fails });
       const s = await suspicionOf(o).catch(() => null);
       if (s && s.reasons.length) await suspiciousAlert(o, s).catch(() => {});
@@ -1717,10 +1719,29 @@ async function watchIpSet() {
   const extra = (s && s.exists && Array.isArray(s.data().ips)) ? s.data().ips : [];
   return new Set(WATCH_IPS.concat(extra));
 }
-/* 계정 단위 잠금 (2026-10-26): IP 와 상관없이 한 계정에서 24시간 안에 10번 틀리면 24시간 잠금 + 알림.
+/* 계정 단위 잠금 (2026-10-26): 처음 보는 곳들에서 합쳐 24시간 안에 5번 틀리면 24시간 잠금 + 알림 (Benny: 10 → 5).
    기존 잠금(loginGuard m_계정_IP)은 IP 마다 따로 세서 IP 를 바꿔 가며 5번씩 맞혀 볼 수 있었음.
+   익숙한 곳(familiarIp)은 예외 — 일부러 틀려 회원을 못 들어오게 하는 방해를 막음 (같은 곳 5번 15분 잠금은 그대로).
    새 PIN(관리자 임시 PIN·본인 변경)이 금고에 들어오면 sweepSecrets 가 풀어 줌 */
-const ACCOUNT_FAIL_LIMIT = 10;
+const ACCOUNT_FAIL_LIMIT = 5;
+/* 이 계정이 90일 안에 앱을 열었던 곳인지 (accessSeen). IPv4 는 같은 IP, IPv6 는 같은 /64(한 가입자 회선). IP 는 위조 불가(Google 이 넣는 실제 IP) */
+function ipNet(ip) {
+  const s = String(ip || '');
+  if (s.indexOf(':') < 0) return s;
+  const [head, tail] = s.toLowerCase().split('::');
+  const h = head ? head.split(':') : [], t = (tail !== undefined && tail) ? tail.split(':') : [];
+  const full = h.concat(Array(Math.max(0, 8 - h.length - t.length)).fill('0'), t);   /* '::' 를 0 으로 풀어 8칸 */
+  return full.slice(0, 4).map((g) => String(parseInt(g || '0', 16))).join(':');
+}
+async function familiarIp(uid, ip) {
+  if (!uid || !ip || ip === 'unknown') return false;
+  const net = ipNet(ip);
+  const q = await db.collection('accessSeen').where('uid', '==', uid).limit(100).get();
+  const cut = Date.now() - 90 * 86400000;
+  let hit = false;
+  q.forEach((d) => { const x = d.data(); if (ipNet(x.ip) === net && Date.parse(x.lastAt || x.firstAt || 0) > cut) hit = true; });
+  return hit;
+}
 const acctGuardRef = (id) => db.collection('loginGuard').doc(guardKey('acct_', id));
 async function accountLockCheck(id) {
   const d = (await acctGuardRef(id).get()).data() || {};
