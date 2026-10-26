@@ -2525,7 +2525,8 @@ exports.aiConcierge = functions
               : '🎉 베니브릿지 가입이 승인되었어요! 명단 탭에서 마음에 드는 분께 사진·대화 신청(하루 각 3건)을 보내 보세요 😊';
             const welcomeText = (!ent.isMatchmaker && polishTip) ? (baseWelcome + '\n\n' + polishTip) : baseWelcome;
             msgs.push({ id: nodeCrypto.randomUUID(), entryId: ent.id, from: 'admin', text: welcomeText, at: nowIso, auto: true });
-            logs.push(logItem('admin', 'AI 부관리자', '신청 자동 승인' + (polishTip ? '(소개글 다듬기 팁 안내)' : '') + ' · ' + (ent.nickname || '')));
+            logs.push(Object.assign(logItem('admin', 'AI 부관리자', '신청 자동 승인' + (polishTip ? '(소개글 다듬기 팁 안내)' : '') + ' · ' + (ent.nickname || '')),
+              { eid: ent.id, why: clip(approveMap[p.id].reason, 300) }));
           } else if (holdMap[p.id]) {
             const heldCopy = Object.assign({}, p, {
               heldReason: holdMap[p.id].hold_reason || '프로필 사진 및 소개글 보완이 필요해요.',
@@ -2534,7 +2535,8 @@ exports.aiConcierge = functions
             });
             nextPend.push(heldCopy);
             heldEntries.push(heldCopy);
-            logs.push(logItem('admin', 'AI 부관리자', '신청 보완 요청(보류) · ' + (heldCopy.nickname || '')));
+            logs.push(Object.assign(logItem('admin', 'AI 부관리자', '신청 보완 요청(보류) · ' + (heldCopy.nickname || '')),
+              { eid: heldCopy.id, why: clip(holdMap[p.id].reason || heldCopy.heldReason, 300) }));
           } else {
             nextPend.push(p);
           }
@@ -2547,7 +2549,12 @@ exports.aiConcierge = functions
             delete c.editReviewAt;
             delete c.editChanges;
             delete c.aiEditAuditedAt;
-            logs.push(logItem('admin', 'AI 부관리자', '프로필 변경 확인 완료 · ' + (c.nickname || '')));
+            /* 관리자 브리핑 '🔍 변경확인' 칩에서 나중에 볼 수 있게 대상·근거·바뀐 항목을 기록에 남김 (editChanges 는 위에서 지워지므로) */
+            const chg = (Array.isArray(e.editChanges) ? e.editChanges : []).slice(0, 10).map((x) => ({
+              label: clip(x && x.label, 40), before: clip(x && x.before, 200), after: clip(x && x.after, 200), note: clip(x && x.note, 80)
+            }));
+            logs.push(Object.assign(logItem('admin', 'AI 부관리자', '프로필 변경 확인 완료 · ' + (c.nickname || '')),
+              { eid: e.id, why: clip(confirmMap[e.id].reason, 300), chg }));
             return c;
           }
           if (flagMap[e.id]) {

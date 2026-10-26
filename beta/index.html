@@ -1086,7 +1086,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-26-467';
+  var APP_VERSION = '2026-10-27-469';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6007,6 +6007,56 @@
     );
   }
 
+  /* 관리자 AI 브리핑 타임라인의 '구분' 칩 → 그 기록의 대상 회원 · AI 판단 근거 · 바뀐 항목(전/후) 팝업.
+     서버(pc_coadmin_apply)가 v469부터 로그에 eid(회원 id)·why(AI 근거)·chg(바뀐 항목)를 함께 남김. 옛 기록은 닉네임으로 찾음 */
+  function openAiLogDetail(logKey) {
+    var state = currentState || {};
+    var l = (state.logs || []).find(function (x) { return x && (x.id === logKey || (!x.id && x.at === logKey)); });
+    if (!l) { modalNotice('기록', '이 기록을 찾지 못했어요. 화면을 새로고침해 주세요.'); return; }
+    var det = l.detail || '';
+    var all = (state.entries || []).concat(state.pendingEntries || []);
+    var target = l.eid ? all.find(function (e) { return e && e.id === l.eid; }) : null;
+    if (!target) {
+      var nm = (det.match(/·\s*([^·]+)$/) || [])[1];
+      if (!nm && (l.type === 'signup' || l.type === 'edit')) nm = l.actor;
+      nm = (nm || '').trim();
+      if (nm) target = all.find(function (e) { return e && e.nickname === nm; }) || null;
+    }
+    var isPend = !!(target && (state.pendingEntries || []).indexOf(target) >= 0);
+    var chg = Array.isArray(l.chg) ? l.chg : (target && Array.isArray(target.editChanges) ? target.editChanges : null);
+    var chgHtml = '';
+    if (chg && chg.length) {
+      chgHtml = '<div style="margin-top:8px;"><b>바뀐 항목</b><ul style="margin:4px 0 0;padding-left:18px;">' + chg.map(function (c) {
+        if (c.note) return '<li><b>' + escapeHtml(c.label || '') + '</b> <span style="color:var(--gold);">' + escapeHtml(c.note) + '</span></li>';
+        var b = c.before === '' ? '(없음)' : String(c.before == null ? '' : c.before);
+        var a = c.after === '' ? '(없음)' : String(c.after == null ? '' : c.after);
+        return '<li style="margin-bottom:5px;"><b>' + escapeHtml(c.label || '') + '</b>' +
+          '<div style="color:var(--muted);text-decoration:line-through;white-space:pre-wrap;">' + escapeHtml(b) + '</div>' +
+          '<div style="color:var(--ink);font-weight:600;white-space:pre-wrap;">→ ' + escapeHtml(a) + '</div></li>';
+      }).join('') + '</ul></div>';
+    } else if (det.indexOf('변경 확인') >= 0) {
+      chgHtml = '<div class="p-meta" style="margin-top:8px;color:var(--muted);">이 기록엔 바뀐 항목이 저장돼 있지 않아요(10/27 이전 기록). 프로필을 열어 지금 모습을 확인해 주세요.</div>';
+    }
+    var tm = (typeof fmtDate === 'function') ? fmtDate(l.at) : (l.at || '');
+    var overlay = openModal(
+      '<h3>' + escapeHtml(target ? target.nickname : '기록 자세히') + '</h3>' +
+      '<div class="p-meta">' + escapeHtml(tm) + ' · ' + escapeHtml(l.actor || '-') + (target ? ' · ' + genderLabel(target.gender) + (target.region ? ' · ' + escapeHtml(target.region) : '') + (isPend ? ' · ⏳ 승인 대기' : '') : '') + '</div>' +
+      '<p class="modal-msg" style="margin-top:8px;">' + escapeHtml(det) + '</p>' +
+      (l.why ? '<div style="margin-top:6px;padding:7px 10px;background:var(--gold-soft,#f6ecd9);border-left:3px solid var(--gold,#C08A34);border-radius:6px;font-size:0.82rem;">🤖 <b>AI 판단 근거</b>: ' + escapeHtml(l.why) + '</div>' : '') +
+      chgHtml +
+      (!target ? '<div class="p-meta" style="margin-top:8px;color:var(--muted);">대상 회원을 찾지 못했어요 (닉네임 변경·삭제·보관 등).</div>' : '') +
+      '<div class="modal-actions" style="flex-wrap:wrap;">' +
+        (target && !isPend ? '<button type="button" class="card-btn" data-action="card-detail" data-id="' + escapeHtml(target.id) + '">👤 프로필 보기</button>' : '') +
+        (target && isPend ? '<button type="button" class="card-btn" data-action="sec-jump" data-id="pending">⏳ 승인 대기로</button>' : '') +
+        (target && target.editReviewAt ? '<button type="button" class="card-btn" data-action="sec-jump" data-id="editrev">📝 변경 검토로</button>' : '') +
+        '<button type="button" class="card-btn primary" id="modal-ok">닫기</button>' +
+      '</div>'
+    );
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay || e.target.closest('#modal-ok') || e.target.closest('[data-action]')) closeModal(overlay);
+    });
+  }
+
   function handleCardDetail(id) {
    try {
     var state = currentState;
@@ -7491,10 +7541,11 @@
     var todayTimeline = [];
     var recentAiLogs = [];
 
+    /* '오늘' = 자정 기준이 아니라 지금부터 거꾸로 24시간 (새벽엔 표가 텅 비던 문제) */
+    function in24h(iso) { var t = iso ? Date.parse(iso) : NaN; return !isNaN(t) && nowMs - t < DAY_MS; }
     logs.slice().reverse().forEach(function (l) {
       if (!l || !l.at) return;
-      var d = kstDay(l.at);
-      var isToday = (d === todayD);
+      var isToday = in24h(l.at);
       var actor = l.actor || '';
       var detail = l.detail || '';
       var isAi = (actor === 'AI 부관리자');
@@ -7515,7 +7566,7 @@
       }
 
       if (isToday && (isAi || isAdminAct || isSignupOrEdit)) {
-        if (todayTimeline.length < 14) todayTimeline.push(l);
+        if (todayTimeline.length < 40) todayTimeline.push(l);
       } else if (isAi && recentAiLogs.length < 8) {
         recentAiLogs.push(l);
       }
@@ -7527,11 +7578,12 @@
       var sd = r.submittedAt ? kstDay(r.submittedAt) : '';
       var dd = r.decidedAt ? kstDay(r.decidedAt) : sd;
       var tp = r.type || 'contact';
-      if (sd === todayD || sd === refD) {
+      var onRef = (refD !== todayD); /* 베타 스냅샷 보정일 때만 그날 기준 */
+      if (in24h(r.submittedAt) || (onRef && sd === refD)) {
         if (tp === 'photo') todayPhotoReq++;
         else todayTalkReq++;
       }
-      if (r.approved && (dd === todayD || dd === refD) && tp === 'contact') todayMatch++;
+      if (r.approved && (in24h(r.decidedAt || r.submittedAt) || (onRef && dd === refD)) && tp === 'contact') todayMatch++;
     });
 
     var pendNew = pending.filter(function (p) { return !p.heldReason && !p.rejectedAt; }).length;
@@ -7768,12 +7820,14 @@
       var tm = (l.at && typeof fmtDate === 'function') ? fmtDate(l.at) : (l.at || '').slice(5, 16).replace('T', ' ');
       var isAi = (l.actor === 'AI 부관리자');
       var det = l.detail || '';
-      var badge = '<span class="chip" style="background:#f1f3f4;color:#444;font-size:0.7rem;padding:1px 6px;">기록</span>';
-      if (det.indexOf('승인') >= 0) badge = '<span class="chip" style="background:#e6f4ea;color:#137333;font-size:0.7rem;padding:1px 6px;">✅ 승인</span>';
-      else if (det.indexOf('보류') >= 0) badge = '<span class="chip" style="background:#fef7e0;color:#b06000;font-size:0.7rem;padding:1px 6px;">🟡 보류안내</span>';
-      else if (det.indexOf('변경 확인') >= 0) badge = '<span class="chip" style="background:#e8f0fe;color:#1967d2;font-size:0.7rem;padding:1px 6px;">🔍 변경확인</span>';
-      else if (l.type === 'signup') badge = '<span class="chip" style="background:#e8f0fe;color:#1a73e8;font-size:0.7rem;padding:1px 6px;">🆕 신규제출</span>';
-      else if (l.type === 'edit') badge = '<span class="chip" style="background:#f3e8fd;color:#7627bb;font-size:0.7rem;padding:1px 6px;">✏️ 수정·재신청</span>';
+      var bc = ['#f1f3f4', '#444', '기록'];
+      if (det.indexOf('승인') >= 0) bc = ['#e6f4ea', '#137333', '✅ 승인'];
+      else if (det.indexOf('보류') >= 0) bc = ['#fef7e0', '#b06000', '🟡 보류안내'];
+      else if (det.indexOf('변경 확인') >= 0) bc = ['#e8f0fe', '#1967d2', '🔍 변경확인'];
+      else if (l.type === 'signup') bc = ['#e8f0fe', '#1a73e8', '🆕 신규제출'];
+      else if (l.type === 'edit') bc = ['#f3e8fd', '#7627bb', '✏️ 수정·재신청'];
+      /* 누르면 그 기록의 대상 회원·AI 판단 근거·바뀐 항목을 팝업으로 (aiLogDetailHtml) */
+      var badge = '<button type="button" class="chip" data-action="ai-log-detail" data-id="' + escapeHtml(l.id || l.at || '') + '" style="background:' + bc[0] + ';color:' + bc[1] + ';font-size:0.7rem;padding:1px 6px;border:0;cursor:pointer;">' + bc[2] + ' ›</button>';
       var whoBadge = isAi
         ? '<b style="color:var(--accent,#B23A48);">🤖 AI 부관리자</b>'
         : (l.type === 'admin' ? '<b style="color:#8a5a10;">👑 관리자</b>' : '<span>🙋 ' + escapeHtml(l.actor || '-') + '</span>');
@@ -7783,7 +7837,7 @@
         '<td style="white-space:nowrap;padding:6px 8px;">' + badge + '</td>' +
         '<td style="font-size:0.78rem;padding:6px 8px;word-break:break-word;">' + escapeHtml(det) + '</td>' +
       '</tr>';
-    }).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:12px;">오늘 기록된 심사·변경 내역이 아직 없어요 ✨</td></tr>';
+    }).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:12px;">최근 24시간 동안 기록된 심사·변경 내역이 없어요 ✨</td></tr>';
 
     var todayCommentHtml = (_aiStrategyBrief && _aiStrategyBrief.today_comment)
       ? '<div style="margin-bottom:8px;padding:7px 10px;background:var(--gold-soft,#f6ecd9);border-left:3px solid var(--gold,#C08A34);border-radius:6px;font-size:0.79rem;color:var(--ink);">💡 <b>AI 일일 브리핑</b>: ' + escapeHtml(_aiStrategyBrief.today_comment) + '</div>'
@@ -7797,17 +7851,17 @@
         todayCommentHtml +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:10px;">' +
           '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
-            '<div style="font-size:0.73rem;color:var(--muted);">🤖 오늘 신청서 심사</div>' +
+            '<div style="font-size:0.73rem;color:var(--muted);">🤖 24시간 신청서 심사</div>' +
             '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">AI 승인 <span style="color:#137333;">' + m.aiApproveToday + '</span> · 보류 <span style="color:#b06000;">' + m.aiHoldToday + '</span></div>' +
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">관리자 직접 승인 ' + m.adminApproveToday + '건</div>' +
           '</div>' +
           '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
-            '<div style="font-size:0.73rem;color:var(--muted);">✏️ 오늘 프로필 변경 검토</div>' +
+            '<div style="font-size:0.73rem;color:var(--muted);">✏️ 24시간 프로필 변경 검토</div>' +
             '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">AI 확인완료 <span style="color:#1967d2;">' + m.aiEditConfirmToday + '</span>건</div>' +
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">현재 변경 미검토 대기 ' + m.editWait + '건</div>' +
           '</div>' +
           '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
-            '<div style="font-size:0.73rem;color:var(--muted);">🌱 오늘 유입 · 매칭 활동</div>' +
+            '<div style="font-size:0.73rem;color:var(--muted);">🌱 24시간 유입 · 매칭 활동</div>' +
             '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">가입 ' + m.signupToday + '명 <span style="font-size:0.75rem;font-weight:400;color:var(--muted);">(재신청 ' + m.resubmitToday + ')</span></div>' +
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">📷 사진 ' + m.todayPhotoReq + '건 · 💌 대화 ' + m.todayTalkReq + '건 (성사 ' + m.todayMatch + ')</div>' +
           '</div>' +
@@ -7817,7 +7871,7 @@
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">미읽음 회원 문의 ' + m.unreadQna + '건</div>' +
           '</div>' +
         '</div>' +
-        '<div style="font-size:0.8rem;font-weight:700;margin:6px 0 5px;color:var(--ink);">📋 ' + (m.todayTimeline.length ? '오늘(' + m.todayD.slice(5).replace('-', '/') + ') AI 부관리자 & 심사 상세 타임라인' : '최근 AI 부관리자 활동 내역') + '</div>' +
+        '<div style="font-size:0.8rem;font-weight:700;margin:6px 0 5px;color:var(--ink);">📋 ' + (m.todayTimeline.length ? '최근 24시간 AI 부관리자 & 심사 타임라인 <span style="font-weight:400;font-size:0.72rem;color:var(--muted);">(구분 칸을 누르면 자세히)</span>' : '최근 AI 부관리자 활동 내역') + '</div>' +
         '<div style="max-height:210px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper);">' +
           '<table class="stats-table" style="margin:0;width:100%;border-collapse:collapse;">' +
             '<thead><tr style="background:var(--card);border-bottom:1px solid var(--line);font-size:0.74rem;"><th style="text-align:left;padding:6px 8px;">시각</th><th style="text-align:left;padding:6px 8px;">주체</th><th style="text-align:left;padding:6px 8px;">구분</th><th style="text-align:left;padding:6px 8px;">처리 내역</th></tr></thead>' +
@@ -8019,7 +8073,7 @@
       if (tab === 'all') {
         bodyHtml =
           '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);">' +
-            '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);">🤖 ① 오늘 AI가 한 일</div>' + paneTodayHtml +
+            '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);">🤖 ① 최근 24시간 AI가 한 일</div>' + paneTodayHtml +
             '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);">📈 ② 일주일 동향 분석</div>' + paneWeeklyHtml +
             '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);">🔭 ③ 장기 분석 + 전망 · 운영 전략</div>' + paneStrategyHtml +
           '</div>';
@@ -8822,7 +8876,7 @@
         '</div>';
       }).join('') : '<p class="sub">신고된 대화가 없어요 🙆</p>'), false, 'reports');
     /* 🛡 보안 경고: 회원이 남의 데이터를 바꿈(되돌리기 가능)·로그인 잠금·IP 차단 */
-    var SEC_TYPE = { tamper: '🚨 이상 변경', 'login-lock': '🔒 회원 로그인 잠김', 'admin-lock': '🚨 관리자 로그인 잠김', 'ip-block': '🛡 IP 차단', suspicious: '👁 수상한 접속' };
+    var SEC_TYPE = { tamper: '🚨 이상 변경', 'login-lock': '🔒 회원 로그인 잠김', 'admin-lock': '🚨 관리자 로그인 잠김', 'ip-block': '🛡 IP 차단', suspicious: '👁 수상한 접속', 'vpn-hold': '🛂 VPN 로그인 검토' };
     var SUS_KIND = { ok: '로그인 성공', fail: '로그인 실패', blocked: '차단된 시도', notfound: '없는 계정', access: '앱 접속', weak: '쉬운 PIN 로그인(막음)' };
     var secOpen = _secAlerts.filter(function (a) { return !a.resolved; });
     var securitySection = adminFold('🛡 보안 경고' + (secOpen.length ? ' <span class="blink-soft" style="background:#c5221f;color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">확인 필요 ' + secOpen.length + '</span>' : ''), null,
@@ -8830,6 +8884,7 @@
       '<p class="sub">👁 수상한 접속 = VPN·공격 이력 IP·처음 보는 기기·오래 안 쓰던 계정·쉬운 PIN 대입 등. 모든 로그인 시도와 앱 접속(IP·기기·사이트)은 서버에 남아요.</p>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px;">' +
         '<button type="button" class="card-btn" data-action="sec-log" style="flex:none;">🔐 로그인·접속 기록</button>' +
+        '<button type="button" class="card-btn" data-action="sec-holds" style="flex:none;">🛂 VPN 로그인 검토</button>' +
         '<button type="button" class="card-btn" data-action="sec-pinaudit" style="flex:none;">🔑 쉬운 PIN 회원 찾기</button>' +
       '</div>' +
       (_secAlerts.length ? _secAlerts.map(function (a) {
@@ -8837,7 +8892,11 @@
         var body = '';
         if (a.type === 'tamper') body = escapeHtml(a.writerNick || a.writer || '') + '님 계정으로 ' + (a.issues || []).length + '건 — ' + escapeHtml(a.summary || '');
         else if (a.type === 'ip-block') body = '한 곳에서 1시간에 ' + (a.fails || 0) + '번 실패 → 1시간 차단';
-        else if (a.type === 'suspicious') body = '<b>' + escapeHtml(a.nickname || a.target || '') + '</b> · ' + escapeHtml(SUS_KIND[a.kind] || a.kind || '') +
+        else if (a.type === 'vpn-hold') body = '<b>' + escapeHtml(a.nickname || '') + '</b> · PIN은 맞았지만 VPN이라 보류' +
+          '<br><span class="sub">' + escapeHtml(a.ip || '') + ' (' + escapeHtml([a.intel && a.intel.provider, a.intel && a.intel.country].filter(Boolean).join(' · ')) + ') · ' + escapeHtml(a.device || '') + '</span>' +
+          ((a.reasons || []).length ? '<br>' + escapeHtml(a.reasons.join(' / ')) : '') +
+          '<br><button type="button" class="card-btn" data-action="sec-holds" style="flex:none;margin-top:4px;">🛂 허용·거부 하러 가기</button>';
+        else if (a.type === 'suspicious') body ='<b>' + escapeHtml(a.nickname || a.target || '') + '</b> · ' + escapeHtml(SUS_KIND[a.kind] || a.kind || '') +
           '<br>' + escapeHtml((a.reasons || []).join(' / ')) +
           '<br><span class="sub">' + escapeHtml(a.ip || '') + (a.intel && (a.intel.city || a.intel.provider) ? ' (' + escapeHtml([a.intel.city, a.intel.provider].filter(Boolean).join(' · ')) + ')' : '') + ' · ' + escapeHtml(a.device || '') + '</span>';
         else body = escapeHtml(a.target || '') + ' · ' + (a.fails || 0) + '번 틀림';
@@ -12329,6 +12388,41 @@
         '</div>';
     }).catch(function (e) { var m = ov.querySelector('.modal-msg'); if (m) m.textContent = '불러오지 못했어요: ' + ((e && e.message) || e); });
   }
+  /* 🛂 VPN 로그인 검토 (v468) — 데이터센터 VPN 으로 PIN 이 맞은 로그인은 서버가 보류(loginHold). 허용 = 그 계정·IP 7일 통과, 거부 = 막고 감시 IP */
+  function openLoginHolds() {
+    var ov = openModal('<h3>🛂 VPN 로그인 검토</h3><p class="modal-msg">불러오는 중…</p>' +
+      '<div class="modal-actions"><button type="button" class="card-btn primary" id="modal-ok">닫기</button></div>');
+    ov.querySelector('#modal-ok').addEventListener('click', function () { closeModal(ov); });
+    var ST = { pending: '⏳ 검토 대기', approved: '✅ 허용함', denied: '⛔ 거부함' };
+    function draw() {
+      callFn('adminLoginHold', { op: 'list' }).then(function (r) {
+        var hs = ((r && r.data) || {}).holds || [];
+        var html = hs.length ? hs.map(function (h) {
+          var it = h.intel || {};
+          return '<div style="border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;">' +
+            '<b>' + escapeHtml(h.nickname || '') + '</b> · ' + (ST[h.status] || escapeHtml(h.status || '')) + ' · ' + fmtDate(h.at) + (h.tries > 1 ? ' · ' + h.tries + '번 시도' : '') +
+            '<br><span class="sub">' + escapeHtml(h.ip || '') + ' (' + escapeHtml([it.provider, it.city, it.country].filter(Boolean).join(' · ')) + ') · ' + escapeHtml(h.device || '') + '</span>' +
+            (h.status === 'pending' ? '<div style="margin-top:6px;display:flex;gap:6px;">' +
+              '<button type="button" class="card-btn approve" data-hold="approve" data-id="' + escapeHtml(h.id) + '" style="flex:none;">허용 (7일)</button>' +
+              '<button type="button" class="card-btn danger" data-hold="deny" data-id="' + escapeHtml(h.id) + '" style="flex:none;">거부</button></div>' : '') +
+          '</div>';
+        }).join('') : '<p class="sub">검토할 VPN 로그인이 없어요 🙆</p>';
+        var msg = ov.querySelector('.modal-msg') || ov.querySelector('[data-holds]');
+        if (msg) msg.outerHTML = '<div data-holds style="max-height:60vh;overflow:auto;">' +
+          '<p class="sub">PIN은 맞았지만 데이터센터 VPN이라 보류한 로그인이에요. 본인인지 모르겠으면 그대로 두셔도 돼요 (회원은 VPN을 끄면 바로 들어와요). 허용하면 그 계정·IP는 7일간 통과, 거부하면 막고 감시 목록에 넣어요.</p>' + html + '</div>';
+        [].forEach.call(ov.querySelectorAll('[data-hold]'), function (b) {
+          b.addEventListener('click', function () {
+            var op = b.getAttribute('data-hold');
+            modalConfirm(op === 'approve' ? '허용할까요?' : '거부할까요?', op === 'approve' ? '이 계정이 이 IP(VPN)로 7일간 로그인할 수 있게 돼요.' : '이 VPN 접속을 막고, 이 IP를 감시 목록에 넣어요.', op === 'approve' ? '허용' : '거부', op === 'approve' ? 'primary' : 'danger').then(function (yes) {
+              if (!yes) return;
+              callFn('adminLoginHold', { op: op, id: b.getAttribute('data-id') }).then(draw).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); });
+            });
+          });
+        });
+      }).catch(function (e) { var m = ov.querySelector('.modal-msg'); if (m) m.textContent = '불러오지 못했어요: ' + ((e && e.message) || e); });
+    }
+    draw();
+  }
   /* 🔑 쉬운 PIN 회원 찾기 (v467) — 서버 adminPinAudit 가 흔한 PIN·출생연도를 대 보고 맞는 계정에 pinWeak 표시 → 그 회원은 앱 열면 새 PIN 정하기.
      PBKDF2 15만 회 × 회원 × 후보라 몇 분 걸림 → 긴 시간 제한으로 직접 호출 */
   function runPinAudit() {
@@ -12809,6 +12903,7 @@
       else if (action === 'cf-filter') { _contactFilter = id || 'all'; paint(currentState); var _sd = document.querySelector('[data-sec="stale"]'); if (_sd) _sd.open = true; return; }
       else if (action === 'sec-jump') { var _d = document.querySelector('[data-sec="' + id + '"]'); if (_d) { _d.open = true; _d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } return; }
       else if (action === 'sec-log') { if (isAdminUnlocked) openSecurityLog(); }
+      else if (action === 'sec-holds') { if (isAdminUnlocked) openLoginHolds(); }
       else if (action === 'sec-pinaudit') { if (isAdminUnlocked) runPinAudit(); }
       else if (action === 'sec-ack') { if (isAdminUnlocked) db.collection('securityAlerts').doc(id).update({ resolved: true, resolvedAt: new Date().toISOString() }).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); }); }
       else if (action === 'sec-restore') { if (isAdminUnlocked) restoreTamper(id); }
@@ -12888,6 +12983,10 @@
       }
       else if (action === 'ai-intel-refresh') {
         refreshAiIntelBrief();
+        return;
+      }
+      else if (action === 'ai-log-detail') {
+        openAiLogDetail(id);
         return;
       }
       else if (action === 'ai-intel-open-modal') {

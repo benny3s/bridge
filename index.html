@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-26-468';
+  var APP_VERSION = '2026-10-27-469';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -5978,6 +5978,56 @@
     );
   }
 
+  /* 관리자 AI 브리핑 타임라인의 '구분' 칩 → 그 기록의 대상 회원 · AI 판단 근거 · 바뀐 항목(전/후) 팝업.
+     서버(pc_coadmin_apply)가 v469부터 로그에 eid(회원 id)·why(AI 근거)·chg(바뀐 항목)를 함께 남김. 옛 기록은 닉네임으로 찾음 */
+  function openAiLogDetail(logKey) {
+    var state = currentState || {};
+    var l = (state.logs || []).find(function (x) { return x && (x.id === logKey || (!x.id && x.at === logKey)); });
+    if (!l) { modalNotice('기록', '이 기록을 찾지 못했어요. 화면을 새로고침해 주세요.'); return; }
+    var det = l.detail || '';
+    var all = (state.entries || []).concat(state.pendingEntries || []);
+    var target = l.eid ? all.find(function (e) { return e && e.id === l.eid; }) : null;
+    if (!target) {
+      var nm = (det.match(/·\s*([^·]+)$/) || [])[1];
+      if (!nm && (l.type === 'signup' || l.type === 'edit')) nm = l.actor;
+      nm = (nm || '').trim();
+      if (nm) target = all.find(function (e) { return e && e.nickname === nm; }) || null;
+    }
+    var isPend = !!(target && (state.pendingEntries || []).indexOf(target) >= 0);
+    var chg = Array.isArray(l.chg) ? l.chg : (target && Array.isArray(target.editChanges) ? target.editChanges : null);
+    var chgHtml = '';
+    if (chg && chg.length) {
+      chgHtml = '<div style="margin-top:8px;"><b>바뀐 항목</b><ul style="margin:4px 0 0;padding-left:18px;">' + chg.map(function (c) {
+        if (c.note) return '<li><b>' + escapeHtml(c.label || '') + '</b> <span style="color:var(--gold);">' + escapeHtml(c.note) + '</span></li>';
+        var b = c.before === '' ? '(없음)' : String(c.before == null ? '' : c.before);
+        var a = c.after === '' ? '(없음)' : String(c.after == null ? '' : c.after);
+        return '<li style="margin-bottom:5px;"><b>' + escapeHtml(c.label || '') + '</b>' +
+          '<div style="color:var(--muted);text-decoration:line-through;white-space:pre-wrap;">' + escapeHtml(b) + '</div>' +
+          '<div style="color:var(--ink);font-weight:600;white-space:pre-wrap;">→ ' + escapeHtml(a) + '</div></li>';
+      }).join('') + '</ul></div>';
+    } else if (det.indexOf('변경 확인') >= 0) {
+      chgHtml = '<div class="p-meta" style="margin-top:8px;color:var(--muted);">이 기록엔 바뀐 항목이 저장돼 있지 않아요(10/27 이전 기록). 프로필을 열어 지금 모습을 확인해 주세요.</div>';
+    }
+    var tm = (typeof fmtDate === 'function') ? fmtDate(l.at) : (l.at || '');
+    var overlay = openModal(
+      '<h3>' + escapeHtml(target ? target.nickname : '기록 자세히') + '</h3>' +
+      '<div class="p-meta">' + escapeHtml(tm) + ' · ' + escapeHtml(l.actor || '-') + (target ? ' · ' + genderLabel(target.gender) + (target.region ? ' · ' + escapeHtml(target.region) : '') + (isPend ? ' · ⏳ 승인 대기' : '') : '') + '</div>' +
+      '<p class="modal-msg" style="margin-top:8px;">' + escapeHtml(det) + '</p>' +
+      (l.why ? '<div style="margin-top:6px;padding:7px 10px;background:var(--gold-soft,#f6ecd9);border-left:3px solid var(--gold,#C08A34);border-radius:6px;font-size:0.82rem;">🤖 <b>AI 판단 근거</b>: ' + escapeHtml(l.why) + '</div>' : '') +
+      chgHtml +
+      (!target ? '<div class="p-meta" style="margin-top:8px;color:var(--muted);">대상 회원을 찾지 못했어요 (닉네임 변경·삭제·보관 등).</div>' : '') +
+      '<div class="modal-actions" style="flex-wrap:wrap;">' +
+        (target && !isPend ? '<button type="button" class="card-btn" data-action="card-detail" data-id="' + escapeHtml(target.id) + '">👤 프로필 보기</button>' : '') +
+        (target && isPend ? '<button type="button" class="card-btn" data-action="sec-jump" data-id="pending">⏳ 승인 대기로</button>' : '') +
+        (target && target.editReviewAt ? '<button type="button" class="card-btn" data-action="sec-jump" data-id="editrev">📝 변경 검토로</button>' : '') +
+        '<button type="button" class="card-btn primary" id="modal-ok">닫기</button>' +
+      '</div>'
+    );
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay || e.target.closest('#modal-ok') || e.target.closest('[data-action]')) closeModal(overlay);
+    });
+  }
+
   function handleCardDetail(id) {
    try {
     var state = currentState;
@@ -7462,10 +7512,11 @@
     var todayTimeline = [];
     var recentAiLogs = [];
 
+    /* '오늘' = 자정 기준이 아니라 지금부터 거꾸로 24시간 (새벽엔 표가 텅 비던 문제) */
+    function in24h(iso) { var t = iso ? Date.parse(iso) : NaN; return !isNaN(t) && nowMs - t < DAY_MS; }
     logs.slice().reverse().forEach(function (l) {
       if (!l || !l.at) return;
-      var d = kstDay(l.at);
-      var isToday = (d === todayD);
+      var isToday = in24h(l.at);
       var actor = l.actor || '';
       var detail = l.detail || '';
       var isAi = (actor === 'AI 부관리자');
@@ -7486,7 +7537,7 @@
       }
 
       if (isToday && (isAi || isAdminAct || isSignupOrEdit)) {
-        if (todayTimeline.length < 14) todayTimeline.push(l);
+        if (todayTimeline.length < 40) todayTimeline.push(l);
       } else if (isAi && recentAiLogs.length < 8) {
         recentAiLogs.push(l);
       }
@@ -7498,11 +7549,12 @@
       var sd = r.submittedAt ? kstDay(r.submittedAt) : '';
       var dd = r.decidedAt ? kstDay(r.decidedAt) : sd;
       var tp = r.type || 'contact';
-      if (sd === todayD || sd === refD) {
+      var onRef = (refD !== todayD); /* 베타 스냅샷 보정일 때만 그날 기준 */
+      if (in24h(r.submittedAt) || (onRef && sd === refD)) {
         if (tp === 'photo') todayPhotoReq++;
         else todayTalkReq++;
       }
-      if (r.approved && (dd === todayD || dd === refD) && tp === 'contact') todayMatch++;
+      if (r.approved && (in24h(r.decidedAt || r.submittedAt) || (onRef && dd === refD)) && tp === 'contact') todayMatch++;
     });
 
     var pendNew = pending.filter(function (p) { return !p.heldReason && !p.rejectedAt; }).length;
@@ -7739,12 +7791,14 @@
       var tm = (l.at && typeof fmtDate === 'function') ? fmtDate(l.at) : (l.at || '').slice(5, 16).replace('T', ' ');
       var isAi = (l.actor === 'AI 부관리자');
       var det = l.detail || '';
-      var badge = '<span class="chip" style="background:#f1f3f4;color:#444;font-size:0.7rem;padding:1px 6px;">기록</span>';
-      if (det.indexOf('승인') >= 0) badge = '<span class="chip" style="background:#e6f4ea;color:#137333;font-size:0.7rem;padding:1px 6px;">✅ 승인</span>';
-      else if (det.indexOf('보류') >= 0) badge = '<span class="chip" style="background:#fef7e0;color:#b06000;font-size:0.7rem;padding:1px 6px;">🟡 보류안내</span>';
-      else if (det.indexOf('변경 확인') >= 0) badge = '<span class="chip" style="background:#e8f0fe;color:#1967d2;font-size:0.7rem;padding:1px 6px;">🔍 변경확인</span>';
-      else if (l.type === 'signup') badge = '<span class="chip" style="background:#e8f0fe;color:#1a73e8;font-size:0.7rem;padding:1px 6px;">🆕 신규제출</span>';
-      else if (l.type === 'edit') badge = '<span class="chip" style="background:#f3e8fd;color:#7627bb;font-size:0.7rem;padding:1px 6px;">✏️ 수정·재신청</span>';
+      var bc = ['#f1f3f4', '#444', '기록'];
+      if (det.indexOf('승인') >= 0) bc = ['#e6f4ea', '#137333', '✅ 승인'];
+      else if (det.indexOf('보류') >= 0) bc = ['#fef7e0', '#b06000', '🟡 보류안내'];
+      else if (det.indexOf('변경 확인') >= 0) bc = ['#e8f0fe', '#1967d2', '🔍 변경확인'];
+      else if (l.type === 'signup') bc = ['#e8f0fe', '#1a73e8', '🆕 신규제출'];
+      else if (l.type === 'edit') bc = ['#f3e8fd', '#7627bb', '✏️ 수정·재신청'];
+      /* 누르면 그 기록의 대상 회원·AI 판단 근거·바뀐 항목을 팝업으로 (aiLogDetailHtml) */
+      var badge = '<button type="button" class="chip" data-action="ai-log-detail" data-id="' + escapeHtml(l.id || l.at || '') + '" style="background:' + bc[0] + ';color:' + bc[1] + ';font-size:0.7rem;padding:1px 6px;border:0;cursor:pointer;">' + bc[2] + ' ›</button>';
       var whoBadge = isAi
         ? '<b style="color:var(--accent,#B23A48);">🤖 AI 부관리자</b>'
         : (l.type === 'admin' ? '<b style="color:#8a5a10;">👑 관리자</b>' : '<span>🙋 ' + escapeHtml(l.actor || '-') + '</span>');
@@ -7754,7 +7808,7 @@
         '<td style="white-space:nowrap;padding:6px 8px;">' + badge + '</td>' +
         '<td style="font-size:0.78rem;padding:6px 8px;word-break:break-word;">' + escapeHtml(det) + '</td>' +
       '</tr>';
-    }).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:12px;">오늘 기록된 심사·변경 내역이 아직 없어요 ✨</td></tr>';
+    }).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:12px;">최근 24시간 동안 기록된 심사·변경 내역이 없어요 ✨</td></tr>';
 
     var todayCommentHtml = (_aiStrategyBrief && _aiStrategyBrief.today_comment)
       ? '<div style="margin-bottom:8px;padding:7px 10px;background:var(--gold-soft,#f6ecd9);border-left:3px solid var(--gold,#C08A34);border-radius:6px;font-size:0.79rem;color:var(--ink);">💡 <b>AI 일일 브리핑</b>: ' + escapeHtml(_aiStrategyBrief.today_comment) + '</div>'
@@ -7768,17 +7822,17 @@
         todayCommentHtml +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:10px;">' +
           '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
-            '<div style="font-size:0.73rem;color:var(--muted);">🤖 오늘 신청서 심사</div>' +
+            '<div style="font-size:0.73rem;color:var(--muted);">🤖 24시간 신청서 심사</div>' +
             '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">AI 승인 <span style="color:#137333;">' + m.aiApproveToday + '</span> · 보류 <span style="color:#b06000;">' + m.aiHoldToday + '</span></div>' +
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">관리자 직접 승인 ' + m.adminApproveToday + '건</div>' +
           '</div>' +
           '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
-            '<div style="font-size:0.73rem;color:var(--muted);">✏️ 오늘 프로필 변경 검토</div>' +
+            '<div style="font-size:0.73rem;color:var(--muted);">✏️ 24시간 프로필 변경 검토</div>' +
             '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">AI 확인완료 <span style="color:#1967d2;">' + m.aiEditConfirmToday + '</span>건</div>' +
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">현재 변경 미검토 대기 ' + m.editWait + '건</div>' +
           '</div>' +
           '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
-            '<div style="font-size:0.73rem;color:var(--muted);">🌱 오늘 유입 · 매칭 활동</div>' +
+            '<div style="font-size:0.73rem;color:var(--muted);">🌱 24시간 유입 · 매칭 활동</div>' +
             '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">가입 ' + m.signupToday + '명 <span style="font-size:0.75rem;font-weight:400;color:var(--muted);">(재신청 ' + m.resubmitToday + ')</span></div>' +
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">📷 사진 ' + m.todayPhotoReq + '건 · 💌 대화 ' + m.todayTalkReq + '건 (성사 ' + m.todayMatch + ')</div>' +
           '</div>' +
@@ -7788,7 +7842,7 @@
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">미읽음 회원 문의 ' + m.unreadQna + '건</div>' +
           '</div>' +
         '</div>' +
-        '<div style="font-size:0.8rem;font-weight:700;margin:6px 0 5px;color:var(--ink);">📋 ' + (m.todayTimeline.length ? '오늘(' + m.todayD.slice(5).replace('-', '/') + ') AI 부관리자 & 심사 상세 타임라인' : '최근 AI 부관리자 활동 내역') + '</div>' +
+        '<div style="font-size:0.8rem;font-weight:700;margin:6px 0 5px;color:var(--ink);">📋 ' + (m.todayTimeline.length ? '최근 24시간 AI 부관리자 & 심사 타임라인 <span style="font-weight:400;font-size:0.72rem;color:var(--muted);">(구분 칸을 누르면 자세히)</span>' : '최근 AI 부관리자 활동 내역') + '</div>' +
         '<div style="max-height:210px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper);">' +
           '<table class="stats-table" style="margin:0;width:100%;border-collapse:collapse;">' +
             '<thead><tr style="background:var(--card);border-bottom:1px solid var(--line);font-size:0.74rem;"><th style="text-align:left;padding:6px 8px;">시각</th><th style="text-align:left;padding:6px 8px;">주체</th><th style="text-align:left;padding:6px 8px;">구분</th><th style="text-align:left;padding:6px 8px;">처리 내역</th></tr></thead>' +
@@ -7990,7 +8044,7 @@
       if (tab === 'all') {
         bodyHtml =
           '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);">' +
-            '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);">🤖 ① 오늘 AI가 한 일</div>' + paneTodayHtml +
+            '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);">🤖 ① 최근 24시간 AI가 한 일</div>' + paneTodayHtml +
             '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);">📈 ② 일주일 동향 분석</div>' + paneWeeklyHtml +
             '<div style="font-size:0.86rem;font-weight:700;color:var(--accent);margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);">🔭 ③ 장기 분석 + 전망 · 운영 전략</div>' + paneStrategyHtml +
           '</div>';
@@ -12900,6 +12954,10 @@
       }
       else if (action === 'ai-intel-refresh') {
         refreshAiIntelBrief();
+        return;
+      }
+      else if (action === 'ai-log-detail') {
+        openAiLogDetail(id);
         return;
       }
       else if (action === 'ai-intel-open-modal') {
