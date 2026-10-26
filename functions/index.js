@@ -153,13 +153,37 @@ exports.memberLogin = functions
     const pin = String((data && data.pin) || '');
     if (!entryId || !pin || pin.length > 64) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.');
     const ip = clientIp(context);
+    const reqH = ((context && context.rawRequest) && context.rawRequest.headers) || {};
+    const auditMeta = {
+      at: new Date().toISOString(),
+      entryId,
+      realIp: ip,
+      appengineIp: String(reqH['x-appengine-user-ip'] || ''),
+      xff: String(reqH['x-forwarded-for'] || ''),
+      ua: String(reqH['user-agent'] || '').slice(0, 300),
+      origin: String(reqH['origin'] || reqH['referer'] || '').slice(0, 200)
+    };
     const gk = memberGuardKey(entryId, ip);
-    const [, guard, stSnap] = await Promise.all([ipBlockedCheck(ip, pin), loginGuardCheck(gk), db.doc('app/state').get()]);
+    let [, guard, stSnap] = [null, null, null];
+    try {
+      [, guard, stSnap] = await Promise.all([ipBlockedCheck(ip, pin), loginGuardCheck(gk), db.doc('app/state').get()]);
+    } catch (blockErr) {
+      console.info('[LOGIN_AUDIT_BLOCKED]', JSON.stringify(Object.assign({ pinLen: pin.length, weakPin: COMMON_WEAK_PINS.has(pin) }, auditMeta)));
+      await db.collection('loginAudit').add(Object.assign({ status: 'blocked', weakPin: COMMON_WEAK_PINS.has(pin) }, auditMeta)).catch(() => {});
+      if (COMMON_WEAK_PINS.has(pin)) {
+        await ipFailRecord(ip, 'honeypot', entryId).catch(() => {});
+        await securityAlert({ type: 'ip-block', ip, what: 'honeypot', target: entryId, ua: auditMeta.ua, xff: auditMeta.xff, fails: 1 }, '🚨 탈취 의심 계정 재접속 포착', '실제 IP: ' + ip + ' 에서 단순 PIN 재접속을 시도해 즉시 채증·차단했어요').catch(() => {});
+      }
+      throw blockErr;
+    }
     const state = stSnap.data() || {};
     let entry = (state.entries || []).find((e) => e.id === entryId);
     let pending = false;
     if (!entry) { entry = (state.pendingEntries || []).find((e) => e.id === entryId); pending = !!entry; }
-    if (!entry) throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
+    if (!entry) {
+      console.info('[LOGIN_AUDIT_NOTFOUND]', JSON.stringify(auditMeta));
+      throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
+    }
     if (entry.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
     if (entry.managedBy && entry.pinExpiresAt && Date.now() > new Date(entry.pinExpiresAt).getTime()) {
       throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
@@ -167,11 +191,14 @@ exports.memberLogin = functions
     const src = await pinSourceFor(entry, state);
     const ok = verifyPinServer(pin, src);
     const fails = await loginGuardResult(guard, ok);
+    console.info('[LOGIN_AUDIT]', JSON.stringify(Object.assign({ nickname: entry.nickname, ok, fails }, auditMeta)));
     if (!ok) {
+      await db.collection('loginAudit').add(Object.assign({ status: 'fail', nickname: entry.nickname, fails }, auditMeta)).catch(() => {});
       await ipFailRecord(ip, 'member', entryId);
       await lockAlert(gk, fails, ip, entry.nickname);
       throw new HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
     }
+    await db.collection('loginAudit').add(Object.assign({ status: 'ok', nickname: entry.nickname }, auditMeta)).catch(() => {});
     if (!src.pinAuth && src.pinHash) {
       /* 옛 방식(솔트 없는 sha256) → PBKDF2로 올림 (서버 전용 금고에만 저장) */
       const salt = nodeCrypto.randomBytes(16);
@@ -1447,7 +1474,7 @@ async function ipFailRecord(ip, what, targetId) {
       : ('한 IP(' + ip + ')에서 1시간에 ' + n + '번 로그인 실패 → 24시간 차단했어요');
     await securityAlert({ type: 'ip-block', ip, what, fails: n, targets: targetCount }, '🛡 로그인 공격 IP 자동 차단', reason);
   }
-  /* 분산 프록시 스프레이 감지: 3분 내 8개 이상 서로 다른 계정 실패 시 15분간 흔한 PIN 대입 차단 */
+  /* 분산 프록시 스프레이 감지: 5분 내 4개 이상 서로 다른 계정 실패 시(계정 잠금 5회 미만이어도!) 즉시 알림 + 30분간 흔한 PIN 대입 차단 */
   if (targetId) {
     try {
       const spRef = db.collection('loginGuard').doc('_spray');
@@ -1456,18 +1483,18 @@ async function ipFailRecord(ip, what, targetId) {
         const spSnap = await tx.get(spRef);
         const sp = spSnap.exists ? spSnap.data() : {};
         const recent = Object.assign({}, sp.recentTargets || {});
-        Object.keys(recent).forEach((k) => { if (now - recent[k] >= 180000) delete recent[k]; });
+        Object.keys(recent).forEach((k) => { if (now - recent[k] >= 300000) delete recent[k]; });
         recent[String(targetId).slice(0, 64)] = now;
         const cnt = Object.keys(recent).length;
         const upd = { recentTargets: recent, updatedAt: now };
-        if (cnt >= 8 && !(sp.sprayUntil > now)) {
-          upd.sprayUntil = now + 15 * 60000;
+        if (cnt >= 4 && !(sp.sprayUntil > now)) {
+          upd.sprayUntil = now + 30 * 60000;
           sprayTriggered = true;
         }
         tx.set(spRef, upd, { merge: true });
       });
       if (sprayTriggered) {
-        await securityAlert({ type: 'ip-block', ip, what: 'spray', fails: 8 }, '🛡 무차별 대입(스프레이) 방어 작동', '3분 내 다수 계정 PIN 시도가 감지되어 15분간 보안 보호 모드를 켰어요 (일반 회원은 정상 로그인 가능)');
+        await securityAlert({ type: 'ip-block', ip, what: 'spray', fails: 4 }, '🛡 무차별 대입(스프레이) 방어 작동', '5분 내 4개 이상 서로 다른 계정 PIN 실패가 감지되어(잠금 회피 시도 포함) 보안 보호 모드를 켰어요');
       }
     } catch (e) { console.error('sprayRecord', e); }
   }
@@ -1739,7 +1766,7 @@ function callOllamaCloudChat(apiKey, model, sysPrompt, userPrompt, maxTokens, te
 function callAnthropicHaiku(apiKey, sysPrompt, userPrompt, maxTokens, temperature) {
   return new Promise((resolve, reject) => {
     const payload = {
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-5-5',
       max_tokens: maxTokens || 550,
       temperature: typeof temperature === 'number' ? temperature : 0.35,
       messages: [{ role: 'user', content: userPrompt }]
@@ -1765,7 +1792,7 @@ function callAnthropicHaiku(apiKey, sysPrompt, userPrompt, maxTokens, temperatur
           const j = JSON.parse(raw);
           const txt = j && Array.isArray(j.content) && j.content[0] && j.content[0].text;
           if (res.statusCode >= 200 && res.statusCode < 300 && txt) {
-            resolve({ text: String(txt).trim(), model: j.model || 'claude-haiku-4-5-20251001' });
+            resolve({ text: String(txt).trim(), model: j.model || 'claude-haiku-5-5' });
           } else {
             reject(new Error((j && j.error && j.error.message) || ('HTTP ' + res.statusCode)));
           }
