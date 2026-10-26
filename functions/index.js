@@ -171,6 +171,7 @@ exports.memberLogin = functions
       console.info('[LOGIN_AUDIT_BLOCKED]', JSON.stringify(Object.assign({ pinLen: pin.length, weakPin: COMMON_WEAK_PINS.has(pin) }, auditMeta)));
       await db.collection('loginAudit').add(Object.assign({ status: 'blocked', weakPin: COMMON_WEAK_PINS.has(pin) }, auditMeta)).catch(() => {});
       if (COMMON_WEAK_PINS.has(pin)) await ipFailRecord(ip, 'honeypot', entryId).catch(() => {});
+      if (COMMON_WEAK_PINS.has(pin) && BREACHED_IDS.has(entryId)) await addWatchIp(ip);   /* 탈취 계정에 옛 흔한 PIN = 공격자 → 이 IP 로 회원 앱 열면 알림 */
       try {
         const st0 = (await db.doc('app/state').get()).data() || {};
         const e0 = (st0.entries || []).concat(st0.pendingEntries || []).find((e) => e.id === entryId) || null;
@@ -204,6 +205,7 @@ exports.memberLogin = functions
       await db.collection('loginAudit').add(Object.assign({ status: 'weak-refused', nickname: entry.nickname, correct: real }, auditMeta)).catch(() => {});
       if (real) await markPinWeak([entry.id]).catch((e) => console.error('markPinWeak', e));
       else { await loginGuardResult(guard, false); await ipFailRecord(ip, 'member', entryId); }
+      if (BREACHED_IDS.has(entry.id)) await addWatchIp(ip);
       const o = Object.assign({}, audO, { status: real ? 'weak' : 'fail', fails: 1 });
       const s = await suspicionOf(o);
       if (real || s.reasons.length) await suspiciousAlert(o, s, real ? ['흔한 PIN 계정 — 로그인 막고 새 PIN 필요(관리자탭 PIN 재설정)'] : []).catch(() => {});
@@ -1632,7 +1634,7 @@ function isWeakPinServer(pin) {
    이상하면 바로 관리자 알림: 공격·차단 이력 IP / VPN·데이터센터 / 탈취 이력 계정 / 30일+ 안 쓰던 계정 / 그 계정에서 처음 보는 기기 종류 /
    앱 밖 사이트·일반 브라우저 아님 / 쉬운 PIN 대입 / 2번째 이상 실패 / 없는 계정.
    공격자가 VPN 을 끄고 자기 계정으로 같은 집 IP 에서 앱을 열면 '공격·차단 이력 IP' 로 바로 잡힌다. */
-const WATCH_IPS = ['180.65.139.114', '45.80.212.81', '45.80.212.84', '135.136.27.15', '2a04:4e41:2201:7dfb::3d3e:7dfb'];   /* 10-26 공격자 */
+const WATCH_IPS = ['180.65.139.114', '112.212.220.111', '45.80.212.81', '45.80.212.84', '135.136.27.15', '2a04:4e41:2201:7dfb::3d3e:7dfb'];   /* 10-26 공격자 */
 const BREACHED_IDS = new Set(['9cc9116d-7bc6-481c-a280-81c6ef2a82ff', '24d69624-2988-45e1-911e-ce9df19c0613', 'a061a706-0554-449c-bec8-6bd699e5b7dc', '161e4ad5-1eee-412a-a762-8d7511240980']);
 const APP_ORIGIN = 'https://benny3s.github.io';
 function deviceOf(ua) {
@@ -1664,6 +1666,10 @@ async function watchIpSet() {
   const s = await db.doc('security/watch').get().catch(() => null);
   const extra = (s && s.exists && Array.isArray(s.data().ips)) ? s.data().ips : [];
   return new Set(WATCH_IPS.concat(extra));
+}
+async function addWatchIp(ip) {
+  if (!ip || ip === 'unknown') return;
+  await db.doc('security/watch').set({ ips: admin.firestore.FieldValue.arrayUnion(ip) }, { merge: true }).catch(() => {});
 }
 async function knownDevices(uid) {
   const q = await db.collection('accessSeen').where('uid', '==', uid).limit(60).get();
@@ -1745,7 +1751,8 @@ async function markPinWeak(ids) {
 /* 이 계정의 접속 흔적(IP·기기·사이트) 남김 → 처음 보는 조합이면 true */
 async function noteAccess(uid, entryId, nickname, ip, ua, origin) {
   const device = deviceOf(ua);
-  const ref = db.collection('accessSeen').doc(guardKey('a_', uid + '_' + ip + '_' + device));
+  /* 문서 id 에 기기 이름은 16진수로 (guardKey 가 한글을 지워 '아이폰 Safari'·'아이패드 Safari' 가 한 칸에 겹쳤음) */
+  const ref = db.collection('accessSeen').doc(guardKey('a_', uid + '_' + ip + '_' + Buffer.from(device).toString('hex').slice(0, 48)));
   const now = new Date().toISOString();
   let fresh = false, doc = {};
   await db.runTransaction(async (tx) => {
