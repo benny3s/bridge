@@ -197,6 +197,14 @@ exports.memberLogin = functions
     if (entry.managedBy && entry.pinExpiresAt && Date.now() > new Date(entry.pinExpiresAt).getTime()) {
       throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
     }
+    const acctLock = await accountLockCheck(entry.id).catch(() => null);
+    if (acctLock) {
+      await db.collection('loginAudit').add(Object.assign({ status: 'acct-locked', nickname: entry.nickname }, auditMeta)).catch(() => {});
+      if (COMMON_WEAK_PINS.has(pin) && BREACHED_IDS.has(entry.id)) await addWatchIp(ip);
+      const o = Object.assign({}, audO, { status: 'blocked' });
+      await suspiciousAlert(o, await suspicionOf(o), ['계정 보호 잠금 중 다시 시도']).catch(() => {});
+      throw new HttpsError('resource-exhausted', '이 계정은 PIN이 여러 번 틀려 보호를 위해 하루 동안 잠겼어요. 본인이시면 아래 \'PIN을 잊으셨나요? PIN 재설정 요청\'으로 관리자에게 새 PIN을 받아 주세요.');
+    }
     const src = await pinSourceFor(entry, state);
     /* 흔한 PIN(1234·0000…)은 맞든 틀리든 같은 안내로 로그인 거부 (2026-10-26 대입 공격으로 4계정 탈취) — 맞으면 계정에 pinWeak 표시해 새 PIN 받게.
        같은 안내라 공격자는 그 PIN 이 맞았는지 알 수 없다 */
@@ -204,7 +212,7 @@ exports.memberLogin = functions
       const real = verifyPinServer(pin, src);
       await db.collection('loginAudit').add(Object.assign({ status: 'weak-refused', nickname: entry.nickname, correct: real }, auditMeta)).catch(() => {});
       if (real) await markPinWeak([entry.id]).catch((e) => console.error('markPinWeak', e));
-      else { await loginGuardResult(guard, false); await ipFailRecord(ip, 'member', entryId); }
+      else { await loginGuardResult(guard, false); await ipFailRecord(ip, 'member', entryId); await accountFailRecord(entry, ip); }
       if (BREACHED_IDS.has(entry.id)) await addWatchIp(ip);
       const o = Object.assign({}, audO, { status: real ? 'weak' : 'fail', fails: 1 });
       const s = await suspicionOf(o);
@@ -218,6 +226,7 @@ exports.memberLogin = functions
       await db.collection('loginAudit').add(Object.assign({ status: 'fail', nickname: entry.nickname, fails }, auditMeta)).catch(() => {});
       await ipFailRecord(ip, 'member', entryId);
       await lockAlert(gk, fails, ip, entry.nickname);
+      await accountFailRecord(entry, ip);
       const o = Object.assign({}, audO, { status: 'fail', fails });
       const s = await suspicionOf(o).catch(() => null);
       if (s && s.reasons.length) await suspiciousAlert(o, s).catch(() => {});
@@ -1228,6 +1237,7 @@ async function sweepSecrets(before, after) {
       const put = Object.assign({ deletedAt: FV.delete(), at: new Date().toISOString() }, sec);
       if (sec.pinAuth && !sec.pinHash) put.pinHash = FV.delete(); /* 새 방식 PIN이 들어오면 옛 해시 제거 */
       await db.collection('secrets').doc(id).set(put, { merge: true });
+      if (sec.pinAuth || sec.pinHash) await acctGuardRef(id).delete().catch(() => {});   /* 새 PIN → 계정 보호 잠금 풀기 */
     } else if (w.revoke) {
       await db.collection('secrets').doc(id).set({ pinAuth: FV.delete(), pinHash: FV.delete(), pinEnc: FV.delete() }, { merge: true }).catch(() => {});
     }
@@ -1666,6 +1676,38 @@ async function watchIpSet() {
   const s = await db.doc('security/watch').get().catch(() => null);
   const extra = (s && s.exists && Array.isArray(s.data().ips)) ? s.data().ips : [];
   return new Set(WATCH_IPS.concat(extra));
+}
+/* 계정 단위 잠금 (2026-10-26): IP 와 상관없이 한 계정에서 24시간 안에 10번 틀리면 24시간 잠금 + 알림.
+   기존 잠금(loginGuard m_계정_IP)은 IP 마다 따로 세서 IP 를 바꿔 가며 5번씩 맞혀 볼 수 있었음.
+   새 PIN(관리자 임시 PIN·본인 변경)이 금고에 들어오면 sweepSecrets 가 풀어 줌 */
+const ACCOUNT_FAIL_LIMIT = 10;
+const acctGuardRef = (id) => db.collection('loginGuard').doc(guardKey('acct_', id));
+async function accountLockCheck(id) {
+  const d = (await acctGuardRef(id).get()).data() || {};
+  return (d.lockedUntil && d.lockedUntil > Date.now()) ? d : null;
+}
+async function accountFailRecord(entry, ip) {
+  const now = Date.now();
+  let lockedNow = false, n = 0, ips = [];
+  try {
+    await db.runTransaction(async (tx) => {
+      const ref = acctGuardRef(entry.id);
+      const s = await tx.get(ref);
+      const d = s.exists ? s.data() : {};
+      const fails = (d.fails || []).filter((f) => now - f.t < 86400000);
+      fails.push({ t: now, ip: String(ip || '').slice(0, 64) });
+      n = fails.length;
+      ips = Array.from(new Set(fails.map((f) => f.ip)));
+      const upd = { fails: fails.slice(-50) };
+      if (n >= ACCOUNT_FAIL_LIMIT && !(d.lockedUntil > now)) { upd.lockedUntil = now + 86400000; upd.lockedAt = now; lockedNow = true; }
+      tx.set(ref, upd, { merge: true });
+    });
+  } catch (e) { console.error('accountFailRecord', e); return; }
+  if (lockedNow) {
+    await securityAlert({ type: 'login-lock', target: entry.nickname || entry.id, fails: n, ip, ips },
+      '🔒 계정 보호 잠금 · ' + (entry.nickname || ''),
+      '24시간 안에 ' + n + '번 틀림 (IP ' + ips.length + '곳) → 이 계정 하루 잠금. 본인이면 관리자탭에서 새 PIN 주면 풀려요');
+  }
 }
 async function addWatchIp(ip) {
   if (!ip || ip === 'unknown') return;
