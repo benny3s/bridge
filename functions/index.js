@@ -469,6 +469,7 @@ exports.onStateChange = functions
     const jobs = [];
     jobs.push(syncPublicView(after).catch((e) => console.error('syncPublicView', e)));
     jobs.push(sweepSecrets(before, after).catch((e) => console.error('sweepSecrets', e)));
+    jobs.push(sweepPlainContacts(after).catch((e) => console.error('sweepPlainContacts', e)));
     jobs.push(sweepThumbs(before, after).catch((e) => console.error('sweepThumbs', e)));
     jobs.push(bumpMemberEver(after).catch((e) => console.error('bumpMemberEver', e)));
     jobs.push(migrateDmToChats(after).catch((e) => console.error('migrateDmToChats', e)));
@@ -1050,6 +1051,27 @@ async function sweepThumbs(before, after) {
     removed.forEach((id) => { if (!nowIds[id]) put[id] = FV.delete(); });
     if (Object.keys(put).length) tx.set(tref, { t: put, at: new Date().toISOString() }, { merge: true });
     if (changed) tx.update(ref, upd);
+  });
+}
+
+/* 번호는 관리자만 본다(2026-10-26): 요청 기록(dateRequests)에 평문 번호 필드가 들어오면 서버가 즉시 지운다.
+   state 는 회원 누구나 읽으므로, 옛 앱(캐시된 관리자 화면 등)이 써 넣어도 남지 않게 서버에서 강제. 서버 쓰기라 _w/_wn 은 건드리지 않음. */
+const PLAIN_CONTACT_KEYS = ['revealedContact', 'fromContact', 'toContact'];
+async function sweepPlainContacts(after) {
+  const has = (r) => r && PLAIN_CONTACT_KEYS.some((k) => r[k] != null);
+  if (!(after.dateRequests || []).some(has)) return;
+  const ref = db.doc('app/state');
+  await db.runTransaction(async (tx) => {
+    const s = (await tx.get(ref)).data() || {};
+    let changed = false;
+    const reqs = (s.dateRequests || []).map((r) => {
+      if (!has(r)) return r;
+      const u = Object.assign({}, r);
+      PLAIN_CONTACT_KEYS.forEach((k) => { delete u[k]; });
+      changed = true;
+      return u;
+    });
+    if (changed) tx.update(ref, { dateRequests: reqs });
   });
 }
 
