@@ -530,12 +530,14 @@ exports.onStateChange = functions
     };
     const beforeMsg = {};
     (before.messages || []).forEach((m) => { beforeMsg[m.id] = true; });
+    /* 관리자 메시지 푸시는 서버(_wn 그대로) 또는 관리자(_w='admin') 쓰기일 때만 — 회원이 from:'admin' 메시지를 꽂아 관리자 사칭 알림을 보내는 것 차단 */
+    const trustedMsgWrite = (after._w === 'admin') || (after._wn === before._wn);
     (after.messages || []).forEach((m) => {
       if (beforeMsg[m.id]) return;
       const preview = (m.text || '').slice(0, 40);
       if (m.from === 'user') jobs.push(sendToAdmin('💬 새 Q&A/메시지', nickAny(m.entryId) + ': ' + preview));
       /* 대리(주선자 관리) 친구에게 온 관리자 메시지도 주선자에게 전달 (예전엔 친구 기기로만 → 대개 유실) */
-      else if (m.from === 'admin') {
+      else if (m.from === 'admin' && trustedMsgWrite) {
         const me2 = entryById(after.entries || [], m.entryId);
         if (me2 && me2.managedBy) jobs.push(notifyRecipient(after.entries || [], m.entryId, '💬 관리자 메시지', preview, { route: 'mine' }));
         else jobs.push(sendTo(m.entryId, '💬 관리자 메시지', preview, { route: 'mine' }));
@@ -1055,7 +1057,17 @@ async function sweepSecrets(before, after) {
   const FV = admin.firestore.FieldValue;
   const beforeMap = {}; allOf(before).forEach((e) => { beforeMap[e.id] = e; });
   const afterIds = {}; allOf(after).forEach((e) => { afterIds[e.id] = 1; });
+  /* 비밀값(PIN 해시·연락처 암호문 등) 쓰기는 소유자(본인/변경 전 주선자)·관리자·서버만 금고로 반영.
+     회원 토큰으로 남의 entries 에 pinAuth/pinFrom 을 꽂아 계정을 가로채는 것 차단(변경 전 관계로 판단). */
+  const writer = String(after._w || '');
+  const serverWrite = (after._wn === before._wn);
+  const trusted = serverWrite || writer === 'admin';
+  const owned = {}; if (writer) owned[writer] = 1;
+  allOf(before).forEach((e) => { if (e.managedBy === writer) owned[e.id] = 1; });
+  const ownerLegit = (e) => trusted || owned[e.id]
+    || (!beforeMap[e.id] && (e.managedBy === writer || (e.isMatchmaker && e.pinFrom && owned[e.pinFrom])));
   const work = [];
+  const rejected = [];
   allOf(after).forEach((e) => {
     const sec = {}, priv = {};
     SECRET_KEYS.forEach((k) => { if (e[k] != null) sec[k] = e[k]; });
@@ -1063,11 +1075,16 @@ async function sweepSecrets(before, after) {
     const prev = beforeMap[e.id];
     /* PIN 회수: 전엔 PIN이 있었는데 지금은 표시·값·물려받기 모두 없음 → 금고의 PIN도 지움 */
     const revoke = !!(prev && (prev.pinSet || hasPinInline(prev)) && !e.pinSet && !hasPinInline(e) && !e.pinFrom);
-    if (Object.keys(sec).length || Object.keys(priv).length || e.pinFrom || e.privFrom || revoke) work.push({ e, sec, priv, revoke });
+    if (!(Object.keys(sec).length || Object.keys(priv).length || e.pinFrom || e.privFrom || revoke)) return;
+    if (ownerLegit(e)) { work.push({ e, sec, priv, revoke }); return; }
+    const fields = Object.keys(sec).concat(Object.keys(priv));
+    if (e.pinFrom) fields.push('pinFrom');
+    if (e.privFrom) fields.push('privFrom');
+    if (fields.length) rejected.push({ id: e.id, fields });   /* 소유자 아님 → 금고 반영 안 하고 state 에서 제거 + 경고 */
   });
   const removed = Object.keys(beforeMap).filter((id) => !afterIds[id]);
-  const keyInline = (after.adminAuth && after.adminAuth.wrappedPrivateKey) ? after.adminAuth : null;
-  if (!work.length && !removed.length && !keyInline) return;
+  const keyInline = (trusted && after.adminAuth && after.adminAuth.wrappedPrivateKey) ? after.adminAuth : null;
+  if (!work.length && !rejected.length && !removed.length && !keyInline) return;
 
   /* 1) 금고에 쓰기 — 물려받기(pinFrom/privFrom)를 반드시 먼저: 원래 계정의 PIN 회수가 먼저 돌면 복사할 PIN이 사라짐 */
   work.sort((a, b) => ((b.e.pinFrom || b.e.privFrom) ? 1 : 0) - ((a.e.pinFrom || a.e.privFrom) ? 1 : 0));
@@ -1128,6 +1145,32 @@ async function sweepSecrets(before, after) {
     }
     if (changed) tx.update(ref, upd);
   });
+
+  /* 2.5) 소유자가 아닌 쓰기로 들어온 비밀 필드 — 금고로 옮기지 않고 state 에서 제거 + 관리자 경고 */
+  if (rejected.length) {
+    const rejMap = {}; rejected.forEach((r) => { rejMap[r.id] = r.fields; });
+    await db.runTransaction(async (tx) => {
+      const s = (await tx.get(ref)).data() || {};
+      let changed = false;
+      const strip = (list) => (list || []).map((e) => {
+        const f = rejMap[e.id];
+        if (!f) return e;
+        const u = Object.assign({}, e); let t = false;
+        f.forEach((k) => { if (u[k] != null) { delete u[k]; t = true; } });
+        if (t) changed = true;
+        return t ? u : e;
+      });
+      const nextEntries = strip(s.entries);
+      const nextPending = strip(s.pendingEntries);
+      if (changed) tx.update(ref, { entries: nextEntries, pendingEntries: nextPending, _w: 'admin', _wn: nodeCrypto.randomUUID() });
+    });
+    try {
+      const nickR = (id) => { const e = allOf(after).find((x) => x.id === id); return e ? e.nickname : id; };
+      const sumR = rejected.map((r) => nickR(r.id) + '(' + r.fields.join(',') + ')').join(' / ');
+      await securityAlert({ type: 'tamper', writer, writerNick: nickR(writer), summary: '비밀값 무단 쓰기 차단: ' + sumR, issues: rejected },
+        '🚨 비밀값 무단 변경 차단', nickR(writer) + '님 계정으로 남의 PIN·연락처 비밀값을 바꾸려 해 막았어요');
+    } catch (e) { console.error('sweepSecrets reject alert', e); }
+  }
 
   /* 3) 사라진 계정: 금고에 삭제 표시만 (7일 뒤 remindPending 이 정리) */
   for (const id of removed) {
@@ -1541,7 +1584,12 @@ function detectTamperIssues(before, after) {
     || (!b && a && a.managedBy === writer)                                             /* 친구 대신 등록(새 신청) */
     || (b && b.managedBy === writer));
   const reqOk = (r) => r && (own(r.fromId) || own(r.toId));
-  diffList('dateRequests', before.dateRequests, after.dateRequests, (b, a) => reqOk(b) || reqOk(a));
+  const apprOf = (r) => !!(r && (r.approved || r.status === 'approved' || r.status === 'user_approved'));
+  diffList('dateRequests', before.dateRequests, after.dateRequests, (b, a) => {
+    if (!(reqOk(b) || reqOk(a))) return false;                                    /* 관계 없는 요청 변경 → 경고 */
+    if (b && a && apprOf(a) && !apprOf(b) && own(a.fromId) && !own(a.toId)) return false; /* 요청자(받는이 아님)가 자기 요청을 스스로 승인 → 경고 */
+    return true;
+  });
   diffList('messages', before.messages, after.messages, (b, a) => (b && own(b.entryId)) || (a && own(a.entryId)));
   diffList('joinRequests', before.joinRequests, after.joinRequests, (b, a) => reqOk(b) || reqOk(a));
   diffList('connLog', before.connLog, after.connLog, (b, a) => [b, a].some((x) => x && (own(x.a) || own(x.b))));
