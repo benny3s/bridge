@@ -4,7 +4,7 @@ service cloud.firestore {
 
     // 신분은 서버 로그인 토큰(memberLogin/adminLogin)의 claims 로 판단.
     // 손님은 익명 토큰(claims 없음), 승인 대기는 {p:1}, 승인 회원은 {m:1}, 관리자는 {admin:1}.
-    function notRevoked() { return !(request.auth.uid in ['9cc9116d-7bc6-481c-a280-81c6ef2a82ff','24d69624-2988-45e1-911e-ce9df19c0613','a061a706-0554-449c-bec8-6bd699e5b7dc','161e4ad5-1eee-412a-a762-8d7511240980'] && request.auth.token.iat < 1793003100); }
+    function notRevoked() { return !(request.auth.uid in ['9cc9116d-7bc6-481c-a280-81c6ef2a82ff','24d69624-2988-45e1-911e-ce9df19c0613','a061a706-0554-449c-bec8-6bd699e5b7dc','161e4ad5-1eee-412a-a762-8d7511240980'] && request.auth.token.auth_time < 1793003100); } // auth_time(처음 로그인 시각) 기준 — iat 는 1시간마다 새로 받으면 바뀌어 차단이 풀림
     function signedIn() { return request.auth != null && notRevoked(); }
     function isAdmin() { return signedIn() && request.auth.token.admin == 1; }
     function isMember() { return signedIn() && request.auth.token.m == 1; }

@@ -105,12 +105,15 @@ async function pinRecord(id, state) {
   const sec = (await db.collection('secrets').doc(id).get()).data() || {};
   return { pinAuth: sec.pinAuth || null, pinHash: sec.pinHash || null };
 }
+/* 로그인·본인 확인용 PIN 은 서버 금고(secrets)에 있는 값만 믿는다 (2026-10-27).
+   state(회원이 쓸 수 있는 문서)에 들어온 PIN 값은 금고로 옮겨지기 전이라도 로그인에 쓰지 않음.
+   새 PIN 은 sweepSecrets 가 몇 초 안에 금고로 옮기므로 정상 회원 영향 없음(가입은 stashSecrets 로 바로 금고). */
 async function pinSourceFor(entry, state) {
-  if (entry && (entry.pinAuth || entry.pinHash)) return entry;
   let rec = await pinRecord(entry.id, null);
-  if (!rec.pinAuth && !rec.pinHash && entry.pinFrom) rec = await pinRecord(entry.pinFrom, state);
+  if (!rec.pinAuth && !rec.pinHash && entry.pinFrom) rec = await pinRecord(entry.pinFrom, null);
   return Object.assign({ id: entry.id }, rec);
 }
+const ENTRY_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 /* PIN이 필요한 서버 기능(번호 저장·지인 필터) 공통 본인 확인: 서버 로그인 토큰이 그 계정이면 통과,
    아니면 PIN 확인(로그인과 같은 실패 횟수 잠금 적용 — 예전엔 잠금 없이 PIN을 무제한 시도할 수 있었음) */
 async function callerOwns(context, state, entry, pin) {
@@ -152,6 +155,7 @@ exports.memberLogin = functions
     const entryId = String((data && data.entryId) || '');
     const pin = String((data && data.pin) || '');
     if (!entryId || !pin || pin.length > 64) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.');
+    if (!ENTRY_ID_RE.test(entryId)) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.'); /* 계정 ID 형식 검사 (문서 경로로 쓰이므로) */
     const ip = clientIp(context);
     const reqH = ((context && context.rawRequest) && context.rawRequest.headers) || {};
     const auditMeta = {
