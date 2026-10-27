@@ -2738,6 +2738,18 @@ exports.aiConcierge = functions
     const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim();
     const op = String((data && data.op) || '').trim();
 
+        /* 번호 형식 확인 결과만 (원문 X): 정상 → '010-암호화보관확인'(PC 가 정상으로 봄), 아니면 형식 오류 표시 */
+    function phoneCheckLabel(raw) {
+      let d = String(raw || '').replace(/\D/g, '');
+      if (d.startsWith('82') && d.length >= 11) d = '0' + d.slice(2);
+      if (!/^010\d{8}$/.test(d)) return '형식오류';
+      const fake = /^(\d)\1{3}$/;
+      if (fake.test(d.slice(3, 7)) && fake.test(d.slice(7, 11))) return '반복번호의심';
+      return '010-암호화보관확인';
+    }
+    /* 승인·보류 사유 등 기록에 들어가는 글에서 전화번호 모양은 가림 (state.logs 는 회원 전원이 읽음) */
+    function scrubPhones(t) { return String(t == null ? '' : t).replace(/(?:\+?82[\s.-]?|0)1[016789][\s.-]?\d{3,4}[\s.-]?\d{4}/g, '010-****-****'); }
+
     /* PC 관제탑이 켜졌을 때 클라우드(Firestore)에 밀려 있던 미처리 안건 + 신규 신청서/프로필 변경 건을 수거해 가는 전용 동기화 엔드포인트 */
     if (op === 'pc_sync_pull') {
       const syncKey = String((data && data.sync_key) || '').trim();
@@ -2777,7 +2789,9 @@ exports.aiConcierge = functions
         let phoneStr = '';
         try {
           const sc = (await db.doc('sendContacts/' + p.id).get()).data();
-          if (sc && sc.enc) phoneStr = decPhone(sc.enc) || '010-암호화보관확인';
+          /* 번호 원문은 PC 로 내보내지 않음 (2026-10-27 보안 검토: 승인 사유·텔레그램·state.logs 로 번호가 새던 경로) —
+             서버에서 형식만 확인해 PC 가 이미 아는 표시값으로 보냄 */
+          if (sc && sc.enc) phoneStr = phoneCheckLabel(decPhone(sc.enc));
           else if (sc && sc.ph) phoneStr = '010-암호화보관확인';
         } catch (e) {}
         if (!phoneStr) {
@@ -2898,17 +2912,17 @@ exports.aiConcierge = functions
             const welcomeText = (!ent.isMatchmaker && polishTip) ? (baseWelcome + '\n\n' + polishTip) : baseWelcome;
             msgs.push({ id: nodeCrypto.randomUUID(), entryId: ent.id, from: 'admin', text: welcomeText, at: nowIso, auto: true });
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '신청 자동 승인' + (polishTip ? '(소개글 다듬기 팁 안내)' : '') + ' · ' + (ent.nickname || '')),
-              { eid: ent.id, why: clip(approveMap[p.id].reason, 300) }));
+              { eid: ent.id, why: clip(scrubPhones(approveMap[p.id].reason), 300) }));
           } else if (holdMap[p.id]) {
             const heldCopy = Object.assign({}, p, {
-              heldReason: holdMap[p.id].hold_reason || '프로필 사진 및 소개글 보완이 필요해요.',
+              heldReason: scrubPhones(holdMap[p.id].hold_reason) || '프로필 사진 및 소개글 보완이 필요해요.',
               heldAt: nowIso,
               aiAuditedAt: nowIso
             });
             nextPend.push(heldCopy);
             heldEntries.push(heldCopy);
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '신청 보완 요청(보류) · ' + (heldCopy.nickname || '')),
-              { eid: heldCopy.id, why: clip(holdMap[p.id].reason || heldCopy.heldReason, 300) }));
+              { eid: heldCopy.id, why: clip(scrubPhones(holdMap[p.id].reason || heldCopy.heldReason), 300) }));
           } else {
             nextPend.push(p);
           }
@@ -2926,7 +2940,7 @@ exports.aiConcierge = functions
               label: clip(x && x.label, 40), before: clip(x && x.before, 200), after: clip(x && x.after, 200), note: clip(x && x.note, 80)
             }));
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '프로필 변경 확인 완료 · ' + (c.nickname || '')),
-              { eid: e.id, why: clip(confirmMap[e.id].reason, 300), chg }));
+              { eid: e.id, why: clip(scrubPhones(confirmMap[e.id].reason), 300), chg }));
             return c;
           }
           if (flagMap[e.id]) {
@@ -2956,8 +2970,23 @@ exports.aiConcierge = functions
     if (!apiKey && !ollamaKey && !anthropicKey) throw new HttpsError('failed-precondition', 'AI 컨시어지 키가 준비되지 않았어요.');
 
     const isAdmin = !!(context.auth.token && context.auth.token.admin === 1);
+    /* 익명 손님 토큰으로는 AI 를 못 쓰게 (2026-10-27 보안 검토: 누구나 주인 키로 아무 글이나 생성할 수 있었음) */
+    const tok = context.auth.token || {};
+    if (!isAdmin && tok.m !== 1 && tok.p !== 1) throw new HttpsError('permission-denied', '로그인한 회원만 쓸 수 있어요.');
+    /* 제보자 이름은 앱이 보낸 값을 믿지 않고 서버가 토큰으로 정함 ('관리자'라고 사칭해 AI 판단을 바꾸는 것 차단) */
+    const serverAuthor = async () => {
+      if (isAdmin) return '관리자(베니)';
+      let nick = '';
+      try {
+        const st = (await db.doc('app/state').get()).data() || {};
+        const me = (st.entries || []).concat(st.pendingEntries || []).find((e) => e && e.id === context.auth.uid);
+        nick = clip(me && me.nickname, 20).replace(/[\[\]<>]/g, '');
+      } catch (e) {}
+      return (tok.m === 1 ? '회원' : '신청자') + (nick ? ' ' + nick : '');
+    };
 
     if (op === 'heal_list') {
+      if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 볼 수 있어요.');
       const qs = await db.collection('aiHealTickets').orderBy('created_at', 'desc').limit(25).get();
       const tickets = [];
       qs.forEach((d) => tickets.push(d.data()));
@@ -3233,7 +3262,7 @@ exports.aiConcierge = functions
     }
 
     if (op === 'confirm_forward') {
-      const author = String((data && data.author) || '회원').slice(0, 60);
+      const author = await serverAuthor();
       const summary = String((data && data.summary) || (data && data.message) || '').trim().slice(0, 600);
       const rawMsg = String((data && data.message) || '').trim().slice(0, 1000);
       const tid = 'qna-' + Date.now().toString(36);
@@ -3262,7 +3291,7 @@ exports.aiConcierge = functions
     if (op === 'heal_submit') {
       const msg = String((data && data.message) || '').trim().slice(0, 2000);
       if (!msg) throw new HttpsError('invalid-argument', '불편한 점이나 요청 내용을 입력해 주세요.');
-      const author = String((data && data.author) || (isAdmin ? '관리자(베니)' : '회원')).slice(0, 60);
+      const author = await serverAuthor();
       const sctx = (data && typeof data.screen_context === 'object' && data.screen_context) ? data.screen_context : {};
       const rawHist = Array.isArray(data && data.history) ? data.history.slice(-6) : [];
       const histText = rawHist.length
