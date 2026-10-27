@@ -251,6 +251,11 @@ exports.memberLogin = functions
         if (held) throw held;
       }
     }
+    /* 탈취됐던 계정이 맞는 PIN 으로 들어옴 = 새 PIN 을 받은 본인 (옛 쉬운 PIN 은 위에서 거부됨) →
+       본인이 옛 PIN 을 먼저 넣어 자동으로 감시 목록에 오른 그 IP 는 빼 줌 (2026-10-27 수달 헛경고). 상수로 박힌 공격자 IP 는 그대로 */
+    if (BREACHED_IDS.has(entry.id) && !WATCH_IPS.includes(ip)) {
+      await db.doc('security/watch').set({ ips: admin.firestore.FieldValue.arrayRemove(ip) }, { merge: true }).catch(() => {});
+    }
     await db.collection('loginAudit').add(Object.assign({ status: 'ok', nickname: entry.nickname }, auditMeta)).catch(() => {});
     {
       const o = Object.assign({}, audO, { status: 'ok' });
@@ -2091,7 +2096,8 @@ async function suspicionOf(o) {
   if (!o.origin) reasons.push('접속 사이트 정보 없음(스크립트 의심)');
   else if (o.origin.indexOf(APP_ORIGIN) !== 0) reasons.push('앱 밖 사이트에서 접속(' + o.origin.slice(0, 60) + ')');
   if (!/Mozilla\//.test(o.ua || '')) reasons.push('일반 브라우저 아님');
-  if (o.entry && BREACHED_IDS.has(o.entry.id)) reasons.push('탈취 이력 계정');
+  /* 로그인 성공·앱 접속은 새 PIN(쉬운 옛 PIN 은 거부됨)·새 세션(옛 세션은 끊김)이라 본인 → 실패·차단 시도에만 붙임 */
+  if (o.entry && BREACHED_IDS.has(o.entry.id) && o.status !== 'ok' && o.status !== 'access') reasons.push('탈취 이력 계정');
   if (o.entry && o.entry.lastSeenAt && o.status !== 'access') {
     const days = Math.floor((Date.now() - Date.parse(o.entry.lastSeenAt)) / 86400000);
     if (days >= 30) reasons.push(days + '일 만의 접속');
