@@ -61,17 +61,24 @@ service cloud.firestore {
       allow read: if isAdmin() || isSelf(entryId)
                   || (signedIn() && request.auth.uid in resource.data.get('viewers', []));
       allow create: if isAdmin()
-                    || ((isMember() || isSelf(entryId)) && request.resource.data.keys().hasOnly(['photos']));
+                    || ((isMember() || isSelf(entryId)) && request.resource.data.keys().hasOnly(['photos'])
+                        && request.resource.data.photos.size() <= 3);   // 앱·서버와 같은 최대 3장 (2026-10-27)
       allow update: if isAdmin()
                     || ((isSelf(entryId) || (signedIn() && request.auth.uid in resource.data.get('owners', [])))
-                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['photos']));
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['photos'])
+                        && request.resource.data.photos.size() <= 3);
       allow delete: if isAdmin() || isSelf(entryId)
                     || (signedIn() && request.auth.uid in resource.data.get('owners', []));
     }
 
     // 푸시 토큰 — 본인 것만, 관리자는 전체(알림 설정 확인용)
     match /pushTokens/{entryId} {
-      allow read, write: if isAdmin() || isSelf(entryId);
+      allow read, delete: if isAdmin() || isSelf(entryId);
+      // 쓰기: 관리자, 또는 로그인한 회원·승인대기 본인만 + 앱이 쓰는 필드만·토큰 10개까지 (2026-10-27)
+      allow create, update: if isAdmin()
+                    || (isSelf(entryId) && (request.auth.token.m == 1 || request.auth.token.p == 1)
+                        && request.resource.data.keys().hasOnly(['tokens', 'nickname', 'updatedAt'])
+                        && request.resource.data.get('tokens', []).size() <= 10);
     }
 
     // 관리자 전용: 회원별 실명·번호·알게 된 경로(관리자 키로 암호화된 값) — 관리자만

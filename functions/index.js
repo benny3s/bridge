@@ -149,7 +149,7 @@ function adminPasswordOk(pw, a) {
    ③ IP 차단·잠금·state 읽기를 동시에 */
 exports.memberLogin = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 20, memory: '1GB' })
+  .runWith({ maxInstances: 10, timeoutSeconds: 20, memory: '1GB' })
   .https.onCall(async (data, context) => {
     if (data && data.ping) return { ok: true };
     const entryId = String((data && data.entryId) || '');
@@ -369,7 +369,7 @@ async function rateLimitAdminSms() {
 
 exports.adminLogin = functions
   .region('asia-northeast3')
-  .runWith({ secrets: ['NUM_ENC_KEY', 'SOLAPI_KEY', 'SOLAPI_SECRET', 'SOLAPI_SENDER'], timeoutSeconds: 30, memory: '1GB' })
+  .runWith({ maxInstances: 3, secrets: ['NUM_ENC_KEY', 'SOLAPI_KEY', 'SOLAPI_SECRET', 'SOLAPI_SENDER'], timeoutSeconds: 30, memory: '1GB' })
   .https.onCall(async (data, context) => {
     if (data && data.ping) return { ok: true };   /* 관리자 로그인 창 열 때 미리 깨우기 */
     data = data || {};
@@ -431,7 +431,7 @@ exports.adminLogin = functions
    approve/deny/revoke/setPhones 는 부른 기기가 믿을 기기여야 함 */
 exports.adminDevice = functions
   .region('asia-northeast3')
-  .runWith({ secrets: ['NUM_ENC_KEY'], timeoutSeconds: 30, memory: '256MB' })
+  .runWith({ maxInstances: 3, secrets: ['NUM_ENC_KEY'], timeoutSeconds: 30, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (claimsOf(context).admin !== 1) throw new HttpsError('permission-denied', '관리자만 쓸 수 있어요.');
     data = data || {};
@@ -504,7 +504,7 @@ exports.adminDevice = functions
    → 그 회원은 앱을 열면 새 PIN 정하기 창, 흔한 PIN 로그인은 막힘. PIN 자체는 돌려주지 않음(종류만) */
 exports.adminPinAudit = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 540, memory: '2GB' })
+  .runWith({ maxInstances: 1, timeoutSeconds: 540, memory: '2GB' })
   .https.onCall(async (data, context) => {
     if (claimsOf(context).admin !== 1) throw new HttpsError('permission-denied', '관리자만 쓸 수 있어요.');
     const state = (await db.doc('app/state').get()).data() || {};
@@ -536,7 +536,7 @@ exports.adminPinAudit = functions
 /* 관리자: VPN 로그인 검토 목록·허용·거부 (loginHold, 서버 전용) */
 exports.adminLoginHold = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 30, memory: '256MB' })
+  .runWith({ maxInstances: 3, timeoutSeconds: 30, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (claimsOf(context).admin !== 1) throw new HttpsError('permission-denied', '관리자만 쓸 수 있어요.');
     const op = String((data && data.op) || 'list');
@@ -563,7 +563,7 @@ exports.adminLoginHold = functions
 
 exports.adminSecurityLog = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 30, memory: '256MB' })
+  .runWith({ maxInstances: 3, timeoutSeconds: 30, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (claimsOf(context).admin !== 1) throw new HttpsError('permission-denied', '관리자만 쓸 수 있어요.');
     const [la, ac] = await Promise.all([
@@ -585,7 +585,7 @@ exports.adminSecurityLog = functions
 /* 회원 전화번호를 안전 저장 (가입/수정 시 클라이언트가 호출). PIN 검증으로 본인만 저장 가능. */
 exports.savePhone = functions
   .region('asia-northeast3')
-  .runWith({ secrets: ['NUM_ENC_KEY'], timeoutSeconds: 20, memory: '256MB' })
+  .runWith({ maxInstances: 5, secrets: ['NUM_ENC_KEY'], timeoutSeconds: 20, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', '로그인이 필요해요.');
     const entryId = String((data && data.entryId) || '');
@@ -608,7 +608,7 @@ exports.savePhone = functions
    원본 번호는 저장하지 않고 HMAC만 보관 → 상대 번호를 알 필요 없이 매칭만 가능. */
 exports.setAcqFilter = functions
   .region('asia-northeast3')
-  .runWith({ secrets: ['NUM_ENC_KEY'], timeoutSeconds: 30, memory: '256MB' })
+  .runWith({ maxInstances: 5, secrets: ['NUM_ENC_KEY'], timeoutSeconds: 30, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', '로그인이 필요해요.');
     const entryId = String((data && data.entryId) || '');
@@ -650,7 +650,7 @@ exports.setAcqFilter = functions
 /* 지인 필터 전체 삭제 (내가 건 필터만 삭제. 상대가 나를 걸어둔 건 그대로 → 서로 안 보일 수 있음) */
 exports.clearAcqFilter = functions
   .region('asia-northeast3')
-  .runWith({ secrets: ['NUM_ENC_KEY'], timeoutSeconds: 20, memory: '256MB' })
+  .runWith({ maxInstances: 5, secrets: ['NUM_ENC_KEY'], timeoutSeconds: 20, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', '로그인이 필요해요.');
     const entryId = String((data && data.entryId) || '');
@@ -676,7 +676,7 @@ exports.clearAcqFilter = functions
 /* 내 명단에서 숨길 회원 ID 목록 (양방향): 내가 건 사람 + 나를 건 사람. 블록 관계는 노출 안 함(ID만 반환) */
 exports.getHiddenIds = functions
   .region('asia-northeast3')
-  .runWith({ secrets: ['NUM_ENC_KEY'], timeoutSeconds: 30, memory: '256MB' })
+  .runWith({ maxInstances: 10, secrets: ['NUM_ENC_KEY'], timeoutSeconds: 30, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', '로그인이 필요해요.');
     const entryId = String((data && data.entryId) || '');
@@ -919,7 +919,7 @@ const REMIND_3_MS = 7 * 24 * 60 * 60 * 1000; /* 7일 — 앱 관리자 메시지
 
 exports.remindPending = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 60, memory: '256MB' })
+  .runWith({ maxInstances: 1, timeoutSeconds: 60, memory: '256MB' })
   .pubsub.schedule('every 1 hours')
   .timeZone('Asia/Seoul')
   .onRun(async () => {
@@ -1021,7 +1021,7 @@ function solapiSend(apiKey, apiSecret, from, to, text) {
 
 exports.adminSendSms = functions
   .region('asia-northeast3')
-  .runWith({ secrets: ['NUM_ENC_KEY', 'SOLAPI_KEY', 'SOLAPI_SECRET', 'SOLAPI_SENDER', 'SMS_ADMIN_TOKEN'], timeoutSeconds: 120, memory: '256MB' })
+  .runWith({ maxInstances: 2, secrets: ['NUM_ENC_KEY', 'SOLAPI_KEY', 'SOLAPI_SECRET', 'SOLAPI_SENDER', 'SMS_ADMIN_TOKEN'], timeoutSeconds: 120, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', '로그인이 필요해요.');
     const token = String((data && data.token) || '');
@@ -1198,7 +1198,7 @@ function claimsOf(context) { return (context.auth && context.auth.token) || {}; 
 
 exports.applicantAction = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 30, memory: '256MB' })
+  .runWith({ maxInstances: 10, timeoutSeconds: 30, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new HttpsError('unauthenticated', '연결 인증이 안 됐어요. 새로고침 후 다시 시도해주세요.');
     data = data || {};
@@ -1661,7 +1661,7 @@ async function refreshChatViewers(before, after) {
 
 exports.chatAction = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 20, memory: '256MB' })
+  .runWith({ maxInstances: 15, timeoutSeconds: 20, memory: '256MB' })
   .https.onCall(async (data, context) => {
     data = data || {};
     /* 미리 깨우기: 앱이 열릴 때 한 번 호출해 콜드 스타트(약 5초)를 미리 치름 — 데이터는 읽지 않음 */
@@ -1830,7 +1830,7 @@ const RESTORE_READ_TIME = '2026-10-26T13:49:00Z';   /* 첫 가림 실행(13:50:0
 const STRICT_PHONE_RE = /01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}/;
 exports.adminRestoreMaskedChats = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 300, memory: '512MB' })
+  .runWith({ maxInstances: 1, timeoutSeconds: 300, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (!(context.auth && context.auth.token && context.auth.token.admin === 1)) throw new HttpsError('permission-denied', '관리자만 할 수 있어요.');
     const dryRun = !!(data && data.dryRun);
@@ -2506,7 +2506,7 @@ async function wipeCollection(name) {
 }
 exports.betaSeed = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 120, memory: '512MB' })
+  .runWith({ maxInstances: 1, timeoutSeconds: 120, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (!isBetaProject()) throw new HttpsError('permission-denied', '베타 서버 전용 기능이에요.');
     const cur = await db.doc('app/state').get();
@@ -2540,7 +2540,7 @@ exports.betaSeed = functions
 /* ══ 관리자: 인앱 채팅 사용 통계 (2026-10-10) — 개수·시각만 집계, 대화 내용은 읽어 돌려주지 않음 ══ */
 exports.chatStats = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 60, memory: '512MB' })
+  .runWith({ maxInstances: 2, timeoutSeconds: 60, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (!(context.auth && context.auth.token && context.auth.token.admin === 1)) throw new HttpsError('permission-denied', '관리자만 볼 수 있어요.');
     const now = Date.now(), D = 86400000;
@@ -2726,7 +2726,7 @@ function callAnthropicHaiku(apiKey, sysPrompt, userPrompt, maxTokens, temperatur
 
 exports.aiConcierge = functions
   .region('asia-northeast3')
-  .runWith({ timeoutSeconds: 30, memory: '512MB' })
+  .runWith({ maxInstances: 5, timeoutSeconds: 30, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (data && (data.ping || data.op === 'ping')) return { ok: true, pong: 1 };
     const apiKey = (process.env.GROQ_API_KEY || '').trim();
