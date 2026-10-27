@@ -39,6 +39,9 @@ if (process.env.ZONES_ON === '1') h = h.replace('var ZONES_ON = false;', 'var ZO
 /* 1) Firebase 접속 설정 → 베타 */
 rep(/var firebaseConfig = \{[\s\S]*?\};/, 'var firebaseConfig = ' + JSON.stringify(BETA, null, 4).replace(/\n/g, '\n  ') + ';', 'firebaseConfig');
 
+/* 1-1) App Check reCAPTCHA 키 → 베타 프로젝트 키 (Enterprise 키는 프로젝트마다 따로, 2026-10-27) */
+rep(/var RECAPTCHA_SITE_KEY = '[^']*';/, "var RECAPTCHA_SITE_KEY = '6Lf3gQIuAAAAABb-XSFTIwibLjlMiKXaqpR-WnA8';", 'RECAPTCHA_SITE_KEY');
+
 /* 2) 저장소 분리 + 검색 노출 막기 + 제목 — <head> 바로 뒤, 다른 스크립트보다 먼저 */
 const headInject = `<meta name="robots" content="noindex,nofollow">
 <script>/* BETA: 운영과 같은 주소라 저장소 키를 분리 */(function(){var P='beta:';var S=Storage.prototype,g=S.getItem,s=S.setItem,r=S.removeItem;S.getItem=function(k){return g.call(this,P+k)};S.setItem=function(k,v){return s.call(this,P+k,v)};S.removeItem=function(k){return r.call(this,P+k)};})();</script>`;
