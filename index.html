@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-28-479';
+  var APP_VERSION = '2026-10-28-480';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -10797,7 +10797,7 @@
         joinedAt: entry.submittedAt || '',
         reason: entry.deleteReason || '',
         connectedN: connected.length,
-        countable: !entry.testAccount && !(entry.managedBy && entry.ownerSelf),   /* 누적 가입 집계 대상 (2026-10-15) */
+        countable: !entry.testAccount && !(entry.managedBy && entry.ownerSelf) && !/^QA_/i.test(entry.nickname || ''),   /* 누적 가입 집계 대상 (2026-10-15, QA_ 는 닉네임이 state 에 안 남아 여기서 판단 — v479) */
         deletedAt: new Date().toISOString()
       };
       /* 탈퇴 전에 프로필을 '-' 로 지웠으면 서버가 남긴 원래 값(관리자 전용 prevProfile)으로 기록을 채움 (v477) */
