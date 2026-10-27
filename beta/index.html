@@ -1086,7 +1086,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-27-474';
+  var APP_VERSION = '2026-10-27-475';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -5036,6 +5036,7 @@
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data() || {}, upd = {};
           al.issues.forEach(function (i) {
+            if (!i || !i.coll) return;   /* '비밀값 쓰기 차단' 경고는 서버가 이미 막아 되돌릴 게 없음 (예전엔 state 에 'undefined' 필드가 생겼음) */
             if (i.coll === 'logs') {
               var cur = upd.logs || (s.logs || []).slice(), have = {};
               cur.forEach(function (l) { have[l.id] = 1; });
@@ -9036,7 +9037,7 @@
         else body = escapeHtml(a.target || '') + ' · ' + (a.fails || 0) + '번 틀림';
         body += secAiLine(a.triage);
         var btns = '';
-        if (!a.resolved && a.type === 'tamper' && !a.restoredAt) btns += '<button type="button" class="card-btn danger" data-action="sec-restore" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">되돌리기</button> ';
+        if (!a.resolved && a.type === 'tamper' && !a.restoredAt && (a.issues || []).some(function (i) { return i && i.coll; })) btns += '<button type="button" class="card-btn danger" data-action="sec-restore" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">되돌리기</button> ';
         if (!a.resolved && !secQuiet(a)) btns += '<button type="button" class="card-btn" data-action="sec-ack" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">확인함</button>';
         if (a.restoredAt) body += ' <span style="color:#137333;">(되돌림 ' + fmtDate(a.restoredAt) + ')</span>';
         var calm = a.resolved || secQuiet(a);
