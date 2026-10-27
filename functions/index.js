@@ -1081,7 +1081,14 @@ function buildPublicView(state) {
     if (e.pinExpiresAt) d.pinExpiresAt = e.pinExpiresAt;
     return d;
   };
-  const loginDir = entries.map((e) => dirOf(e, false)).concat((state.pendingEntries || []).map((e) => dirOf(e, true)));
+  /* 공개 로그인 목록에서 휴면 계정은 빼고, 일반 계정의 'PIN 있음' 표시도 뺌 (2026-10-27 — 10-26 대입 공격이 이 표시로 대상 155명을 골랐음).
+     대리(주선자 관리) 계정만 유효한 임시 PIN 이 있을 때 넣음(앱 로그인 창이 그 기준으로 보여 줌). 닉네임 중복은 서버(nickTaken)가 확인 */
+  const pinLive = (e) => !!(e.pinAuth || e.pinHash || e.pinSet) && !(e.pinExpiresAt && Date.now() > Date.parse(e.pinExpiresAt));
+  const loginDir = entries.filter((e) => !e.deactivated && (!e.managedBy || pinLive(e))).map((e) => {
+    const d = dirOf(e, false);
+    if (!e.managedBy) delete d.pinOn;
+    return d;
+  }).concat((state.pendingEntries || []).map((e) => { const d = dirOf(e, true); if (!e.managedBy) delete d.pinOn; return d; }));
   const reports = state.coupleReports || [];
   const reviews = reports.filter((r) => r.confirmed && r.review && (r.vis === 'public' || r.vis === 'anon'))
     .map((r) => ({ confirmed: true, review: clip(r.review, 300), vis: r.vis, byNick: r.vis === 'public' ? (r.byNick || '') : '', partner: r.vis === 'public' ? (r.partner || '') : '', confirmedAt: r.confirmedAt || null, at: r.at || null }));
@@ -2095,6 +2102,25 @@ async function suspicionOf(o) {
   if (o.status === 'notfound') reasons.push('없는 계정');
   return { reasons, intel, device };
 }
+/* 신청서 외부 공격 신호 (AI 자동 승인 전 서버 확인, 2026-10-27) — 반환: 사유 목록(없으면 []) */
+async function signupRisk(id) {
+  const su = (await db.collection('signups').doc(id).get()).data();
+  if (!su || !su.realIp) return ['신청 기록 없음(앱 밖 경로 의심)'];
+  const ip = su.realIp, why = [];
+  const [watch, intel, li, same] = await Promise.all([
+    watchIpSet().catch(() => new Set(WATCH_IPS)), ipIntel(ip),
+    db.collection('loginIp').doc(guardKey('ip_', ip)).get().then((d) => d.data()).catch(() => null),
+    db.collection('signups').where('realIp', '==', ip).limit(5).get().catch(() => null)
+  ]);
+  if (watch.has(ip)) why.push('공격·차단 이력 IP');
+  if (li && (li.blockedUntil || (Array.isArray(li.fails) && li.fails.length >= 3))) why.push('이 IP 로그인 실패 이력');
+  if (intel && intel.dcvpn) why.push('VPN·데이터센터(' + (intel.provider || intel.type || '') + ')');
+  const country = String(su.country || (intel && intel.country) || '').toUpperCase();
+  if (country && country !== 'KR') why.push('해외 접속(' + country + ')');
+  if (!/Mozilla\//.test(su.ua || '')) why.push('일반 브라우저 아님');
+  if (same && same.size > 1) why.push('같은 IP 다른 신청 ' + (same.size - 1) + '건');
+  return why;
+}
 /* 수상함 푸시는 같은 IP·계정 10분에 1번, 전체 1시간 20번까지 (대입 공격 때 폰이 수백 번 울리지 않게). 기록(securityAlerts)은 매번 남김 */
 async function alertAllowed(key) {
   const ref = db.doc('security/alertRate');
@@ -2738,7 +2764,15 @@ exports.aiConcierge = functions
     const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim();
     const op = String((data && data.op) || '').trim();
 
-        /* 번호 형식 확인 결과만 (원문 X): 정상 → '010-암호화보관확인'(PC 가 정상으로 봄), 아니면 형식 오류 표시 */
+        /* PC 관제탑 전용 열쇠 (2026-10-27): 예전엔 외부 AI API 키(Ollama/Groq) 앞 24자였음 — 그 키는 PC 의 여러 도구가 같이 쓰고
+       AI 회사 쪽 사고로도 샐 수 있어, 새면 로그인 없이 신청서를 받아 가고 승인까지 할 수 있었음 → 이 용도만의 무작위 열쇠(PC_SYNC_KEY)로 */
+    function pcSyncKeyOk(d) {
+      const want = String(process.env.PC_SYNC_KEY || '').trim();
+      const got = String((d && d.sync_key) || '').trim();
+      if (want.length < 32 || got.length !== want.length) return false;
+      return nodeCrypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
+    }
+    /* 번호 형식 확인 결과만 (원문 X): 정상 → '010-암호화보관확인'(PC 가 정상으로 봄), 아니면 형식 오류 표시 */
     function phoneCheckLabel(raw) {
       let d = String(raw || '').replace(/\D/g, '');
       if (d.startsWith('82') && d.length >= 11) d = '0' + d.slice(2);
@@ -2752,9 +2786,7 @@ exports.aiConcierge = functions
 
     /* PC 관제탑이 켜졌을 때 클라우드(Firestore)에 밀려 있던 미처리 안건 + 신규 신청서/프로필 변경 건을 수거해 가는 전용 동기화 엔드포인트 */
     if (op === 'pc_sync_pull') {
-      const syncKey = String((data && data.sync_key) || '').trim();
-      const expected = (ollamaKey || apiKey).slice(0, 24);
-      if (!expected || syncKey !== expected) throw new HttpsError('permission-denied', '동기화 키 불일치');
+      if (!pcSyncKeyOk(data)) throw new HttpsError('permission-denied', '동기화 키 불일치');
       const qs = await db.collection('aiHealTickets').where('pc_synced', '==', false).limit(30).get();
       const pending = [];
       const batch = db.batch();
@@ -2853,9 +2885,7 @@ exports.aiConcierge = functions
 
     /* PC 관제탑이 부관리자 심사(신규 신청 승인/보류 및 프로필 변경 검토)를 마친 뒤 결과를 Firestore에 반영 */
     if (op === 'pc_coadmin_apply') {
-      const syncKey = String((data && data.sync_key) || '').trim();
-      const expected = (ollamaKey || apiKey).slice(0, 24);
-      if (!expected || syncKey !== expected) throw new HttpsError('permission-denied', '동기화 키 불일치');
+      if (!pcSyncKeyOk(data)) throw new HttpsError('permission-denied', '동기화 키 불일치');
       const pendRes = Array.isArray(data && data.pending_results) ? data.pending_results : [];
       const editRes = Array.isArray(data && data.edit_results) ? data.edit_results : [];
       const approveMap = {}, holdMap = {}, confirmMap = {}, flagMap = {};
@@ -2872,9 +2902,17 @@ exports.aiConcierge = functions
         }
       });
 
+      /* AI 가 승인이라고 해도 서버가 신청 기록(signups)으로 외부 공격 신호를 먼저 확인 (2026-10-27, Benny: 'AI 가 외부 공격인지 판단해 보류').
+         규칙은 코드로 — 신청서 글로 AI 를 속여도 이 확인은 못 넘음. 신호가 있으면 승인 대신 관리자 확인 대기(신청자에겐 평소처럼 '심사 중') */
+      const riskMap = {};
+      for (const id of Object.keys(approveMap)) {
+        const why = await signupRisk(id).catch(() => ['신청 기록 확인 실패']);
+        if (why.length) { riskMap[id] = why; delete approveMap[id]; }
+      }
       const stateRef = db.doc('app/state');
       const approvedEntries = [];
       const heldEntries = [];
+      const riskEntries = [];
       await db.runTransaction(async (tx) => {
         const snap = await tx.get(stateRef);
         const s = snap.data() || {};
@@ -2913,6 +2951,12 @@ exports.aiConcierge = functions
             msgs.push({ id: nodeCrypto.randomUUID(), entryId: ent.id, from: 'admin', text: welcomeText, at: nowIso, auto: true });
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '신청 자동 승인' + (polishTip ? '(소개글 다듬기 팁 안내)' : '') + ' · ' + (ent.nickname || '')),
               { eid: ent.id, why: clip(scrubPhones(approveMap[p.id].reason), 300) }));
+          } else if (riskMap[p.id]) {
+            const rc = Object.assign({}, p, { aiAuditedAt: nowIso, aiRisk: riskMap[p.id].slice(0, 6), aiRiskAt: nowIso });
+            nextPend.push(rc);
+            riskEntries.push(rc);
+            logs.push(Object.assign(logItem('admin', 'AI 부관리자', '승인 보류 — 관리자 확인 필요 · ' + (rc.nickname || '')),
+              { eid: rc.id, why: clip('외부 공격 신호: ' + riskMap[p.id].join(', '), 300) }));
           } else if (holdMap[p.id]) {
             const heldCopy = Object.assign({}, p, {
               heldReason: scrubPhones(holdMap[p.id].hold_reason) || '프로필 사진 및 소개글 보완이 필요해요.',
@@ -2963,7 +3007,10 @@ exports.aiConcierge = functions
       for (const h of heldEntries) {
         await sendTo(h.id, '📝 베니브릿지 신청서 보완 안내', h.heldReason || '신청서 보완 안내가 도착했어요.', { route: 'mine' }).catch(() => {});
       }
-      return { ok: true, approved: approvedEntries.length, held: heldEntries.length };
+      for (const r of riskEntries) {
+        await sendToAdmin('🛂 AI 승인 보류 · ' + (r.nickname || ''), '외부 공격 신호: ' + r.aiRisk.join(', ') + ' — 관리자탭 승인 대기에서 직접 확인', { route: 'admin' }).catch(() => {});
+      }
+      return { ok: true, approved: approvedEntries.length, held: heldEntries.length, riskHeld: riskEntries.map((r) => ({ id: r.id, nickname: r.nickname || '', why: r.aiRisk })) };
     }
 
     if (!context.auth) throw new HttpsError('unauthenticated', '연결 확인 후 다시 시도해 주세요.');
@@ -3364,6 +3411,14 @@ exports.aiConcierge = functions
         cleanReply = '보안 및 운영 정책상 해당 내용은 안내해 드리거나 처리할 수 없어요 😊';
       } else if (/직접\s*메시지를?\s*보내는\s*기능|별도로?\s*제공되지|고객센터|운영진\s*채널/.test(cleanReply)) {
         cleanReply = '네! 제가 관리자님께 바로 메시지를 전달해 드릴 수 있어요 😊 어떤 내용을 전해드릴까요? 편하게 말씀해 주세요!';
+      }
+      /* AI 자동 수리(화면 CSS 자동 변경) 중단 (2026-10-27, Benny): 고칠 점이 파악되면 VOC 로 — 요약해서 관리자에게 전달할지 물어봄 */
+      if (decision === 'AUTO_FIX' || decision === 'BETA_AND_ASK') {
+        decision = 'ASK_FORWARD_ADMIN';
+        tier = 0;
+        rawCss = '';
+        parsed.admin_summary = String(parsed.admin_summary || parsed.problem_summary || parsed.fix_spec || msg).trim();
+        cleanReply = '말씀해 주신 불편을 아래처럼 정리해서 관리자님께 전달해 드릴까요? 😊';
       }
       const tid = 'heal-' + Date.now().toString(36);
       const nowIso = new Date().toISOString();
