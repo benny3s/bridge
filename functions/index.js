@@ -107,11 +107,13 @@ async function pinRecord(id, state) {
 }
 /* 로그인·본인 확인용 PIN 은 서버 금고(secrets)에 있는 값만 믿는다 (2026-10-27).
    state(회원이 쓸 수 있는 문서)에 들어온 PIN 값은 금고로 옮겨지기 전이라도 로그인에 쓰지 않음.
-   새 PIN 은 sweepSecrets 가 몇 초 안에 금고로 옮기므로 정상 회원 영향 없음(가입은 stashSecrets 로 바로 금고). */
+   새 PIN 은 sweepSecrets 가 몇 초 안에 금고로 옮기므로 정상 회원 영향 없음(가입은 stashSecrets 로 바로 금고).
+   entry.pinFrom(물려받기)도 state 값이라 믿지 않음 (2026-10-27 보안 검토): 회원이 남의 항목에 pinFrom=자기 id 를 써 넣고
+   sweepSecrets 가 지우기 전 몇 초 사이에 로그인하면 금고 PIN 이 없는 계정(PIN 회수·재설정 대기)을 자기 PIN 으로 열 수 있었음.
+   물려받기는 sweepSecrets 가 소유자 확인 뒤 금고로 복사하고, 그 전 로그인은 memberLogin 이 'unavailable'(잠시 뒤 다시)로 돌려보냄 */
 async function pinSourceFor(entry, state) {
-  let rec = await pinRecord(entry.id, null);
-  if (!rec.pinAuth && !rec.pinHash && entry.pinFrom) rec = await pinRecord(entry.pinFrom, null);
-  return Object.assign({ id: entry.id }, rec);
+  const rec = await pinRecord(entry.id, null);
+  return Object.assign({ id: entry.id, pinPending: !rec.pinAuth && !rec.pinHash && !!entry.pinFrom }, rec);
 }
 const ENTRY_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 /* PIN이 필요한 서버 기능(번호 저장·지인 필터) 공통 본인 확인: 서버 로그인 토큰이 그 계정이면 통과,
@@ -212,6 +214,8 @@ exports.memberLogin = functions
       throw new HttpsError('resource-exhausted', '이 계정은 PIN이 여러 번 틀려 보호를 위해 하루 동안 잠겼어요. 본인이시면 아래 \'PIN을 잊으셨나요? PIN 재설정 요청\'으로 관리자에게 새 PIN을 받아 주세요.');
     }
     const src = await pinSourceFor(entry, state);
+    /* 물려받은 PIN 이 아직 금고로 안 옮겨짐(주선자 전환 직후 몇 초) → 실패로 세지 않고 잠시 뒤 다시 (앱이 자동 재시도) */
+    if (src.pinPending) throw new HttpsError('unavailable', '계정을 정리하는 중이에요. 잠시 뒤 다시 시도해 주세요.');
     /* 흔한 PIN(1234·0000…)은 맞든 틀리든 같은 안내로 로그인 거부 (2026-10-26 대입 공격으로 4계정 탈취) — 맞으면 계정에 pinWeak 표시해 새 PIN 받게.
        같은 안내라 공격자는 그 PIN 이 맞았는지 알 수 없다 */
     if (COMMON_WEAK_PINS.has(pin)) {
