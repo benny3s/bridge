@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-28-478';
+  var APP_VERSION = '2026-10-28-479';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1511,7 +1511,7 @@
   var _adminKeyDoc = null;
   var _adminPrivUnsubs = [];
   var _authIsAdmin = false;
-  var ADMIN_PRIV_KEYS = ['realNameEnc', 'contactEnc', 'referrerEnc'];
+  var ADMIN_PRIV_KEYS = ['realNameEnc', 'contactEnc', 'referrerEnc', 'aiRisk'];
   function overlayAdminPriv(state) {
     if (!_authIsAdmin || !state || state._public) return state;
     ['entries', 'pendingEntries'].forEach(function (k) {
@@ -1520,6 +1520,9 @@
         ADMIN_PRIV_KEYS.forEach(function (f) { if (p[f] && !e[f]) e[f] = p[f]; });
       });
     });
+    /* 삭제 이력의 닉네임·사유 등은 관리자 전용 adminOnly/deleted_profiles 에 (v479 — 전엔 회원 누구나 읽는 state 에 있었음) */
+    var delP = _adminPriv.deleted_profiles;
+    if (delP) (state.deletedLog || []).forEach(function (t) { var p = delP[t.id]; if (p) Object.keys(p).forEach(function (k) { if (t[k] == null || t[k] === '') t[k] = p[k]; }); });
     if (_adminKeyDoc && _adminKeyDoc.wrappedPrivateKey && state.adminAuth && !state.adminAuth.wrappedPrivateKey) {
       state.adminAuth = { publicKeyJwk: state.adminAuth.publicKeyJwk || _adminKeyDoc.publicKeyJwk, salt: _adminKeyDoc.salt, iv: _adminKeyDoc.iv, wrappedPrivateKey: _adminKeyDoc.wrappedPrivateKey };
     }
@@ -10807,7 +10810,13 @@
         if (pp.birthYear && !(Number(tomb.birthYear) >= 1950)) { tomb.birthYear = pp.birthYear; filled = true; }
         if (filled) tomb.restoredNote = '탈퇴 전 회원이 프로필을 지움 → 지우기 전 값으로 기록';
       })();
-      db.runTransaction(function (tx) {
+      var admTomb = { nickname: tomb.nickname, gender: tomb.gender, birthYear: tomb.birthYear, region: tomb.region, reason: tomb.reason };
+      if (tomb.restoredNote) admTomb.restoredNote = tomb.restoredNote;
+      var pubTomb = { id: tomb.id, serial: tomb.serial, uid: tomb.uid, gender: tomb.gender, joinedAt: tomb.joinedAt,
+        connectedN: tomb.connectedN, countable: tomb.countable, deletedAt: tomb.deletedAt };
+      var admSet = {}; admSet[tomb.id] = admTomb;
+      tomb = pubTomb;
+      adminOnlyRef.doc('deleted_profiles').set(admSet, { merge: true }).then(function () { return db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
           var delSet = {}; delSet[id] = true;
@@ -10826,7 +10835,7 @@
           if (dl.length > 200) dl = dl.slice(dl.length - 200);
           tx.update(stateRef, { entries: newEntries, dateRequests: newRequests, joinRequests: newJoin, deletedLog: dl });
         });
-      }).then(function () {
+      }); }).then(function () {
         photosRef.doc(id).delete().catch(function () {});
         delete photoCache[id];
         if (entry.managedBy && entry.ownerSelf) { try { photosRef.doc(entry.managedBy).delete().catch(function () {}); pushTokensRef.doc(entry.managedBy).delete().catch(function () {}); } catch (e) {} } /* 껍데기 정리 */
@@ -11351,7 +11360,7 @@
           if (idx < 0) return;
           var entry = state.pendingEntries.splice(idx, 1)[0];
           if (!entry.serial) entry.serial = nextSerial(state);
-          delete entry.rejectedReason; delete entry.rejectedAt; delete entry.heldReason; delete entry.heldAt; delete entry.aiRisk; delete entry.aiRiskAt; /* 승인 시 반려/보류 흔적 제거 */
+          delete entry.rejectedReason; delete entry.rejectedAt; delete entry.heldReason; delete entry.heldAt; delete entry.aiRisk; delete entry.aiRiskAt; delete entry.aiRiskHeld; /* 승인 시 반려/보류 흔적 제거 */
           if (!entry.lastSeenAt) entry.lastSeenAt = new Date().toISOString(); /* 승인 시점을 최초 접속 기록으로 (이후 실제 접속 시 갱신) */
           var newEntries = (state.entries || []).concat([entry]);
           tx.update(stateRef, { pendingEntries: state.pendingEntries, entries: newEntries });
