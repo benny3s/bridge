@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-27-471';
+  var APP_VERSION = '2026-10-27-472';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1355,8 +1355,23 @@
   firebase.initializeApp(firebaseConfig);
   /* App Check (reCAPTCHA v3) — 봇/DoS 차단. 콘솔에서 '강제(enforce)'는 검증 후에 켜세요 */
   var RECAPTCHA_SITE_KEY = '6LcXXaktAAAAAAEVQHqK7mqctPxxj-OaD_Gf8svA';
-  /* App Check(reCAPTCHA)는 끔: 서버에서 강제하지 않아 보안 효과가 없고, 아이폰 사파리에서 토큰 실패·재시도가
-     모든 요청(로그인·데이터·사진)을 늦췄음. 다시 켜려면 reCAPTCHA 도메인 설정을 고친 뒤 서버 강제와 함께 */
+  /* App Check 감시 모드 (2026-10-27 다시 켬). 예전(v396)엔 키 도메인이 benny-meeting.com 뿐이고 Firebase 에 앱 등록도 안 돼
+     토큰이 늘 실패·재시도 → 아이폰이 느렸음. 지금은 도메인 benny3s.github.io 추가 + Fraud Defense(reCAPTCHA Enterprise)로 등록.
+     첫 화면을 늦추지 않게 페이지가 다 뜬 뒤 불러옴. 서버는 아직 강제 안 함(콘솔 App Check → API 에서 '확인된 요청' 비율만 봄) */
+  (function loadAppCheck() {
+    function go() {
+      var s = document.createElement('script');
+      s.src = 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check-compat.js';
+      s.async = true;
+      s.onload = function () {
+        try { firebase.appCheck().activate(new firebase.appCheck.ReCaptchaEnterpriseProvider(RECAPTCHA_SITE_KEY), true); }
+        catch (e) { try { console.warn('appCheck', e); } catch (e2) {} }
+      };
+      document.head.appendChild(s);
+    }
+    function later() { setTimeout(go, 1500); }
+    if (document.readyState === 'complete') later(); else window.addEventListener('load', later);
+  })();
   var db = firebase.firestore();
   var stateRef = db.collection('app').doc('state');
   /* ── 쓰기 서명: app/state 에 쓰는 모든 앱 쓰기에 쓴 사람(_w = 내 토큰 uid)과 새 난수(_wn)를 붙임.
