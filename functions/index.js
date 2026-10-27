@@ -1476,6 +1476,10 @@ async function recordNickChanges(before, after) {
     ['nickname', 'height', 'region', 'workplace', 'intro', 'idealType', 'dealbreaker'].forEach((k) => { if (!blank(b[k]) && blank(e[k])) wiped['prevProfile.' + k] = String(b[k]).slice(0, 600); });
     if (b.birthYear && Number(b.birthYear) >= 1950 && !(Number(e.birthYear) >= 1950)) wiped['prevProfile.birthYear'] = Number(b.birthYear);
     if (Object.keys(wiped).length) jobs.push(db.collection('adminOnly').doc(e.id).set({}, { merge: true }).then(() => db.collection('adminOnly').doc(e.id).update(wiped)));
+    const refilled = {};
+    ['nickname', 'height', 'region', 'workplace', 'intro', 'idealType', 'dealbreaker'].forEach((k) => { if (blank(b[k]) && !blank(e[k])) refilled['prevProfile.' + k] = admin.firestore.FieldValue.delete(); });
+    if (b.birthYear && !(Number(b.birthYear) >= 1950) && Number(e.birthYear) >= 1950) refilled['prevProfile.birthYear'] = admin.firestore.FieldValue.delete();
+    if (Object.keys(refilled).length) jobs.push(db.collection('adminOnly').doc(e.id).update(refilled).catch(() => {}));
   });
   await Promise.all(jobs);
 }
@@ -2371,7 +2375,7 @@ async function triageFacts(d) {
       sessionBeforeAttack,
       pinLoginsRecent: pinLogins.slice(0, 5).map((v) => ({ at: v.at, sameLineAsNow: ipNet(v.ip) === net, device: deviceOf(v.ua) })),
       otherMembersSeenOnThisIp: sameLineOthers,
-      reasons: d.reasons || [], at: d.at, device: d.device || '', userAgent: String(d.ua || '').slice(0, 200),
+      reasons: d.reasons || [], at: d.at, device: d.device || '', browserVersion: uaVersion(d.ua),
       fromAppSite: String(d.origin || '').indexOf(APP_ORIGIN) === 0,
       network: { provider: cur.provider || '', org: cur.org || '', city: cur.city || '', country: cur.country || '', type: cur.type || '', vpn: !!cur.dcvpn, icloudRelay: !!cur.relay },
       breachedAccount: BREACHED_IDS.has(d.target),
@@ -2382,6 +2386,11 @@ async function triageFacts(d) {
   };
 }
 const ATTACK_START_MS = Date.parse('2026-10-26T07:28:00Z');
+/* User-Agent 에서 브라우저 이름·주 버전만 (예: 'Chrome 154') — 원문은 AI 에 보내지 않음 */
+function uaVersion(ua) {
+  const m = String(ua || '').match(/(Whale|SamsungBrowser|Edg|CriOS|Chrome|Firefox|Version)\/(\d+)/);
+  return m ? (m[1] === 'Version' ? 'Safari' : m[1]) + ' ' + m[2] : '';
+}
 /* AI·규칙이 '본인'으로 본 경고는 기록만 남기고 확인함 처리 — 관리자 탭 보안 경고가 계속 깜빡이지 않게 (2026-10-27) */
 function benignClose(d, v) {
   const at = new Date().toISOString();
@@ -2395,7 +2404,8 @@ async function triagePush(ref, d, verdict, note) {
 async function runTriage(ref, d) {
   const urgent = d.triage.state === 'note';   /* 이미 푸시한 경고 → AI 의견만 기록 */
   const r = await triageFacts(d);
-  if (!urgent && d.kind === 'access' && r.sessionBeforeAttack && !BREACHED_IDS.has(d.target) && !(d.intel && d.intel.dcvpn)) {
+  if (!urgent && d.kind === 'access' && r.sessionBeforeAttack && !BREACHED_IDS.has(d.target) && !(d.intel && d.intel.dcvpn)
+      && !(d.intel && d.intel.country && d.intel.country !== 'KR')) {
     const v = { state: 'benign', by: 'rule', reason: '10-26 공격 전부터 이 기기에 로그인돼 있던 세션 — 기록 시작 전부터 쓰던 기기라 처음 보는 것처럼 보임' };
     await ref.set(benignClose(d, v), { merge: true });
     return v;
@@ -3103,11 +3113,13 @@ exports.aiConcierge = functions
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '신청 자동 승인' + (polishTip ? '(소개글 다듬기 팁 안내)' : '') + ' · ' + (ent.nickname || '')),
               { eid: ent.id, why: clip(scrubPhones(approveMap[p.id].reason), 300) }));
           } else if (riskMap[p.id]) {
-            const rc = Object.assign({}, p, { aiAuditedAt: nowIso, aiRisk: riskMap[p.id].slice(0, 6), aiRiskAt: nowIso });
-            nextPend.push(rc);
+            const rc = Object.assign({}, p, { aiAuditedAt: nowIso, aiRiskHeld: true, aiRiskAt: nowIso });
+            rc.aiRisk = riskMap[p.id].slice(0, 6);   /* 아래에서 adminOnly 로만 저장 (state 에는 aiRiskHeld 만) */
+            const rcState = Object.assign({}, rc); delete rcState.aiRisk;
+            nextPend.push(rcState);
             riskEntries.push(rc);
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '승인 보류 — 관리자 확인 필요 · ' + (rc.nickname || '')),
-              { eid: rc.id, why: clip('외부 공격 신호: ' + riskMap[p.id].join(', '), 300) }));
+              { eid: rc.id, why: '외부 접속 신호가 있어 관리자 확인이 필요해요' }));
           } else if (holdMap[p.id]) {
             const heldCopy = Object.assign({}, p, {
               heldReason: scrubPhones(holdMap[p.id].hold_reason) || '프로필 사진 및 소개글 보완이 필요해요.',
@@ -3128,10 +3140,13 @@ exports.aiConcierge = functions
           /* AI 가 '정상'이라 해도 코드가 먼저 봄 (2026-10-27 초코 사진 1→0장을 정상 처리) — 사진 0장·내용 지우기·이상한 출생연도는 관리자 확인 */
           const er = (confirmMap[e.id] && !e.deleteRequested) ? editRisk(e) : [];   /* 탈퇴 요청자는 스스로 지우는 경우가 많아 제외 */
           if (er.length) {
-            editRiskList.push({ id: e.id, nickname: e.nickname || '', why: er });
+            editRiskList.push({ id: e.id, nickname: e.nickname || '', why: er, chg: Array.isArray(e.editChanges) ? e.editChanges.slice(0, 12) : [] });
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '프로필 변경 확인 필요 · ' + (e.nickname || '')),
               { eid: e.id, why: clip('관리자 확인: ' + er.join(', '), 300) }));
-            return Object.assign({}, e, { aiEditAuditedAt: e.editReviewAt || nowIso, aiEditRisk: er.slice(0, 6) });
+            const flagged = Object.assign({}, e, { aiEditAuditedAt: e.editReviewAt || nowIso, aiEditRisk: er.slice(0, 6) });
+            /* 바뀐 내용은 항목 이름·메모만 남기고 값(전·후)은 관리자 전용으로 (회원이 지운 글이 state 에 남지 않게) */
+            flagged.editChanges = (Array.isArray(e.editChanges) ? e.editChanges : []).map((c) => ({ label: c && c.label, note: c && c.note }));
+            return flagged;
           }
           if (confirmMap[e.id]) {
             const c = Object.assign({}, e);
@@ -3166,6 +3181,12 @@ exports.aiConcierge = functions
       for (const h of heldEntries) {
         await sendTo(h.id, '📝 베니브릿지 신청서 보완 안내', h.heldReason || '신청서 보완 안내가 도착했어요.', { route: 'mine' }).catch(() => {});
       }
+      for (const r of riskEntries) {
+        await db.collection('adminOnly').doc(r.id).set({ aiRisk: r.aiRisk, aiRiskAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+      }
+      for (const x of editRiskList) {
+        await db.collection('adminOnly').doc(x.id).set({ editRiskChg: x.chg, editRiskAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+      }
       if (editRiskList.length) {
         await sendToAdmin('⚠️ 프로필 변경 확인 필요', editRiskList.slice(0, 3).map((x) => (x.nickname || '?') + ': ' + x.why.join('·')).join(' / '), { route: 'admin' }).catch(() => {});
       }
@@ -3182,6 +3203,14 @@ exports.aiConcierge = functions
     /* 익명 손님 토큰으로는 AI 를 못 쓰게 (2026-10-27 보안 검토: 누구나 주인 키로 아무 글이나 생성할 수 있었음) */
     const tok = context.auth.token || {};
     if (!isAdmin && tok.m !== 1 && tok.p !== 1) throw new HttpsError('permission-denied', '로그인한 회원만 쓸 수 있어요.');
+    /* 2026-10-28 보안 재검토: 토큰만 있으면(거절·철회된 신청서의 p 토큰 포함) AI 를 계속 쓸 수 있었고, 한도는 일부 기능에만 있었음 →
+       지금 명단에 있는 회원(m)·승인 대기 신청자(p)만, 그리고 관리자 아닌 모든 AI 호출에 하루 한도 하나 */
+    if (!isAdmin) {
+      const stLive = (await db.doc('app/state').get()).data() || {};
+      const live = ((tok.m === 1 ? stLive.entries : stLive.pendingEntries) || []).some((e) => e && e.id === context.auth.uid && !e.deactivated);
+      if (!live) throw new HttpsError('permission-denied', '지금은 쓸 수 없는 계정이에요.');
+      await aiQuotaTake(context.auth.uid, 60);
+    }
     /* 제보자 이름은 앱이 보낸 값을 믿지 않고 서버가 토큰으로 정함 ('관리자'라고 사칭해 AI 판단을 바꾸는 것 차단) */
     const serverAuthor = async () => {
       if (isAdmin) return '관리자(베니)';
@@ -3623,7 +3652,6 @@ exports.aiConcierge = functions
        1차 분류는 'Jev 흉내' — AI 는 정해진 선택지 하나만 고르고(글 생성·명령 없음), 실제 동작은 아래 코드가 정해진 대로.
        시험: tools/ai-eval (40/40, 새 문장 11/12). 확신 낮으면 다시 묻기, 모든 답에 '관리자에게 전달' 버튼. 탈퇴·휴면·PIN 은 확인 화면만 염 */
     if (op === 'member_chat' || op === 'intro_coach') {
-      await aiQuotaTake(context.auth.uid, op === 'intro_coach' ? 10 : 40);
       if (op === 'intro_coach') {
         const text = String((data && data.text) || '').trim().slice(0, 600);
         if (text.length < 5) throw new HttpsError('invalid-argument', '소개글을 조금 더 써 주시면 다듬어 드릴게요.');
@@ -3676,7 +3704,8 @@ exports.aiConcierge = functions
     }
 
     const mode = String((data && data.mode) || 'profile_atelier').slice(0, 40);
-    const sysPrompt = String((data && data.system) || (
+    if (!isAdmin && tok.m !== 1) throw new HttpsError('permission-denied', '승인된 회원만 쓸 수 있어요.');
+    const sysPrompt = String((isAdmin && data && data.system) || (
       '당신은 지인 기반 프라이빗 소개팅 살롱 [베니브릿지]의 수석 매칭 컨시어지입니다. ' +
       '과장되거나 기계적인 번역투를 절대 쓰지 말고, 한국의 20~30대 직장인이 실제로 호감을 느끼는 따뜻하고 세련된 한국어 문장으로 작성하세요. ' +
       '마크다운 별표(**)나 불필요한 서론/결론 인사 없이 요청된 형식만 깔끔하게 출력하세요.'
