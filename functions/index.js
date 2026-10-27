@@ -1461,12 +1461,21 @@ async function sweepPlainContacts(after) {
 
 /* 닉네임이 바뀌면 예전 닉네임을 관리자 전용(adminOnly/{id}.nickHistory)에 남김 (2026-10-27: 프로필을 '-' 로 지우고 탈퇴 요청하면 누군지 몰랐음) */
 async function recordNickChanges(before, after) {
-  const prev = {}; allOf(before).forEach((e) => { if (e && e.id) prev[e.id] = String(e.nickname || '').trim(); });
+  const prev = {}, beforeById = {};
+  allOf(before).forEach((e) => { if (e && e.id) { prev[e.id] = String(e.nickname || '').trim(); beforeById[e.id] = e; } });
   const jobs = [];
   allOf(after).forEach((e) => {
     const old = prev[e && e.id];
-    if (!old || old === '-' || old === String(e.nickname || '').trim()) return;
-    jobs.push(db.collection('adminOnly').doc(e.id).set({ nickHistory: admin.firestore.FieldValue.arrayUnion(old.slice(0, 30)) }, { merge: true }));
+    if (old && old !== '-' && old !== String(e.nickname || '').trim()) {
+      jobs.push(db.collection('adminOnly').doc(e.id).set({ nickHistory: admin.firestore.FieldValue.arrayUnion(old.slice(0, 30)) }, { merge: true }));
+    }
+    /* 프로필 칸을 '-'·빈칸으로 지우면 지우기 전 값을 관리자 전용 prevProfile 에 (탈퇴 처리 기록에 원래 프로필이 남게, 2026-10-27 해달이) */
+    const b = beforeById[e.id]; if (!b) return;
+    const blank = (v) => { const t = String(v == null ? '' : v).trim(); return !t || /^[-.~_\s]{1,3}$/.test(t); };
+    const wiped = {};
+    ['nickname', 'height', 'region', 'workplace', 'intro', 'idealType', 'dealbreaker'].forEach((k) => { if (!blank(b[k]) && blank(e[k])) wiped['prevProfile.' + k] = String(b[k]).slice(0, 600); });
+    if (b.birthYear && Number(b.birthYear) >= 1950 && !(Number(e.birthYear) >= 1950)) wiped['prevProfile.birthYear'] = Number(b.birthYear);
+    if (Object.keys(wiped).length) jobs.push(db.collection('adminOnly').doc(e.id).set({}, { merge: true }).then(() => db.collection('adminOnly').doc(e.id).update(wiped)));
   });
   await Promise.all(jobs);
 }
