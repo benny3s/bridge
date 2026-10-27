@@ -2108,6 +2108,18 @@ async function suspicionOf(o) {
   if (o.status === 'notfound') reasons.push('없는 계정');
   return { reasons, intel, device };
 }
+/* 프로필 변경 중 사람이 봐야 할 것 (AI '정상' 판정보다 우선, 2026-10-27) — 반환: 사유 목록 */
+function editRisk(e) {
+  const why = [];
+  const ch = Array.isArray(e.editChanges) ? e.editChanges : [];
+  const blank = (v) => { const t = String(v == null ? '' : v).trim(); return !t || /^[-.~_ㅋㅎ\s]{1,3}$/.test(t); };
+  if (ch.some((c) => /사진/.test(String(c && c.label)) && /→\s*0\s*장/.test(String(c && c.note))) || (ch.some((c) => /사진/.test(String(c && c.label))) && Number(e.photoCount) === 0)) why.push('사진 0장');
+  const wiped = ch.filter((c) => c && /닉네임|소개|이상형|비선호|지역|직장/.test(String(c.label)) && !blank(c.before) && blank(c.after)).map((c) => c.label);
+  if (wiped.length) why.push('내용 지움(' + wiped.slice(0, 4).join('·') + ')');
+  const by = ch.find((c) => c && /출생/.test(String(c.label)));
+  if (by) { const y = Number(by.after); const now = new Date().getFullYear(); if (!(y >= 1960 && y <= now - 18)) why.push('출생연도 이상(' + String(by.after).slice(0, 6) + ')'); }
+  return why;
+}
 /* 신청서 외부 공격 신호 (AI 자동 승인 전 서버 확인, 2026-10-27) — 반환: 사유 목록(없으면 []) */
 async function signupRisk(id) {
   const su = (await db.collection('signups').doc(id).get()).data();
@@ -2158,7 +2170,7 @@ async function suspiciousAlert(o, s, extra) {
   try {
     await db.collection('securityAlerts').add({ at: new Date().toISOString(), resolved: false, type: 'suspicious', kind: o.status,
       target: o.entryId || '', nickname: who, ip: o.ip, ua: String(o.ua || '').slice(0, 300), origin: String(o.origin || '').slice(0, 200),
-      device: s.device, reasons, intel: s.intel || null,
+      device: s.device, reasons, intel: s.intel || null, authAt: o.authAt || (o.status === 'ok' ? new Date().toISOString() : ''),
       triage: quiet ? { state: 'pending', title, body } : (gate.ok ? { state: 'note' } : { state: 'skip' }) });
   } catch (e) { console.error('suspiciousAlert', e); }
   if (quiet || !gate.ok) return;
@@ -2178,7 +2190,10 @@ const TRIAGE_SYS = [
   '회원 본인이 새 폰·PC·브라우저를 쓰거나 집·회사·이동통신망을 바꾸는 일은 흔해. 같은 회선(같은 IP 또는 같은 IPv6 /64), 같은 통신사·도시, 같은 기기 종류(아이폰↔아이폰 다른 브라우저 등)면 본인일 가능성이 높아.',
   '공격 특징(Mac Chrome 154, 데이터센터 VPN, 처음 보는 통신사·나라, 탈취 이력 계정)과 겹치거나 평소 기록과 동떨어지면 수상해.',
   '판단: benign = 본인으로 보여 알림 필요 없음 / suspicious = 관리자가 바로 알아야 함 / unsure = 근거가 부족해 판단 어려움.',
-  '확신이 없으면 benign 대신 unsure. reason 은 한국어 한 문장(60자 이내)으로 근거만.'
+  '접속·로그인 기록(accessSeen·loginAudit)은 10-26 저녁부터 쌓였어. 그 전부터 쓰던 기기는 처음 보는 기기로 나와.',
+  'sessionStartedAt = 그 기기에서 PIN 으로 로그인한 시각. "이미 로그인된 회원이 앱을 엶" 이면 그 기기에서 예전에 맞는 PIN 을 넣었다는 뜻이고, sessionBeforeAttack=true 면 공격(10-26 16:28) 전 로그인이라 공격자일 수 없어(탈취 4계정 제외).',
+  'pinLoginsRecent = 이 계정의 최근 PIN 로그인 성공(같은 회선인지·기기). otherMembersSeenOnThisIp = 이 IP 에서 앱을 연 다른 회원 수(가족·회사 공용 회선이면 흔함).',
+  '확신이 없으면 benign 대신 unsure. reason 은 한국어 한 문장(80자 이내)으로 근거와, unsure·suspicious 면 관리자가 할 일(예: 본인에게 확인 문자)까지.'
 ].join('\n');
 const TRIAGE_SCHEMA = {
   type: 'object',
@@ -2235,10 +2250,25 @@ async function triageFacts(d) {
     return { device: v.device || '', sameLineAsNow: ipNet(v.ip) === net, provider: i.provider || '', city: i.city || '', country: i.country || '',
       vpn: !!i.dcvpn, relay: !!i.relay, firstAt: v.firstAt || '', lastAt: v.lastAt || '', count: v.count || 1 };
   });
+  /* 자동 조사 (2026-10-27 Benny: '매번 여기에 물어봐야 해?') — 사람이 보던 것들을 미리 모아 AI 에 줌 */
+  const sessionBeforeAttack = !!(d.authAt && Date.parse(d.authAt) < ATTACK_START_MS);
+  let pinLogins = [], sameLineOthers = 0;
+  try {
+    const lq = d.target ? await db.collection('loginAudit').where('entryId', '==', d.target).limit(60).get() : null;
+    if (lq) lq.forEach((x) => { const v = x.data(); if (v.status === 'ok') pinLogins.push(v); });
+    pinLogins.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    const oq = await db.collection('accessSeen').where('ip', '==', d.ip).limit(20).get();
+    const others = new Set(); oq.forEach((x) => { const v = x.data(); if (v.uid && v.uid !== d.target) others.add(v.uid); });
+    sameLineOthers = others.size;
+  } catch (e) {}
   return {
-    sameNet,
+    sameNet, sessionBeforeAttack,
     facts: {
       kind: d.kind === 'access' ? '이미 로그인된 회원이 앱을 엶' : 'PIN 로그인 성공',
+      sessionStartedAt: d.authAt || '',
+      sessionBeforeAttack,
+      pinLoginsRecent: pinLogins.slice(0, 5).map((v) => ({ at: v.at, sameLineAsNow: ipNet(v.ip) === net, device: deviceOf(v.ua) })),
+      otherMembersSeenOnThisIp: sameLineOthers,
       reasons: d.reasons || [], at: d.at, device: d.device || '', userAgent: String(d.ua || '').slice(0, 200),
       fromAppSite: String(d.origin || '').indexOf(APP_ORIGIN) === 0,
       network: { provider: cur.provider || '', org: cur.org || '', city: cur.city || '', country: cur.country || '', type: cur.type || '', vpn: !!cur.dcvpn, icloudRelay: !!cur.relay },
@@ -2249,6 +2279,7 @@ async function triageFacts(d) {
     }
   };
 }
+const ATTACK_START_MS = Date.parse('2026-10-26T07:28:00Z');   /* 10-26 16:28 KST 대입 공격 시작 */
 async function triagePush(ref, d, verdict, note) {
   const gate = await alertAllowed(guardKey('k_', d.ip + '_' + (d.target || ''))).catch(() => ({ ok: true, skipped: 0 }));
   if (gate.ok) await sendToAdmin(d.triage.title || '⚠️ 수상한 접속', (d.triage.body || '') + (note ? ' · ' + note : '')).catch(() => {});
@@ -2257,6 +2288,11 @@ async function triagePush(ref, d, verdict, note) {
 async function runTriage(ref, d) {
   const urgent = d.triage.state === 'note';   /* 이미 푸시한 경고 → AI 의견만 기록 */
   const r = await triageFacts(d);
+  if (!urgent && d.kind === 'access' && r.sessionBeforeAttack && !BREACHED_IDS.has(d.target) && !(d.intel && d.intel.dcvpn)) {
+    const v = { state: 'benign', by: 'rule', reason: '10-26 공격 전부터 이 기기에 로그인돼 있던 세션 — 기록 시작 전부터 쓰던 기기라 처음 보는 것처럼 보임' };
+    await ref.set({ triage: Object.assign({}, d.triage, v, { pushed: false, at: new Date().toISOString() }) }, { merge: true });
+    return v;
+  }
   if (!urgent && r.sameNet && !BREACHED_IDS.has(d.target)) {
     const v = { state: 'benign', by: 'rule', reason: '전에 이 계정이 쓰던 같은 회선(IP)에서 새 기기 — 같은 집·회사 기기로 보임' };
     await ref.set({ triage: Object.assign({}, d.triage, v, { pushed: false, at: new Date().toISOString() }) }, { merge: true });
@@ -2346,7 +2382,8 @@ async function accessAudit(context, entry) {
     const ip = clientIp(context);
     const h = (context.rawRequest && context.rawRequest.headers) || {};
     const ua = String(h['user-agent'] || ''), origin = String(h['origin'] || h['referer'] || '');
-    const o = { ip, ua, origin, entry, entryId: entry.id, uid, status: 'access' };
+    const at = Number(context.auth.token && context.auth.token.auth_time) || 0;   /* 이 기기에서 PIN 으로 로그인한 시각(세션 시작) */
+    const o = { ip, ua, origin, entry, entryId: entry.id, uid, status: 'access', authAt: at ? new Date(at * 1000).toISOString() : '' };
     const before = await knownDevices(uid).catch(() => new Set());
     const n = await noteAccess(uid, entry.id, entry.nickname, ip, ua, origin);
     const watched = (await watchIpSet().catch(() => new Set(WATCH_IPS))).has(ip);
@@ -2919,6 +2956,7 @@ exports.aiConcierge = functions
       const approvedEntries = [];
       const heldEntries = [];
       const riskEntries = [];
+      const editRiskList = [];
       await db.runTransaction(async (tx) => {
         const snap = await tx.get(stateRef);
         const s = snap.data() || {};
@@ -2980,6 +3018,14 @@ exports.aiConcierge = functions
 
         const nextEntries = entries.map((e) => {
           if (!e || !e.id) return e;
+          /* AI 가 '정상'이라 해도 코드가 먼저 봄 (2026-10-27 초코 사진 1→0장을 정상 처리) — 사진 0장·내용 지우기·이상한 출생연도는 관리자 확인 */
+          const er = confirmMap[e.id] ? editRisk(e) : [];
+          if (er.length) {
+            editRiskList.push({ id: e.id, nickname: e.nickname || '', why: er });
+            logs.push(Object.assign(logItem('admin', 'AI 부관리자', '프로필 변경 확인 필요 · ' + (e.nickname || '')),
+              { eid: e.id, why: clip('관리자 확인: ' + er.join(', '), 300) }));
+            return Object.assign({}, e, { aiEditAuditedAt: e.editReviewAt || nowIso, aiEditRisk: er.slice(0, 6) });
+          }
           if (confirmMap[e.id]) {
             const c = Object.assign({}, e);
             delete c.editReviewAt;
@@ -3012,6 +3058,9 @@ exports.aiConcierge = functions
       }
       for (const h of heldEntries) {
         await sendTo(h.id, '📝 베니브릿지 신청서 보완 안내', h.heldReason || '신청서 보완 안내가 도착했어요.', { route: 'mine' }).catch(() => {});
+      }
+      if (editRiskList.length) {
+        await sendToAdmin('⚠️ 프로필 변경 확인 필요', editRiskList.slice(0, 3).map((x) => (x.nickname || '?') + ': ' + x.why.join('·')).join(' / '), { route: 'admin' }).catch(() => {});
       }
       for (const r of riskEntries) {
         await sendToAdmin('🛂 AI 승인 보류 · ' + (r.nickname || ''), '외부 공격 신호: ' + r.aiRisk.join(', ') + ' — 관리자탭 승인 대기에서 직접 확인', { route: 'admin' }).catch(() => {});
