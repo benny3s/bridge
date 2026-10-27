@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-27-473';
+  var APP_VERSION = '2026-10-27-474';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1358,18 +1358,27 @@
   /* App Check 감시 모드 (2026-10-27 다시 켬). 예전(v396)엔 키 도메인이 benny-meeting.com 뿐이고 Firebase 에 앱 등록도 안 돼
      토큰이 늘 실패·재시도 → 아이폰이 느렸음. 지금은 도메인 benny3s.github.io 추가 + Fraud Defense(reCAPTCHA Enterprise)로 등록.
      첫 화면을 늦추지 않게 페이지가 다 뜬 뒤 불러옴. 서버는 아직 강제 안 함(콘솔 App Check → API 에서 '확인된 요청' 비율만 봄) */
-  (function loadAppCheck() {
-    function go() {
+  /* v474: 로그인(서버 함수) 직전엔 기다리지 않고 바로 불러와 토큰을 붙임 — 나중에 로그인 함수에 App Check 를 강제할 준비.
+     ensureAppCheck() 는 최대 2.5초만 기다리고(느린 폰에서 로그인이 막히지 않게) 그냥 진행 */
+  var _appCheckP = null;
+  function ensureAppCheck() {
+    if (!_appCheckP) _appCheckP = new Promise(function (resolve) {
       var s = document.createElement('script');
       s.src = 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check-compat.js';
       s.async = true;
       s.onload = function () {
-        try { firebase.appCheck().activate(new firebase.appCheck.ReCaptchaEnterpriseProvider(RECAPTCHA_SITE_KEY), true); }
-        catch (e) { try { console.warn('appCheck', e); } catch (e2) {} }
+        try {
+          firebase.appCheck().activate(new firebase.appCheck.ReCaptchaEnterpriseProvider(RECAPTCHA_SITE_KEY), true);
+          firebase.appCheck().getToken().then(function () { resolve(true); }, function () { resolve(false); });
+        } catch (e) { try { console.warn('appCheck', e); } catch (e2) {} resolve(false); }
       };
+      s.onerror = function () { resolve(false); };
       document.head.appendChild(s);
-    }
-    function later() { setTimeout(go, 1500); }
+    });
+    return Promise.race([_appCheckP, new Promise(function (r) { setTimeout(function () { r(false); }, 2500); })]);
+  }
+  (function loadAppCheck() {
+    function later() { setTimeout(ensureAppCheck, 1500); }
     if (document.readyState === 'complete') later(); else window.addEventListener('load', later);
   })();
   var db = firebase.firestore();
@@ -2248,7 +2257,9 @@
      '토큰 있는 회원/관리자'만 데이터 접근을 허용하는 기반. 손님은 익명 토큰. */
   function authUid() { var u = firebase.auth().currentUser; return (u && !u.isAnonymous) ? u.uid : ''; }
   function serverSignIn(fnName, payload) {
-    var direct = fns ? fns.httpsCallable(fnName)(payload).catch(function (e) { if (isSwMsgError(e)) return callFn(fnName, payload); throw e; }) : callFn(fnName, payload);
+    var direct = ensureAppCheck().then(function () {
+      return fns ? fns.httpsCallable(fnName)(payload).catch(function (e) { if (isSwMsgError(e)) return callFn(fnName, payload); throw e; }) : callFn(fnName, payload);
+    });
     return direct.then(function (r) {
       var t = r && r.data && r.data.token;
       if (!t) throw new Error('토큰을 받지 못했어요.');
@@ -8215,6 +8226,11 @@
       var holdBtn = '<button type="button" class="card-btn" data-action="hold-pending" data-id="' + escapeHtml(e.id) + '">' + (e.heldReason ? '보류 사유 수정' : '보류') + '</button>';
       var heldChip = e.heldReason ? ' <span class="chip" style="background:var(--accent-soft);color:var(--accent);">📌 보류</span>' : '';
       var newChip = e.heldReason ? '' : '<span class="chip" style="background:#e8f0fe;color:#1a73e8;">🆕 신규</span>';
+      /* AI 자동 승인 전 서버가 외부 공격 신호를 찾아 멈춘 신청 (v474) — 관리자가 직접 보고 승인/거절 */
+      if (Array.isArray(e.aiRisk) && e.aiRisk.length) {
+        newChip += ' <span class="chip" style="background:#fce8e6;color:#c5221f;">🛂 AI 보류</span>';
+        heldNote += '<div class="p-meta" style="color:#c5221f;margin-top:3px;">🛂 외부 공격 신호: ' + escapeHtml(e.aiRisk.join(', ')) + ' — 직접 확인 후 승인</div>';
+      }
       if (e.isMatchmaker) {
         return foldItem(
           '<span class="req-sum-who">🤝 ' + escapeHtml(displayName) + '</span> ' + newChip + ' <span class="chip" style="background:var(--gold-soft);color:var(--gold);">주선자</span>' + heldChip,
@@ -11205,7 +11221,7 @@
           if (idx < 0) return;
           var entry = state.pendingEntries.splice(idx, 1)[0];
           if (!entry.serial) entry.serial = nextSerial(state);
-          delete entry.rejectedReason; delete entry.rejectedAt; delete entry.heldReason; delete entry.heldAt; /* 승인 시 반려/보류 흔적 제거 */
+          delete entry.rejectedReason; delete entry.rejectedAt; delete entry.heldReason; delete entry.heldAt; delete entry.aiRisk; delete entry.aiRiskAt; /* 승인 시 반려/보류 흔적 제거 */
           if (!entry.lastSeenAt) entry.lastSeenAt = new Date().toISOString(); /* 승인 시점을 최초 접속 기록으로 (이후 실제 접속 시 갱신) */
           var newEntries = (state.entries || []).concat([entry]);
           tx.update(stateRef, { pendingEntries: state.pendingEntries, entries: newEntries });
