@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-27-475';
+  var APP_VERSION = '2026-10-27-476';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1275,6 +1275,7 @@
   function listMemberVisible(e) {
     if (e.isMatchmaker) return false;
     if (e.deactivated) return false;
+    if (e.deleteRequested) return false;   /* 탈퇴 요청하면 바로 명단에서 숨김 (v476 — 전엔 관리자 처리 전까지 보여서 회원이 프로필을 '-' 로 지우곤 했음) */
     if (e.testAccount) return meIsTest();
     return true;
   }
@@ -8291,6 +8292,12 @@
       return foldItem(
         '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> <span class="chip" style="background:#fce8e6;color:#c5221f;">🗑 삭제 요청</span>',
         '<div class="p-meta">' + genderLabel(e.gender) + ' · ' + escapeHtml(e.region || '') + ' · 요청: ' + fmtDate(e.deleteReqAt) + '</div>' +
+        (function () {   /* 프로필을 지우고 요청해도 누군지 알 수 있게 — 고유번호 + 예전 닉네임(관리자 전용 기록·변경 내역) */
+          var olds = ((_adminPriv[e.id] && _adminPriv[e.id].nickHistory) || []).slice();
+          (e.editChanges || []).forEach(function (c) { if (c && /닉네임/.test(c.label || '') && c.before) olds.push(c.before); });
+          olds = olds.filter(function (n, i, a) { return n && n !== e.nickname && a.indexOf(n) === i; });
+          return '<div class="p-meta">🆔 ' + escapeHtml(formatUid(e) || '-') + (olds.length ? ' · 예전 닉네임: <b>' + escapeHtml(olds.slice(-3).join(', ')) + '</b>' : '') + '</div>';
+        })() +
         (e.deleteReason ? '<div class="p-meta" style="color:var(--ink);">사유: "' + escapeHtml(e.deleteReason) + '"</div>' : '') +
         '<div class="pending-actions">' +
           '<button type="button" class="card-btn" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">👤 프로필</button>' +
@@ -10346,7 +10353,7 @@
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
     if (entry.deleteRequested) { modalNotice('안내', '이미 삭제 요청됐어요. 관리자 확인 중이에요.'); return; }
-    modalMessage('🗑 탈퇴하기', entry.nickname + '님 프로필 삭제(탈퇴)를 요청할까요? 이유를 짧게 남겨 주세요. 관리자 확인 후 지워지고, 그때까지는 명단에 남아 있어요.\n(잠깐 쉬고 싶은 거라면 \'💤 잠시 쉬기\'로 명단에서만 숨길 수도 있어요)', '탈퇴 요청', 'danger', '예: 좋은 인연을 만났어요 / 개인 사정', true).then(function (reason) {
+    modalMessage('🗑 탈퇴하기', entry.nickname + '님 프로필 삭제(탈퇴)를 요청할까요? 이유를 짧게 남겨 주세요. 요청하면 바로 명단에서 숨겨지고, 관리자 확인 후 완전히 지워져요. 프로필을 따로 지우지 않으셔도 돼요.\n(잠깐 쉬고 싶은 거라면 \'💤 잠시 쉬기\'로 명단에서만 숨길 수도 있어요)', '탈퇴 요청', 'danger', '예: 좋은 인연을 만났어요 / 개인 사정', true).then(function (reason) {
       if (reason === null || reason === undefined) return;
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
@@ -10860,7 +10867,7 @@
       (viaMm ? row('data-action="sub-detach" data-id="' + id + '"', '🪪', '일반 계정으로 독립', '친구가 직접 관리하는 계정으로 바꾸기') : '') +
       (!isSub && !viaMm && !me.deleteRequested ? row('data-action="report-couple" data-id="' + id + '"', '💕', '좋은 인연 만났어요', '축하 후기 남기고 명단에서 내리기') : '') +
       (!me.deactivateRequested && !me.deactivated && !me.deleteRequested ? row('data-action="deactivate" data-id="' + id + '"', '💤', '잠시 쉬기', '명단에서 숨기고 나중에 다시 활동') : '') +
-      (!me.deleteRequested ? row('data-action="delete" data-id="' + id + '"', '🗑', '탈퇴하기', '프로필 삭제 (관리자 확인 후)', true) : row('data-action="cancel-delete" data-id="' + id + '"', '↩️', '탈퇴 요청 취소', '관리자 확인 중이에요')) +
+      (!me.deleteRequested ? row('data-action="delete" data-id="' + id + '"', '🗑', '탈퇴하기', '바로 명단에서 숨김 · 관리자 확인 후 삭제', true) : row('data-action="cancel-delete" data-id="' + id + '"', '↩️', '탈퇴 요청 취소', '관리자 확인 중이에요')) +
       (!isSub && !viaMm && !amMM && !iManage ? (myJoinReq ? row('id="cancel-mm-req"', '⏳', '주선자 요청 취소', '승인 대기 중') : row('id="request-mm"', '🤝', '주선자에게 관리 요청', '친구가 내 프로필을 대신 관리')) : '') +
       (!isSub && !viaMm ? row('id="start-proxy"', '🤝', '주선자 계정으로 전환', '친구를 대신 소개하기') : '') +
       '</div><div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>';
