@@ -218,7 +218,7 @@ exports.memberLogin = functions
     if (src.pinPending) throw new HttpsError('unavailable', '계정을 정리하는 중이에요. 잠시 뒤 다시 시도해 주세요.');
     /* 흔한 PIN(1234·0000…)은 맞든 틀리든 같은 안내로 로그인 거부 (2026-10-26 대입 공격으로 4계정 탈취) — 맞으면 계정에 pinWeak 표시해 새 PIN 받게.
        같은 안내라 공격자는 그 PIN 이 맞았는지 알 수 없다 */
-    if (COMMON_WEAK_PINS.has(pin)) {
+    if (COMMON_WEAK_PINS.has(pin) || (entry.birthYear && pin === String(entry.birthYear))) {   /* 출생연도 PIN 도 (2026-10-28) */
       const real = verifyPinServer(pin, src);
       await db.collection('loginAudit').add(Object.assign({ status: 'weak-refused', nickname: entry.nickname, correct: real }, auditMeta)).catch(() => {});
       if (real) await markPinWeak([entry.id]).catch((e) => console.error('markPinWeak', e));
@@ -828,6 +828,16 @@ exports.onStateChange = functions
     const beforeMap = {};
     (before.dateRequests || []).forEach((r) => { beforeMap[r.id] = r; });
 
+    /* 2026-10-28 전체 점검: 감지만 하고 나중에 되돌리면, 그 사이 위조 신청으로 사진 권한·공개 후기가 먼저 반영됐음 →
+       신청·커플 후기·관리자 사칭 메시지 조작은 서버가 즉시 되돌리고 이 변경은 처리하지 않음 (경고는 남김) */
+    const tamper = detectTamperIssues(before, after);
+    const revertable = tamper ? tamper.issues.filter((i) => i.coll === 'dateRequests' || i.coll === 'coupleReports'
+      || (i.coll === 'messages' && i.after && i.after.from === 'admin')) : [];
+    if (revertable.length) {
+      await revertIssues(revertable).catch((e) => console.error('revertIssues', e));
+      await detectTamper(before, after).catch((e) => console.error('detectTamper', e));
+      return;
+    }
     const jobs = [];
     jobs.push(syncPublicView(after).catch((e) => console.error('syncPublicView', e)));
     jobs.push(sweepSecrets(before, after).catch((e) => console.error('sweepSecrets', e)));
@@ -2643,12 +2653,20 @@ function detectTamperIssues(before, after) {
   diffList('dateRequests', before.dateRequests, after.dateRequests, (b, a) => {
     if (!(reqOk(b) || reqOk(a))) return false;                                    /* 관계 없는 요청 변경 → 경고 */
     if (b && a && apprOf(a) && !apprOf(b) && own(a.fromId) && !own(a.toId)) return false; /* 요청자(받는이 아님)가 자기 요청을 스스로 승인 → 경고 */
+    /* 2026-10-28 전체 점검: 받는 사람이 '남 → 나' 신청을 이미 수락된 채로 만들면 남의 사진·대화 권한을 얻었음 */
+    if (!b && a && (!own(a.fromId) || apprOf(a))) return false;                    /* 새 신청은 보내는 사람만, 수락 안 된 채로 */
+    if (b && a && (b.fromId !== a.fromId || b.toId !== a.toId || (b.type || 'contact') !== (a.type || 'contact'))) return false; /* 당사자·종류 바꾸기 */
+    if (b && a && apprOf(a) && !apprOf(b) && !own(a.toId)) return false;          /* 수락은 받는 사람만 */
+    if (b && a && a.fromRevealed && !b.fromRevealed && !own(a.fromId)) return false; /* 사진 먼저 공개는 보내는 사람만 */
     return true;
   });
-  diffList('messages', before.messages, after.messages, (b, a) => (b && own(b.entryId)) || (a && own(a.entryId)));
+  diffList('messages', before.messages, after.messages, (b, a) => ((b && own(b.entryId)) || (a && own(a.entryId)))
+    && !(a && a.from === 'admin' && !(b && b.from === 'admin')));
   diffList('joinRequests', before.joinRequests, after.joinRequests, (b, a) => reqOk(b) || reqOk(a));
   diffList('connLog', before.connLog, after.connLog, (b, a) => [b, a].some((x) => x && (own(x.a) || own(x.b))));
-  diffList('coupleReports', before.coupleReports, after.coupleReports, (b, a) => [b, a].some((x) => x && own(x.byId)));
+  diffList('coupleReports', before.coupleReports, after.coupleReports, (b, a) => [b, a].some((x) => x && own(x.byId))
+    && !(a && a.confirmed && !(b && b.confirmed))                                     /* 확인 표시는 관리자만 (공개 페이지에 실림) */
+    && !(a && b && b.confirmed && (a.review !== b.review || a.partner !== b.partner || a.vis !== b.vis || a.byNick !== b.byNick)));
   /* 활동 기록: 회원은 덧붙이기만. 오래된 기록 일괄 보관(archive, 150건 이상 한꺼번에)은 정상, 몇 건만 지우거나 고치면 흔적 지우기 의심 */
   const lb = {}; (before.logs || []).forEach((l) => { if (l && l.id) lb[l.id] = l; });
   const la = {}; (after.logs || []).forEach((l) => { if (l && l.id) la[l.id] = l; });
@@ -2660,6 +2678,22 @@ function detectTamperIssues(before, after) {
     issues.push({ coll: 'logs', id: '-', kind: 'removed', fields: [], before: removedLogs.concat(editedLogs.map((id) => lb[id])).slice(0, 50), after: null });
   }
   return issues.length ? { writer, issues } : null;
+}
+/* 조작된 항목을 변경 전으로 (서버 쓰기 — _w·_wn 그대로라 다시 조작으로 안 잡힘) */
+async function revertIssues(issues) {
+  const ref = db.doc('app/state');
+  await db.runTransaction(async (tx) => {
+    const s = (await tx.get(ref)).data() || {};
+    const upd = {};
+    issues.forEach((i) => {
+      const list = (upd[i.coll] || s[i.coll] || []).slice();
+      const idx = list.findIndex((x) => x && x.id === i.id);
+      if (i.before) { if (idx >= 0) list[idx] = i.before; else list.push(i.before); }
+      else if (idx >= 0) list.splice(idx, 1);
+      upd[i.coll] = list;
+    });
+    if (Object.keys(upd).length) tx.update(ref, upd);
+  });
 }
 async function detectTamper(before, after) {
   const r = detectTamperIssues(before, after);
