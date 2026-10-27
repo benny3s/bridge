@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-27-477';
+  var APP_VERSION = '2026-10-28-478';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -2922,7 +2922,7 @@
 
   /* ---- 개인정보 처리방침 (가입 동의 박스의 '처리방침 전문 보기') ---- */
   var PRIVACY_LINK = ' <button type="button" data-action="privacy-policy" style="background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;cursor:pointer;font-size:inherit;font-family:inherit;">처리방침 전문 보기</button>';
-  var PRIVACY_EFFECTIVE = '2026-10-02';
+  var PRIVACY_EFFECTIVE = '2026-10-28';
   function showPrivacyPolicy() {
     var sec = function (t, body) { return '<h4 style="margin:14px 0 4px;font-size:0.92rem;">' + t + '</h4><div style="font-size:0.84rem;line-height:1.65;color:var(--ink);">' + body + '</div>'; };
     var ov = openModal(
@@ -2945,6 +2945,7 @@
         '· 보관(휴면)을 고르면 다시 활동할 수 있도록 보관하며, 언제든 삭제를 요청할 수 있어요.<br>' +
         '· 장애 복구용 백업은 최대 7일 뒤 자동으로 사라져요.') +
       sec('5. 처리 위탁 및 저장 위치', 'Google(Firebase) — 데이터 저장·서버 기능·알림 발송. 저장 위치: 대한민국(서울 리전). 관리자 안내 문자는 관리자 휴대폰으로 직접 보내요.') +
+      sec('5-1. AI 기능과 국외 이전', '· 🤖 AI 도우미·✨ 소개글 다듬기를 <b>쓸 때만</b>, 입력한 글이 답을 만들기 위해 AI 업체로 전송돼요: Ollama(미국, 보관하지 않음), 장애 시 Anthropic(미국, 최대 30일 후 삭제). 베니브릿지는 이 글을 저장하지 않아요(관리자에게 전달을 누른 경우만 관리자 메시지로 남아요).<br>· 가입 심사·보안 점검에 AI 가 보조로 쓰이며, 최종 판단과 처리 책임은 관리자에게 있어요. 다른 회원의 정보는 AI 답변에 쓰지 않아요.') +
       sec('6. 제3자 제공', '법령에 따른 요청이 있는 경우를 제외하고 제3자에게 제공하지 않아요.') +
       sec('7. 이용자의 권리', '내 정보 열람·정정(프로필 수정), 삭제·보관 요청, 처리 정지를 언제든 요청할 수 있어요. 앱의 💬 Q&A로 말씀해 주세요.') +
       sec('8. 이용 연령', '만 19세 이상만 이용할 수 있어요.') +
@@ -6591,7 +6592,8 @@
             '<div class="field"><label for="f-intro">자기소개 <span class="req">필수</span> <span class="opt">최소 20자</span></label>' +
               '<span class="hint">정보가 자세할수록 매칭 성공률이 올라가요!</span>' +
               '<textarea id="f-intro" name="intro" rows="5" maxlength="300" placeholder="예: MBTI ENFP · 비흡연 · 취미는 요리·등산 ..."></textarea>' +
-              '<div class="char-count" data-cc="f-intro">0 / 500</div></div>' +
+              '<div class="char-count" data-cc="f-intro">0 / 500</div>' +
+              (currentUser && currentState && !currentState._public ? '<button type="button" class="card-btn" id="ai-intro-coach" style="margin-top:6px;">✨ AI로 다듬기</button>' : '') + '</div>' +
             '<div class="field"><label for="f-idealtype">원하는 이성 조건 <span class="req">필수</span> <span class="opt">최소 10자</span></label>' +
               '<textarea id="f-idealtype" name="idealType" rows="5" maxlength="200" placeholder="예: 키 170+ · 90~97년생 · 비흡연 · 자기관리 잘하는 분 ..."></textarea>' +
               '<div class="char-count" data-cc="f-idealtype">0 / 300</div></div>' +
@@ -6942,6 +6944,116 @@
     if (_srv > seen) seen = _srv;   /* 기기 기록이 없거나 오래됐으면 서버 기록 (v429 에서 이미 읽은 메시지) */
     return threadFor(state, currentUser.id, 'user').filter(function (m) { return m.from === 'admin' && (m.at || '') > seen; }).length;
   }
+  /* ── 🤖 회원 AI 도우미 (v478) ──
+     서버(aiConcierge member_chat)가 정해진 분류 하나만 고르고 정해진 답·버튼을 돌려줌. 앱은 버튼으로 기존 화면(PIN 바꾸기·잠시 쉬기·탈퇴 확인)을 열거나,
+     회원이 누를 때만 관리자 메시지로 전달. 처음 열 때 AI 고지(AI 기본법). 대화는 이 화면에만 있고 저장하지 않음 */
+  function aiHelperRowHtml(me) {
+    if (!me || !currentUser || isAdminUnlocked || !currentState || currentState._public) return '';
+    return '<div class="chat-list"><button type="button" class="chat-item" id="ai-helper-open">' +
+      '<div class="chat-av md" style="background:var(--accent-soft);font-size:1.1rem;">🤖</div>' +
+      '<div class="chat-item-mid"><div class="chat-item-name">AI 도우미 <span class="admin-room-tag">사용법·불편</span></div>' +
+        '<div class="chat-item-prev">궁금한 점을 물어보거나 관리자에게 전할 말을 남겨 주세요</div></div>' +
+    '</button></div>';
+  }
+  var AI_NOTICE_KEY = 'aiHelperNotice_v1';
+  function openAiHelper() {
+    var me = findMyEntry(currentState);
+    if (!me || !currentUser) { modalNotice('안내', '로그인한 뒤 쓸 수 있어요.'); return; }
+    var seen = false; try { seen = localStorage.getItem(AI_NOTICE_KEY) === '1'; } catch (e) {}
+    var notice = '<div style="font-size:0.78rem;color:var(--muted);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px;line-height:1.55;">' +
+      '🤖 이 상담은 <b>AI가 답해요</b>. 정확하지 않을 수 있으니 중요한 건 관리자에게 전달해 주세요. ' +
+      '입력한 글은 답을 만드는 데만 AI 업체(미국)로 보내지고, 베니브릿지는 저장하지 않아요. 다른 회원 정보는 알려 드리지 않아요.</div>';
+    var ov = openModal(
+      '<h3>🤖 AI 도우미</h3>' + (seen ? '' : notice) +
+      '<div id="ai-h-log" style="max-height:46vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin:6px 0 10px;">' +
+        '<div class="ai-h-bot" style="align-self:flex-start;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:8px 11px;font-size:0.88rem;line-height:1.55;max-width:88%;">안녕하세요! 앱 사용법, 불편한 점, 관리자에게 전할 말을 편하게 남겨 주세요 😊</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;"><textarea id="ai-h-in" rows="2" maxlength="500" placeholder="예: 사진 신청은 하루에 몇 번까지예요?" style="flex:1;resize:none;"></textarea>' +
+        '<button type="button" class="card-btn primary" id="ai-h-send" style="flex:none;">보내기</button></div>' +
+      (seen ? '<div style="font-size:0.72rem;color:var(--muted);margin-top:6px;">🤖 AI가 답해요 · 입력한 글은 저장하지 않아요</div>' : '') +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>'
+    );
+    try { localStorage.setItem(AI_NOTICE_KEY, '1'); } catch (e) {}
+    var log = ov.querySelector('#ai-h-log'), inp = ov.querySelector('#ai-h-in'), sendBtn = ov.querySelector('#ai-h-send');
+    var lastText = '';
+    function bubble(text, mine) {
+      var d = document.createElement('div');
+      d.style.cssText = 'align-self:' + (mine ? 'flex-end' : 'flex-start') + ';background:' + (mine ? 'var(--accent-soft)' : 'var(--paper)') +
+        ';border:1px solid var(--line);border-radius:12px;padding:8px 11px;font-size:0.88rem;line-height:1.55;max-width:88%;white-space:pre-wrap;';
+      d.textContent = text;
+      log.appendChild(d); log.scrollTop = log.scrollHeight;
+      return d;
+    }
+    function buttonsRow(buttons, text) {
+      if (!buttons || !buttons.length) return;
+      var row = document.createElement('div');
+      row.style.cssText = 'align-self:flex-start;display:flex;flex-wrap:wrap;gap:6px;';
+      buttons.forEach(function (b) {
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'card-btn'; btn.style.flex = 'none'; btn.textContent = b.label;
+        btn.addEventListener('click', function () { aiHelperAct(b, text, ov, btn); });
+        row.appendChild(btn);
+      });
+      log.appendChild(row); log.scrollTop = log.scrollHeight;
+    }
+    function send() {
+      var text = (inp.value || '').trim();
+      if (!text || sendBtn.disabled) return;
+      lastText = text; inp.value = '';
+      bubble(text, true);
+      var wait = bubble('…', false);
+      sendBtn.disabled = true;
+      callFn('aiConcierge', { op: 'member_chat', message: text }).then(function (r) {
+        var d = (r && r.data) || r || {};
+        wait.textContent = d.reply || '조금만 더 자세히 말씀해 주세요.';
+        buttonsRow(d.buttons, text);
+      }).catch(function (e) {
+        wait.textContent = (e && /resource-exhausted/.test(e.code || '')) ? e.message : '지금은 답하기 어려워요. 관리자에게 바로 전달할 수 있어요.';
+        buttonsRow([{ act: 'forward', label: '📨 관리자에게 직접 전달', tag: '문의' }], text);
+      }).then(function () { sendBtn.disabled = false; });
+    }
+    sendBtn.addEventListener('click', send);
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+  }
+  function aiHelperAct(b, text, ov, btn) {
+    var myId = currentUser && currentUser.id;
+    if (!myId) return;
+    if (b.act === 'forward') {
+      btn.disabled = true;
+      sendMessageTo(myId, 'user', '[AI 도우미 · ' + (b.tag || '문의') + '] ' + text, '', { viaAi: true }).then(function () {
+        btn.textContent = '✅ 관리자에게 전달했어요';
+      }).catch(function (e) { btn.disabled = false; modalNotice('오류', '전달하지 못했어요: ' + ((e && e.message) || e)); });
+      return;
+    }
+    closeModal(ov);
+    var me = findMyEntry(currentState);
+    if (b.act === 'pin') handleChangeMyPin();
+    else if (b.act === 'deactivate' && me) handleDeactivate(me.id);
+    else if (b.act === 'delete' && me) handleDelete(me.id);
+  }
+  /* ✨ 소개글 다듬기 — 회원 본인 글만 보내고, '적용'을 눌러야 입력칸에 들어감(저장은 회원이 직접) */
+  function aiIntroCoach(textarea) {
+    var text = (textarea.value || '').trim();
+    if (text.length < 5) { modalNotice('안내', '소개글을 조금 써 주시면 AI가 다듬어 드릴게요.'); return; }
+    var hide = showBusy('AI가 다듬는 중…');
+    callFn('aiConcierge', { op: 'intro_coach', text: text }).then(function (r) {
+      hide();
+      var out = ((r && r.data) || r || {}).text || '';
+      if (!out) throw new Error('결과가 비었어요');
+      var ov = openModal('<h3>✨ AI가 다듬은 소개글</h3>' +
+        '<p class="modal-msg" style="font-size:0.78rem;color:var(--muted);">🤖 AI가 쓴 제안이에요. 마음에 들면 적용한 뒤 고쳐 쓰고 저장해 주세요.</p>' +
+        '<div style="white-space:pre-wrap;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:0.88rem;line-height:1.6;" id="ai-coach-out"></div>' +
+        '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">그대로 두기</button><button type="button" class="card-btn primary" id="ai-coach-apply">적용</button></div>');
+      ov.querySelector('#ai-coach-out').textContent = out;
+      ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+      ov.querySelector('#ai-coach-apply').addEventListener('click', function () {
+        textarea.value = out.slice(0, Number(textarea.getAttribute('maxlength')) || 300);
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        closeModal(ov);
+      });
+    }).catch(function (e) { hide(); modalNotice('안내', (e && e.message) || '지금은 다듬기가 어려워요.'); });
+  }
   function adminRoomHtml(state, me) {
     if (!adminRoomVisible(me)) return '';
     var th = threadFor(state, currentUser.id, 'user'), last = th[th.length - 1], un = adminUnreadFor(state, me);
@@ -7117,7 +7229,7 @@
       { k: 'conn', ic: '🔗', t: '내 연결', todo: 0, n: connN }
     ];
     var panes = {
-      chat: adminRoomHtml(state, me) + chatRoomsHtml(state, me, true),
+      chat: adminRoomHtml(state, me) + aiHelperRowHtml(me) + chatRoomsHtml(state, me, true),
       'in': '<div class="mine-section">' + (pin.hasAny ? pin.html : '<p class="sub mine-empty">아직 받은 요청이 없어요.</p>') +
         '<p class="sub" style="margin:10px 0 0;font-size:0.76rem;">승인한 요청은 3일 뒤 🔗 내 연결로 옮겨져요.</p></div>',
       out: '<div class="mine-section">' + (pout.hasAny ? pout.html : '<p class="sub mine-empty">아직 보낸 요청이 없어요.<br>명단에서 마음에 드는 분께 요청해 보세요.</p>') + '</div>',
@@ -7211,7 +7323,7 @@
           friendsNews +
           joinSection +
           '';
-      var mmAdminSec = '<div class="mine-section" style="margin-top:22px;"><h3 style="margin-bottom:6px;">💬 관리자와 대화</h3>' + adminRoomHtml(state, myAuthEntry(state)) + '</div>';
+      var mmAdminSec = '<div class="mine-section" style="margin-top:22px;"><h3 style="margin-bottom:6px;">💬 관리자와 대화</h3>' + adminRoomHtml(state, myAuthEntry(state)) + aiHelperRowHtml(myAuthEntry(state)) + '</div>';
     }
     /* Case A: 주선자 계정 자체로 보고 있음(본인 미전환/미등록) → 관리 홈만 */
     if (isMatchmakerEntry(me)) {
@@ -12874,6 +12986,8 @@
       openMemberMsgCenter();
       return;
     }
+    if (e.target.closest('#ai-helper-open')) { openAiHelper(); return; }
+    if (e.target.closest('#ai-intro-coach')) { var ta = document.getElementById('f-intro'); if (ta) aiIntroCoach(ta); return; }
     if (e.target.closest('#member-msg-delall')) {
       modalConfirm('전체 삭제', '관리자와의 메시지 이력을 모두 지울까요?').then(function (ok) {
         if (ok) deleteMyThread();
