@@ -831,6 +831,7 @@ exports.onStateChange = functions
     const jobs = [];
     jobs.push(syncPublicView(after).catch((e) => console.error('syncPublicView', e)));
     jobs.push(sweepSecrets(before, after).catch((e) => console.error('sweepSecrets', e)));
+    jobs.push(recordNickChanges(before, after).catch((e) => console.error('recordNickChanges', e)));
     jobs.push(sweepPlainContacts(after).catch((e) => console.error('sweepPlainContacts', e)));
     jobs.push(sweepThumbs(before, after).catch((e) => console.error('sweepThumbs', e)));
     jobs.push(bumpMemberEver(after).catch((e) => console.error('bumpMemberEver', e)));
@@ -1071,7 +1072,7 @@ function buildPublicView(state) {
   const byId = {}; entries.forEach((e) => { byId[e.id] = e; });
   const lastOf = (e) => { let v = e.lastSeenAt; if (e.managedBy && byId[e.managedBy] && byId[e.managedBy].lastSeenAt) v = byId[e.managedBy].lastSeenAt; return v || e.submittedAt || null; };
   /* 티저: 승인 회원 중 명단 노출 대상. 신원 연결 안 되게 닉네임·id·사진 없음, 소개는 앞 18자만 */
-  const teaser = entries.filter((e) => !e.isMatchmaker && !e.deactivated && !e.testAccount).map((e, i) => ({
+  const teaser = entries.filter((e) => !e.isMatchmaker && !e.deactivated && !e.deleteRequested && !e.testAccount).map((e, i) => ({
     id: 't' + i, gender: e.gender || '', birthYear: e.birthYear || null, region: clip(e.region, 20),
     meetZones: (Array.isArray(e.meetZones) && e.meetZones.length) ? e.meetZones.filter((k) => MEET_ZONES.includes(k)) : MEET_ZONES.slice(),
     intro: clip(e.intro, 18), idealType: clip(e.idealType, 18),
@@ -1458,6 +1459,17 @@ async function sweepPlainContacts(after) {
   });
 }
 
+/* 닉네임이 바뀌면 예전 닉네임을 관리자 전용(adminOnly/{id}.nickHistory)에 남김 (2026-10-27: 프로필을 '-' 로 지우고 탈퇴 요청하면 누군지 몰랐음) */
+async function recordNickChanges(before, after) {
+  const prev = {}; allOf(before).forEach((e) => { if (e && e.id) prev[e.id] = String(e.nickname || '').trim(); });
+  const jobs = [];
+  allOf(after).forEach((e) => {
+    const old = prev[e && e.id];
+    if (!old || old === '-' || old === String(e.nickname || '').trim()) return;
+    jobs.push(db.collection('adminOnly').doc(e.id).set({ nickHistory: admin.firestore.FieldValue.arrayUnion(old.slice(0, 30)) }, { merge: true }));
+  });
+  await Promise.all(jobs);
+}
 async function sweepSecrets(before, after) {
   const FV = admin.firestore.FieldValue;
   const beforeMap = {}; allOf(before).forEach((e) => { beforeMap[e.id] = e; });
@@ -2279,7 +2291,12 @@ async function triageFacts(d) {
     }
   };
 }
-const ATTACK_START_MS = Date.parse('2026-10-26T07:28:00Z');   /* 10-26 16:28 KST 대입 공격 시작 */
+const ATTACK_START_MS = Date.parse('2026-10-26T07:28:00Z');
+/* AI·규칙이 '본인'으로 본 경고는 기록만 남기고 확인함 처리 — 관리자 탭 보안 경고가 계속 깜빡이지 않게 (2026-10-27) */
+function benignClose(d, v) {
+  const at = new Date().toISOString();
+  return { triage: Object.assign({}, d.triage, v, { pushed: false, at }), resolved: true, resolvedAt: at, resolvedBy: 'AI' };
+}   /* 10-26 16:28 KST 대입 공격 시작 */
 async function triagePush(ref, d, verdict, note) {
   const gate = await alertAllowed(guardKey('k_', d.ip + '_' + (d.target || ''))).catch(() => ({ ok: true, skipped: 0 }));
   if (gate.ok) await sendToAdmin(d.triage.title || '⚠️ 수상한 접속', (d.triage.body || '') + (note ? ' · ' + note : '')).catch(() => {});
@@ -2290,12 +2307,12 @@ async function runTriage(ref, d) {
   const r = await triageFacts(d);
   if (!urgent && d.kind === 'access' && r.sessionBeforeAttack && !BREACHED_IDS.has(d.target) && !(d.intel && d.intel.dcvpn)) {
     const v = { state: 'benign', by: 'rule', reason: '10-26 공격 전부터 이 기기에 로그인돼 있던 세션 — 기록 시작 전부터 쓰던 기기라 처음 보는 것처럼 보임' };
-    await ref.set({ triage: Object.assign({}, d.triage, v, { pushed: false, at: new Date().toISOString() }) }, { merge: true });
+    await ref.set(benignClose(d, v), { merge: true });
     return v;
   }
   if (!urgent && r.sameNet && !BREACHED_IDS.has(d.target)) {
     const v = { state: 'benign', by: 'rule', reason: '전에 이 계정이 쓰던 같은 회선(IP)에서 새 기기 — 같은 집·회사 기기로 보임' };
-    await ref.set({ triage: Object.assign({}, d.triage, v, { pushed: false, at: new Date().toISOString() }) }, { merge: true });
+    await ref.set(benignClose(d, v), { merge: true });
     return v;
   }
   const key = (process.env.ANTHROPIC_API_KEY || '').trim();
@@ -2314,7 +2331,7 @@ async function runTriage(ref, d) {
   if (urgent) {
     await ref.set({ triage: Object.assign({}, d.triage, { state: 'noted', ai: v.state, by: v.by, reason: v.reason, at: new Date().toISOString() }) }, { merge: true });
   } else if (v.state === 'benign') {
-    await ref.set({ triage: Object.assign({}, d.triage, v, { pushed: false, at: new Date().toISOString() }) }, { merge: true });
+    await ref.set(benignClose(d, v), { merge: true });
   } else {
     await triagePush(ref, d, v, 'AI(' + (v.state === 'suspicious' ? '수상' : '판단 어려움') + '): ' + v.reason);
   }
@@ -3019,7 +3036,7 @@ exports.aiConcierge = functions
         const nextEntries = entries.map((e) => {
           if (!e || !e.id) return e;
           /* AI 가 '정상'이라 해도 코드가 먼저 봄 (2026-10-27 초코 사진 1→0장을 정상 처리) — 사진 0장·내용 지우기·이상한 출생연도는 관리자 확인 */
-          const er = confirmMap[e.id] ? editRisk(e) : [];
+          const er = (confirmMap[e.id] && !e.deleteRequested) ? editRisk(e) : [];   /* 탈퇴 요청자는 스스로 지우는 경우가 많아 제외 */
           if (er.length) {
             editRiskList.push({ id: e.id, nickname: e.nickname || '', why: er });
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '프로필 변경 확인 필요 · ' + (e.nickname || '')),
