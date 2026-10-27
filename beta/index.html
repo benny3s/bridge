@@ -1086,7 +1086,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-27-472';
+  var APP_VERSION = '2026-10-27-473';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -2284,9 +2284,13 @@
       return firebase.auth().signInWithCustomToken(t);
     });
   }
-  function reauthCurrentUser() {
+  /* retries: 계정 전환 직후엔 서버가 물려받은 PIN 을 금고로 옮기는 몇 초 동안 'unavailable'(실패로 안 셈)을 돌려줌 → 잠깐씩 기다렸다 다시 (2026-10-27) */
+  function reauthCurrentUser(retries) {
     if (!currentUser || !currentUser.id || !currentUser.pin) return Promise.resolve();
-    return memberServerLogin(currentUser.id, currentUser.pin).then(switchDataForAuth).catch(function (e) { try { console.warn('reauth', e && e.code); } catch (e2) {} });
+    return memberServerLogin(currentUser.id, currentUser.pin).then(switchDataForAuth).catch(function (e) {
+      if (retries > 0 && /unavailable/.test(String((e && e.code) || ''))) return new Promise(function (r) { setTimeout(r, 1500); }).then(function () { return reauthCurrentUser(retries - 1); });
+      try { console.warn('reauth', e && e.code); } catch (e2) {}
+    });
   }
   var _prewarmed = {};
   function prewarmLogin(fnName) {
@@ -3971,7 +3975,7 @@
       currentUser = { id: mmId, nickname: me.nickname, pin: currentUser.pin }; saveSession();
       actingResolved = false; actingAs = null; formRole = 'matchmaker';
       appendLog('edit', me.nickname, '일반→주선자 계정 전환');
-      return reauthCurrentUser().then(refreshNow);
+      return reauthCurrentUser(8).then(refreshNow);
     });
   }
   function handleConvertToMatchmaker() {
@@ -4040,7 +4044,7 @@
         currentUser = { id: ownSelf.id, nickname: ownSelf.nickname, pin: currentUser.pin }; saveSession();
         actingResolved = false; actingAs = null; formRole = 'self';
         appendLog('edit', ownSelf.nickname, '주선자→일반 계정 전환');
-        return reauthCurrentUser().then(refreshNow);
+        return reauthCurrentUser(8).then(refreshNow);
       }).then(function () {
         activeTab = 'mine'; paint(currentState);
         modalNotice('전환 완료 🙋', ownSelf.nickname + '님, 이제 일반 소개팅 계정이에요. 같은 PIN으로 로그인해요.');
@@ -9002,7 +9006,7 @@
         '<button type="button" class="card-btn" data-action="sec-pinaudit" style="flex:none;">🔑 쉬운 PIN 회원 찾기</button>' +
       '</div>' +
       (_secAlerts.length ? _secAlerts.map(function (a) {
-        var head = '<b>' + (SEC_TYPE[a.type] || a.type) + '</b> · ' + fmtDate(a.at);
+        var head = '<b>' + escapeHtml(SEC_TYPE[a.type] || a.type) + '</b> · ' + fmtDate(a.at);
         var body = '';
         if (a.type === 'tamper') body = escapeHtml(a.writerNick || a.writer || '') + '님 계정으로 ' + (a.issues || []).length + '건 — ' + escapeHtml(a.summary || '');
         else if (a.type === 'ip-block') body = '한 곳에서 1시간에 ' + (a.fails || 0) + '번 실패 → 1시간 차단';
