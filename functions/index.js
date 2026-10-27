@@ -107,11 +107,13 @@ async function pinRecord(id, state) {
 }
 /* 로그인·본인 확인용 PIN 은 서버 금고(secrets)에 있는 값만 믿는다 (2026-10-27).
    state(회원이 쓸 수 있는 문서)에 들어온 PIN 값은 금고로 옮겨지기 전이라도 로그인에 쓰지 않음.
-   새 PIN 은 sweepSecrets 가 몇 초 안에 금고로 옮기므로 정상 회원 영향 없음(가입은 stashSecrets 로 바로 금고). */
+   새 PIN 은 sweepSecrets 가 몇 초 안에 금고로 옮기므로 정상 회원 영향 없음(가입은 stashSecrets 로 바로 금고).
+   entry.pinFrom(물려받기)도 state 값이라 믿지 않음 (2026-10-27 보안 검토): 회원이 남의 항목에 pinFrom=자기 id 를 써 넣고
+   sweepSecrets 가 지우기 전 몇 초 사이에 로그인하면 금고 PIN 이 없는 계정(PIN 회수·재설정 대기)을 자기 PIN 으로 열 수 있었음.
+   물려받기는 sweepSecrets 가 소유자 확인 뒤 금고로 복사하고, 그 전 로그인은 memberLogin 이 'unavailable'(잠시 뒤 다시)로 돌려보냄 */
 async function pinSourceFor(entry, state) {
-  let rec = await pinRecord(entry.id, null);
-  if (!rec.pinAuth && !rec.pinHash && entry.pinFrom) rec = await pinRecord(entry.pinFrom, null);
-  return Object.assign({ id: entry.id }, rec);
+  const rec = await pinRecord(entry.id, null);
+  return Object.assign({ id: entry.id, pinPending: !rec.pinAuth && !rec.pinHash && !!entry.pinFrom }, rec);
 }
 const ENTRY_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 /* PIN이 필요한 서버 기능(번호 저장·지인 필터) 공통 본인 확인: 서버 로그인 토큰이 그 계정이면 통과,
@@ -212,6 +214,8 @@ exports.memberLogin = functions
       throw new HttpsError('resource-exhausted', '이 계정은 PIN이 여러 번 틀려 보호를 위해 하루 동안 잠겼어요. 본인이시면 아래 \'PIN을 잊으셨나요? PIN 재설정 요청\'으로 관리자에게 새 PIN을 받아 주세요.');
     }
     const src = await pinSourceFor(entry, state);
+    /* 물려받은 PIN 이 아직 금고로 안 옮겨짐(주선자 전환 직후 몇 초) → 실패로 세지 않고 잠시 뒤 다시 (앱이 자동 재시도) */
+    if (src.pinPending) throw new HttpsError('unavailable', '계정을 정리하는 중이에요. 잠시 뒤 다시 시도해 주세요.');
     /* 흔한 PIN(1234·0000…)은 맞든 틀리든 같은 안내로 로그인 거부 (2026-10-26 대입 공격으로 4계정 탈취) — 맞으면 계정에 pinWeak 표시해 새 PIN 받게.
        같은 안내라 공격자는 그 PIN 이 맞았는지 알 수 없다 */
     if (COMMON_WEAK_PINS.has(pin)) {
@@ -2734,6 +2738,18 @@ exports.aiConcierge = functions
     const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim();
     const op = String((data && data.op) || '').trim();
 
+        /* 번호 형식 확인 결과만 (원문 X): 정상 → '010-암호화보관확인'(PC 가 정상으로 봄), 아니면 형식 오류 표시 */
+    function phoneCheckLabel(raw) {
+      let d = String(raw || '').replace(/\D/g, '');
+      if (d.startsWith('82') && d.length >= 11) d = '0' + d.slice(2);
+      if (!/^010\d{8}$/.test(d)) return '형식오류';
+      const fake = /^(\d)\1{3}$/;
+      if (fake.test(d.slice(3, 7)) && fake.test(d.slice(7, 11))) return '반복번호의심';
+      return '010-암호화보관확인';
+    }
+    /* 승인·보류 사유 등 기록에 들어가는 글에서 전화번호 모양은 가림 (state.logs 는 회원 전원이 읽음) */
+    function scrubPhones(t) { return String(t == null ? '' : t).replace(/(?:\+?82[\s.-]?|0)1[016789][\s.-]?\d{3,4}[\s.-]?\d{4}/g, '010-****-****'); }
+
     /* PC 관제탑이 켜졌을 때 클라우드(Firestore)에 밀려 있던 미처리 안건 + 신규 신청서/프로필 변경 건을 수거해 가는 전용 동기화 엔드포인트 */
     if (op === 'pc_sync_pull') {
       const syncKey = String((data && data.sync_key) || '').trim();
@@ -2773,7 +2789,9 @@ exports.aiConcierge = functions
         let phoneStr = '';
         try {
           const sc = (await db.doc('sendContacts/' + p.id).get()).data();
-          if (sc && sc.enc) phoneStr = decPhone(sc.enc) || '010-암호화보관확인';
+          /* 번호 원문은 PC 로 내보내지 않음 (2026-10-27 보안 검토: 승인 사유·텔레그램·state.logs 로 번호가 새던 경로) —
+             서버에서 형식만 확인해 PC 가 이미 아는 표시값으로 보냄 */
+          if (sc && sc.enc) phoneStr = phoneCheckLabel(decPhone(sc.enc));
           else if (sc && sc.ph) phoneStr = '010-암호화보관확인';
         } catch (e) {}
         if (!phoneStr) {
@@ -2894,17 +2912,17 @@ exports.aiConcierge = functions
             const welcomeText = (!ent.isMatchmaker && polishTip) ? (baseWelcome + '\n\n' + polishTip) : baseWelcome;
             msgs.push({ id: nodeCrypto.randomUUID(), entryId: ent.id, from: 'admin', text: welcomeText, at: nowIso, auto: true });
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '신청 자동 승인' + (polishTip ? '(소개글 다듬기 팁 안내)' : '') + ' · ' + (ent.nickname || '')),
-              { eid: ent.id, why: clip(approveMap[p.id].reason, 300) }));
+              { eid: ent.id, why: clip(scrubPhones(approveMap[p.id].reason), 300) }));
           } else if (holdMap[p.id]) {
             const heldCopy = Object.assign({}, p, {
-              heldReason: holdMap[p.id].hold_reason || '프로필 사진 및 소개글 보완이 필요해요.',
+              heldReason: scrubPhones(holdMap[p.id].hold_reason) || '프로필 사진 및 소개글 보완이 필요해요.',
               heldAt: nowIso,
               aiAuditedAt: nowIso
             });
             nextPend.push(heldCopy);
             heldEntries.push(heldCopy);
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '신청 보완 요청(보류) · ' + (heldCopy.nickname || '')),
-              { eid: heldCopy.id, why: clip(holdMap[p.id].reason || heldCopy.heldReason, 300) }));
+              { eid: heldCopy.id, why: clip(scrubPhones(holdMap[p.id].reason || heldCopy.heldReason), 300) }));
           } else {
             nextPend.push(p);
           }
@@ -2922,7 +2940,7 @@ exports.aiConcierge = functions
               label: clip(x && x.label, 40), before: clip(x && x.before, 200), after: clip(x && x.after, 200), note: clip(x && x.note, 80)
             }));
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '프로필 변경 확인 완료 · ' + (c.nickname || '')),
-              { eid: e.id, why: clip(confirmMap[e.id].reason, 300), chg }));
+              { eid: e.id, why: clip(scrubPhones(confirmMap[e.id].reason), 300), chg }));
             return c;
           }
           if (flagMap[e.id]) {
@@ -2952,8 +2970,23 @@ exports.aiConcierge = functions
     if (!apiKey && !ollamaKey && !anthropicKey) throw new HttpsError('failed-precondition', 'AI 컨시어지 키가 준비되지 않았어요.');
 
     const isAdmin = !!(context.auth.token && context.auth.token.admin === 1);
+    /* 익명 손님 토큰으로는 AI 를 못 쓰게 (2026-10-27 보안 검토: 누구나 주인 키로 아무 글이나 생성할 수 있었음) */
+    const tok = context.auth.token || {};
+    if (!isAdmin && tok.m !== 1 && tok.p !== 1) throw new HttpsError('permission-denied', '로그인한 회원만 쓸 수 있어요.');
+    /* 제보자 이름은 앱이 보낸 값을 믿지 않고 서버가 토큰으로 정함 ('관리자'라고 사칭해 AI 판단을 바꾸는 것 차단) */
+    const serverAuthor = async () => {
+      if (isAdmin) return '관리자(베니)';
+      let nick = '';
+      try {
+        const st = (await db.doc('app/state').get()).data() || {};
+        const me = (st.entries || []).concat(st.pendingEntries || []).find((e) => e && e.id === context.auth.uid);
+        nick = clip(me && me.nickname, 20).replace(/[\[\]<>]/g, '');
+      } catch (e) {}
+      return (tok.m === 1 ? '회원' : '신청자') + (nick ? ' ' + nick : '');
+    };
 
     if (op === 'heal_list') {
+      if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 볼 수 있어요.');
       const qs = await db.collection('aiHealTickets').orderBy('created_at', 'desc').limit(25).get();
       const tickets = [];
       qs.forEach((d) => tickets.push(d.data()));
@@ -3229,7 +3262,7 @@ exports.aiConcierge = functions
     }
 
     if (op === 'confirm_forward') {
-      const author = String((data && data.author) || '회원').slice(0, 60);
+      const author = await serverAuthor();
       const summary = String((data && data.summary) || (data && data.message) || '').trim().slice(0, 600);
       const rawMsg = String((data && data.message) || '').trim().slice(0, 1000);
       const tid = 'qna-' + Date.now().toString(36);
@@ -3258,7 +3291,7 @@ exports.aiConcierge = functions
     if (op === 'heal_submit') {
       const msg = String((data && data.message) || '').trim().slice(0, 2000);
       if (!msg) throw new HttpsError('invalid-argument', '불편한 점이나 요청 내용을 입력해 주세요.');
-      const author = String((data && data.author) || (isAdmin ? '관리자(베니)' : '회원')).slice(0, 60);
+      const author = await serverAuthor();
       const sctx = (data && typeof data.screen_context === 'object' && data.screen_context) ? data.screen_context : {};
       const rawHist = Array.isArray(data && data.history) ? data.history.slice(-6) : [];
       const histText = rawHist.length
