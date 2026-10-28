@@ -2346,7 +2346,8 @@ exports.chatAction = functions
       await ref.set({ reportedAt: new Date().toISOString(), reportedBy: asId, reportReason: reason }, { merge: true });
       await db.runTransaction(async (tx) => {
         const s = (await tx.get(db.doc('app/state'))).data() || {};
-        tx.update(db.doc('app/state'), { logs: (s.logs || []).concat([logItem('report', nameOf(entries, asId), '대화 신고 → ' + nameOf(entries, otherId))]) });
+        /* 활동 기록은 회원 누구나 읽으니 누가 누구를 신고했는지는 남기지 않음 (2026-10-29 점검) — 관리자는 🚨 신고된 대화에서 봄 */
+        tx.update(db.doc('app/state'), { logs: (s.logs || []).concat([logItem('report', '회원', '대화 신고 접수')]) });
       });
       await sendToAdmin('🚨 대화 신고', nameOf(entries, asId) + '님이 ' + nameOf(entries, otherId) + '님과의 대화를 신고했어요').catch(() => {});
       return { ok: true };
