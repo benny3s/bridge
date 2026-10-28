@@ -29,6 +29,7 @@
     --accent-soft: #F4DADC;
     --gold: #C08A34;
     --gold-soft: #F1E2C4;
+    --gold-btn: #F7D774;
     --shadow: rgba(42, 31, 38, 0.12);
     --focus: #B23A48;
     --lock: #5B7A8C;
@@ -45,6 +46,7 @@
       --accent-soft: #45262B;
       --gold: #D9A94F;
       --gold-soft: #463823;
+      --gold-btn: #6E5420;
       --shadow: rgba(0, 0, 0, 0.45);
       --focus: #E58C96;
       --lock: #8FB2C7;
@@ -61,6 +63,7 @@
     --accent-soft: #45262B;
     --gold: #D9A94F;
     --gold-soft: #463823;
+    --gold-btn: #6E5420;
     --shadow: rgba(0, 0, 0, 0.45);
     --focus: #E58C96;
     --lock: #8FB2C7;
@@ -1100,7 +1103,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-28-485';
+  var APP_VERSION = '2026-10-28-486';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -9619,8 +9622,8 @@
         '</div>' +
         /* 2줄: 개발자 응원하기 / Q&A */
         '<div class="admin-bar-row">' +
-          '<button type="button" class="admin-link" id="buy-coffee" style="background:var(--gold-soft);border-color:var(--gold);color:var(--gold);opacity:1;font-weight:700;">&#9749; 개발자 응원하기</button>' +
-          '<button type="button" class="admin-link" id="feedback-btn" style="background:var(--gold-soft);border-color:var(--gold);color:var(--ink);opacity:1;font-weight:700;">&#128172; Q&amp;A</button>' +
+          '<button type="button" class="admin-link" id="buy-coffee" style="background:var(--gold-btn);border-color:var(--gold);color:var(--ink);opacity:1;font-weight:700;">&#9749; 개발자 응원하기</button>' +
+          '<button type="button" class="admin-link" id="feedback-btn" style="background:var(--gold-btn);border-color:var(--gold);color:var(--ink);opacity:1;font-weight:700;">&#128172; Q&amp;A</button>' +
         '</div>' +
         /* 3줄: 홈에 추가 / 알림 / 로그인 */
         '<div class="admin-bar-row">' +
