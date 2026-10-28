@@ -16,7 +16,8 @@ service cloud.firestore {
     // 손님·승인 대기의 쓰기는 서버 함수(applicantAction)가 대행
     function memberStateKeysOnly() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-        'entries', 'pendingEntries', 'dateRequests', 'messages', 'logs', 'joinRequests',
+        // 'dateRequests' 는 2026-10-29 뺌: 회원 사진·대화 신청은 서버(chatAction req…)만 — 직접 쓰면 차단·하루 한도·휴면 검사를 건너뛰었음
+        'entries', 'pendingEntries', 'messages', 'logs', 'joinRequests',
         'connLog', 'connEver', 'coupleReports', 'appVersion', 'dm', '_w', '_wn'
       ]);
     }
