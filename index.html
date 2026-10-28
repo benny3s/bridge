@@ -5943,6 +5943,8 @@
                 '<button type="button" class="card-btn danger" data-action="delete" data-id="' + escapeHtml(entry.id) + '">🗑 탈퇴하기</button>'
               : reqBtns) +
         '</div>' +
+        (!isAdminUnlocked && !mineOrManaged && canBlockFrom(viewer, entry.id)
+          ? '<div style="text-align:right;padding:0 12px 6px;"><button type="button" data-action="block-member" data-id="' + escapeHtml(entry.id) + '" style="background:none;border:none;color:var(--muted);font-size:0.74rem;cursor:pointer;padding:2px 4px;">🚫 차단</button></div>' : '') +
       '</article>'
     );
   }
@@ -6188,11 +6190,9 @@
     /* 주선자 계정은 소개팅 프로필이 없어 회원 카드로 열면 빈 칸뿐 → 관리자에겐 주선자 상세(실명·번호)로 바로 */
     if (isAdminUnlocked && entry.isMatchmaker) { handleDetail(id); return; }
     var idx = (state.entries || []).indexOf(entry);
-    var blockBtn = canBlockFrom(currentUser ? findMyEntry(state) : null, id)
-      ? '<div style="text-align:center;margin:10px 0 2px;"><button type="button" class="card-btn" data-action="block-member" data-id="' + escapeHtml(id) + '" style="flex:none;font-size:0.8rem;color:var(--muted);border-color:transparent;background:none;">🚫 이 회원 차단</button></div>' : '';
     var overlay = openModal(
       '<button type="button" class="card-close" id="card-detail-close" aria-label="닫기">&times;</button>' +
-      '<div class="card-scroll">' + cardHtml(entry, idx + 1, state, true) + blockBtn + '</div>'
+      '<div class="card-scroll">' + cardHtml(entry, idx + 1, state, true) + '</div>'
     );
     overlay.classList.add('card-detail-modal');
     /* 관리자: 알람 설정 여부를 pushTokens에서 조회해 채움 */
