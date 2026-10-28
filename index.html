@@ -1097,7 +1097,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-491';
+  var APP_VERSION = '2026-10-29-492';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -5236,16 +5236,25 @@
     function close() { _openAdminChatRedraw = null; closeModal(overlay); paint(currentState); }
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
     overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    /* 누르면 바로 말풍선이 보이고 서버는 뒤에서 — 구독으로 진짜 메시지가 오면 다시 그려짐. 실패하면 글을 입력칸에 되돌림 (2026-10-29) */
     overlay.querySelector('#ac-send').addEventListener('click', function () {
       var ta = overlay.querySelector('#ac-text'); var t = ta.value.trim();
       if (!t) return;
-      var btn = overlay.querySelector('#ac-send'); btn.disabled = true;
+      ta.value = '';
+      var el = overlay.querySelector('#ac-body');
+      var tmp = document.createElement('div');
+      tmp.style.opacity = '.6';
+      tmp.innerHTML = adminChatBubble({ from: 'admin', text: t, at: new Date().toISOString() }, false);
+      var emp = el.querySelector('p.modal-msg'); if (emp && !el.querySelector('div')) emp.remove();
+      el.appendChild(tmp); el.scrollTop = el.scrollHeight;
       sendMessageTo(entryId, 'admin', t).then(function () {
         appendLog('admin', '관리자', '메시지 발송 · ' + nick);
-        ta.value = ''; return refreshNow();
-      }).then(function () {
-        draw(); lastCount = threadFor(currentState, entryId, 'admin').length; btn.disabled = false;
-      }).catch(function (err) { btn.disabled = false; modalNotice('오류', '전송 실패: ' + (err.message || err)); });
+        tmp.style.opacity = '1';
+      }).catch(function (err) {
+        if (tmp.parentNode) tmp.remove();
+        if (!ta.value) ta.value = t;
+        modalNotice('오류', '전송 실패: ' + (err.message || err) + ' — 쓴 글은 입력칸에 되돌려 놨어요.');
+      });
     });
   }
   function msgLineHtml(m, del) {
@@ -5321,20 +5330,29 @@
     if (qaAi) qaAi.addEventListener('click', function () { setTimeout(openAiHelper, 0); });
     /* 보내면 창을 닫지 않고 대화칸에 내 말풍선을 붙임 · 두 번 눌림 막기 (2026-10-29 점검) */
     var mcSend = overlay.querySelector('#mc-send'), mcText = overlay.querySelector('#mc-text'), mcThread = overlay.querySelector('#mc-thread');
+    /* 누르면 바로 말풍선이 보이고 서버는 뒤에서 (2026-10-29 Benny '앞에선 빠릿하게') — 실패하면 쓴 글을 입력칸에 되돌림 */
     mcSend.addEventListener('click', function () {
       var t = mcText.value.trim();
-      if (!t || mcSend.disabled) return;
-      mcSend.disabled = true;
+      if (!t) return;
+      mcText.value = ''; mcText.style.height = '';
+      var emp = mcThread.querySelector('[data-empty]'); if (emp) emp.remove();
+      var wrap = document.createElement('div');
+      wrap.innerHTML = bubble({ from: 'user', text: t, at: new Date().toISOString() }) +
+        '<p class="modal-msg" style="font-size:0.76rem;color:var(--muted);text-align:right;margin:2px 4px 6px;">보내는 중…</p>';
+      var note = wrap.lastChild;
+      wrap.style.opacity = '.65';
+      mcThread.appendChild(wrap); mcThread.scrollTop = mcThread.scrollHeight;
       (dataMode === 'full' ? sendMessageTo(currentUser.id, 'user', t)
         : callFn('applicantAction', { op: 'message', text: t }).then(function () { refreshPendingView(); })).then(function () {
         appendLog('message', currentUser.nickname, '관리자에게 메시지');
-        mcText.value = ''; mcText.style.height = '';
-        var emp = mcThread.querySelector('[data-empty]'); if (emp) emp.remove();
-        mcThread.insertAdjacentHTML('beforeend', bubble({ from: 'user', text: t, at: new Date().toISOString() }) +
-          '<p class="modal-msg" style="font-size:0.76rem;color:var(--muted);text-align:right;margin:2px 4px 6px;">보냈어요 ✅ 답장이 오면 알림으로 알려 드려요</p>');
-        mcThread.scrollTop = mcThread.scrollHeight;
-      }).catch(function (err) { modalNotice('오류', '전송 실패: ' + (err.message || err)); })
-        .then(function () { mcSend.disabled = false; });
+        wrap.style.opacity = '1';
+        note.textContent = '보냈어요 ✅ 답장이 오면 알림으로 알려 드려요';
+      }).catch(function (err) {
+        note.textContent = '⚠️ 못 보냈어요 — 쓴 글을 입력칸에 되돌려 놨어요. 다시 보내 주세요.';
+        note.style.color = 'var(--accent)';
+        if (!mcText.value) mcText.value = t;
+        try { console.warn('qa send', err && (err.code || err.message)); } catch (e) {}
+      });
     });
     var da = overlay.querySelector('#mc-delall');
     if (da) da.addEventListener('click', function () {
