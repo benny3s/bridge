@@ -29,6 +29,9 @@
     --gold-soft: #F1E2C4;
     --gold-btn: #F7D774;
     --bubble: #efefef;
+    --muted-strong: #6B5552;
+    --chip-line: #CDB8AE;
+    --tag-bg: rgba(255,255,255,.55);
     --shadow: rgba(42, 31, 38, 0.12);
     --focus: #B23A48;
     --lock: #5B7A8C;
@@ -47,6 +50,9 @@
       --gold-soft: #463823;
       --gold-btn: #6E5420;
       --bubble: #3A2E35;
+      --muted-strong: #D9C8C3;
+      --chip-line: #5E4C55;
+      --tag-bg: rgba(0,0,0,.22);
       --shadow: rgba(0, 0, 0, 0.45);
       --focus: #E58C96;
       --lock: #8FB2C7;
@@ -65,6 +71,9 @@
     --gold-soft: #463823;
     --gold-btn: #6E5420;
     --bubble: #3A2E35;
+    --muted-strong: #D9C8C3;
+    --chip-line: #5E4C55;
+    --tag-bg: rgba(0,0,0,.22);
     --shadow: rgba(0, 0, 0, 0.45);
     --focus: #E58C96;
     --lock: #8FB2C7;
@@ -889,6 +898,15 @@
   .chat-sec-label span { font-size: 0.72rem; color: var(--muted); }
   .qa-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
   .qa-quick span { font-size: 0.76rem; color: var(--muted); margin-right: 2px; }
+  /* 2026-10-29 점검: 터치 영역·대비 — 닫기 44px, 칩 36px, 칩은 눌리는 모양으로, AI 고지·미리보기 글자 진하게 */
+  .cm-x { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+  .cm-head .req-chip, .qa-quick .req-chip, .cm-acts .req-chip { min-height: 36px; }
+  .qa-quick .req-chip:not(.gold):not(.on), .cm-acts .req-chip:not(.gold):not(.on) { background: var(--card); border-color: var(--chip-line); color: var(--ink); }
+  .cm-acts .req-chip.soft { border-color: var(--gold); color: var(--ink); font-size: 0.8rem; }
+  .support-card .admin-room-tag { color: var(--ink); background: var(--tag-bg); }
+  .support-card .chat-item-prev { color: var(--muted-strong); }
+  .cm-sub { font-size: 0.8rem; color: var(--muted-strong); }
+  .req-chip:disabled { opacity: .5; cursor: default; }
   .req-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
   .req-chip { border: 1px solid var(--line); background: var(--paper); color: var(--muted); border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 0.8rem; cursor: pointer; }
   .req-chip b { font-weight: 700; margin-left: 2px; }
@@ -945,6 +963,8 @@
   .chat-send:disabled { opacity: 0.4; }
   .chat-banner { position: fixed; left: 50%; top: 10px; transform: translate(-50%, -140%); z-index: 80; width: min(94vw, 420px); display: flex; gap: 10px; align-items: center; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 14px; padding: 10px 12px; box-shadow: 0 6px 24px rgba(0,0,0,0.18); cursor: pointer; transition: transform 0.3s ease; }
   .chat-banner.show { transform: translate(-50%, 0); }
+  .chat-banner.bottom { top: auto; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translate(-50%, 160%); }
+  .chat-banner.bottom.show { transform: translate(-50%, 0); }
   .chat-banner-text { font-size: 0.86rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat-list { display: flex; flex-direction: column; }
   .chat-item { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 8px 2px; font: inherit; color: var(--ink); cursor: pointer; }
@@ -1077,7 +1097,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-489';
+  var APP_VERSION = '2026-10-29-492';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1515,6 +1535,42 @@
     });
     return state;
   }
+  /* 회원↔관리자 메시지 = memberMsgs/{회원} (재설계 B-2, 2026-10-29): 전엔 app/state.messages 라 승인 회원 누구나 남의 Q&A 를 읽을 수 있었음.
+     관리자는 전부, 회원은 viewers 에 내가 있는 문서(내 것 + 관리하는 친구)만 구독해 모아서 state.messages 처럼 씀(overlayMsgs)
+     → 메시지를 읽는 코드는 그대로. 쓰기는 전부 서버 msgAction (규칙상 앱이 직접 못 씀) */
+  var _msgDocs = {}, _msgsUnsub = null, _msgWarmed = false;
+  function stopMsgs() { if (_msgsUnsub) { try { _msgsUnsub(); } catch (e) {} } _msgsUnsub = null; _msgDocs = {}; }
+  function startMsgs(claims) {
+    stopMsgs();
+    var uid = authUid();
+    var q = null;
+    if (uid && claims.admin === 1) q = db.collection('memberMsgs');
+    else if (uid && claims.m === 1) q = db.collection('memberMsgs').where('viewers', 'array-contains', uid);
+    if (!q) return Promise.resolve();
+    return new Promise(function (resolve) {
+      _msgsUnsub = q.onSnapshot(function (qs) {
+        var m = {}; qs.forEach(function (d) { m[d.id] = (d.data() || {}).msgs || []; });
+        _msgDocs = m;
+        if (currentState && dataMode === 'full') {
+          overlayMsgs(currentState); schedulePaint();
+          if (_openAdminChatRedraw) { try { _openAdminChatRedraw(); } catch (e) {} }
+        }
+        resolve();
+      }, function (err) { try { console.warn('msgs listen', err && err.code); } catch (e) {} _msgsUnsub = null; resolve(); });
+    });
+  }
+  function overlayMsgs(state) {
+    if (!state || state._public) return state;
+    /* 서버에서 막 받은 state 의 messages(옛 앱이 쓴 것·이전 전 기록)는 따로 기억 — 다시 그릴 때 겹치지 않게, 저장되지 않게(열거 안 됨) */
+    if (!Object.prototype.hasOwnProperty.call(state, '_msgLegacy')) {
+      Object.defineProperty(state, '_msgLegacy', { value: Array.isArray(state.messages) ? state.messages : [], enumerable: false, writable: true });
+    }
+    var by = {};
+    state._msgLegacy.forEach(function (m) { if (m && m.id) by[m.id] = m; });
+    Object.keys(_msgDocs).forEach(function (k) { (_msgDocs[k] || []).forEach(function (m) { if (m && m.id) by[m.id] = m; }); });
+    state.messages = Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) { return String(a.at || '').localeCompare(String(b.at || '')); });
+    return state;
+  }
   function stopThumbs() { if (_thumbsUnsub) { try { _thumbsUnsub(); } catch (e) {} } _thumbsUnsub = null; _thumbs = {}; }
   function startThumbs() {
     if (_thumbsUnsub) return Promise.resolve();
@@ -1837,6 +1893,7 @@
     _lastDataAt = Date.now();
     overlayAdminPriv(state);
     overlayThumbs(state);
+    overlayMsgs(state);
     if (!currentUser) restoreSession(state);
     checkVersion(state);
     currentState = state;
@@ -1887,12 +1944,14 @@
       if (mode === 'public') _pendingView = null;
       _authIsAdmin = c.admin === 1;
       startChats(c);
+      var msgsReady = mode === 'full' ? Promise.race([startMsgs(c), new Promise(function (res) { setTimeout(res, 1500); })]) : (stopMsgs(), Promise.resolve());
+      if ((c.m === 1 || c.admin === 1) && !_msgWarmed) { _msgWarmed = true; setTimeout(function () { callFn('msgAction', { op: 'ping' }).catch(function () {}); }, 4000); }   /* 메시지 서버 함수 미리 깨움 */
       /* 회원이면 채팅 서버 함수를 뒤에서 미리 깨워 둠(첫 메시지 전송이 콜드 스타트로 5초 걸리던 문제) */
       if (c.m === 1 && !_chatWarmed) { _chatWarmed = true; setTimeout(function () { callFn('chatAction', { op: 'ping' }).catch(function () {}); }, 2500); }
       var privReady = _authIsAdmin ? startAdminPriv() : (stopAdminPriv(), Promise.resolve());
       /* 썸네일은 최대 1.5초만 기다림 — 늦게 오면 화면이 다시 그려지며 밀려 엉뚱한 곳이 눌림 (2026-10-15), 너무 늦으면 그냥 진행 */
       var thumbsReady = mode === 'full' ? Promise.race([startThumbs(), new Promise(function (res) { setTimeout(res, 1500); })]) : (stopThumbs(), Promise.resolve());
-      return Promise.all([privReady, thumbsReady]).then(function () { return subscribeData(mode); }).then(function (s) {
+      return Promise.all([privReady, thumbsReady, msgsReady]).then(function () { return subscribeData(mode); }).then(function (s) {
         if (mode === 'public' && c.p === 1) return refreshPendingView().then(function () { return currentState; });
         return s;
       });
@@ -2172,13 +2231,7 @@
   /* 관리자: 안 읽은 문의(Q&A) 전부 읽음 처리 */
   function markAllAdminMsgRead() {
     if (!isAdminUnlocked) return;
-    db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) { if (m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin) { var c = JSON.parse(JSON.stringify(m)); c.readByAdmin = true; return c; } return m; });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); }).catch(function () {});
+    callFn('msgAction', { op: 'adminRead' }).catch(function () {});   /* B-2: 서버가 회원 문서마다 읽음 표시, 화면은 구독으로 갱신 */
   }
   /* 새 소식 팝업 — 항목별 "보기"(이동+그 항목 읽음) + "모두 읽음" + 알림 설정.
      force=true(배너 '알림' 버튼): 새 소식이 없어도 팝업을 열어 상태·설정을 보여줌. force 없음(앱 열 때 자동): 있을 때만. */
@@ -2973,7 +3026,7 @@
         '· 사진은 <b>서로 승인한 경우</b>에만 공개돼요(주선자가 관리하는 프로필이면 담당 주선자 포함).<br>' +
         '· 실명·연락처는 <b>암호화</b>되어 관리자만 볼 수 있고, 다른 회원에게 제공하지 않아요.') +
       sec('4. 보유 및 파기',
-        '· 삭제 요청이 승인되면 계정 정보(실명·번호·PIN·사진·프로필)는 7일 안에 파기해요. 다만 부정 재가입 방지를 위해 닉네임·성별·출생연도·지역·삭제 사유와 접속 기록(IP·기기)은 따로 <b>1년</b> 보관한 뒤 지워요.<br>' +
+        '· 삭제 요청이 승인되면 계정 정보(실명·번호·PIN·사진·프로필)는 7일 안에 파기해요. 관리자와 주고받은 문의(Q&amp;A)는 분쟁 대응을 위해 90일 보관한 뒤 지워요. 다만 부정 재가입 방지를 위해 닉네임·성별·출생연도·지역·삭제 사유와 접속 기록(IP·기기)은 따로 <b>1년</b> 보관한 뒤 지워요.<br>' +
         '· 회원끼리 주고받은 대화는 상대방 대화함에 남을 수 있어요. 대화는 두 사람만 볼 수 있고(주선자가 관리하는 프로필이면 담당 주선자 포함), 관리자는 <b>신고가 접수된 대화만</b> 확인해요.<br>' +
         '· 신고·분쟁 대응을 위해, 두 사람이 모두 대화를 지우거나 탈퇴한 뒤에도 서버에 <b>90일간 보관</b> 후 삭제해요 (신고 처리 중인 대화는 처리 완료 때까지 보관).<br>' +
         '· 보관(휴면)을 고르면 다시 활동할 수 있도록 보관하며, 언제든 삭제를 요청할 수 있어요.<br>' +
@@ -3411,7 +3464,7 @@
   function openModal(bodyHtml) {
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
-    overlay.innerHTML = '<div class="modal-box">' + bodyHtml + '</div>';
+    overlay.innerHTML = '<div class="modal-box" role="dialog" aria-modal="true">' + bodyHtml + '</div>';   /* 화면 읽기 프로그램용 (2026-10-29) */
     var _openedAt = Date.now();
     overlay.addEventListener('click', function (e) { if (Date.now() - _openedAt < 350) { e.stopPropagation(); e.preventDefault(); } }, true);
     document.body.appendChild(overlay);
@@ -4592,38 +4645,19 @@
     }).catch(function (err) { modalNotice('오류', '아카이브 로드 실패: ' + (err.message || err)); });
   }
   /* ---- 관리자 <-> 회원 메시지 ---- */
+  /* B-2 (2026-10-29): 메시지는 서버가 memberMsgs/{회원} 에 씀 — 관리자는 adminSend, 회원은 send(내 계정·관리하는 친구 이름으로만) */
   function sendMessageTo(entryId, from, text, guestName, extra) {
     text = (text || '').trim();
     if (!text || !entryId) return Promise.resolve();
-    var m = { id: genId(), entryId: entryId, from: from, text: text, at: new Date().toISOString() };
-    if (guestName) m.guestName = guestName;
-    if (extra) Object.keys(extra).forEach(function (k) { if (extra[k] != null) m[k] = extra[k]; });
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).concat([m]);
-        tx.update(stateRef, { messages: msgs });
-      });
-    });
+    if (from === 'admin') return callFn('msgAction', { op: 'adminSend', ids: [entryId], text: text, extra: extra || null });
+    return callFn('msgAction', { op: 'send', entryId: entryId, text: text, viaAi: !!(extra && extra.viaAi) });
   }
-  /* 여러 회원에게 같은 메시지 일괄 발송 — 반드시 '한 트랜잭션'으로 append (개별 sendMessageTo를 Promise.all로 돌리면 app/state 동시 쓰기 충돌 "stored version does not match") */
+  /* 여러 회원에게 같은 메시지 일괄 발송 (관리자) — 서버가 회원 문서마다 덧붙임 */
   function sendMessagesBulk(entryIds, from, text, extra) {
     text = (text || '').trim();
     var ids = (entryIds || []).filter(Boolean);
     if (!text || !ids.length) return Promise.resolve(0);
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data() || {};
-        var msgs = (s.messages || []).slice();
-        ids.forEach(function (eid) {
-          var m = { id: genId(), entryId: eid, from: from, text: text, at: new Date().toISOString() };
-          if (extra) Object.keys(extra).forEach(function (k) { if (extra[k] != null) m[k] = extra[k]; });
-          msgs.push(m);
-        });
-        if (msgs.length > 5000) msgs = msgs.slice(msgs.length - 5000);
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return ids.length; });
+    return callFn('msgAction', { op: 'adminSend', ids: ids, text: text, extra: extra || null }).then(function () { return ids.length; });
   }
   function threadFor(state, entryId, viewer) {
     var hideKey = viewer === 'admin' ? 'hiddenByAdmin' : 'hiddenByUser';
@@ -4774,10 +4808,14 @@
     el.innerHTML = '<div class="chat-av" style="background:' + avatarColor(otherId) + ';">' + escapeHtml(initials(nick)) + '</div>' +
       '<div style="min-width:0;flex:1;"><b>' + escapeHtml(nick) + '</b><div class="chat-banner-text">' + escapeHtml(String(text || '').slice(0, 60)) + '</div></div>';
     var _shownAt = Date.now();
-    if (document.querySelector('.chat-screen, .modal-overlay')) el.style.top = '64px';   /* 채팅 상단 '‹ 목록'·⋯ 버튼을 덮지 않게 */
+    if (document.querySelector('.modal-overlay.chat-modal')) el.classList.add('bottom');   /* 고객센터·AI 창 머리(✕)를 덮지 않게 아래로 (2026-10-29) */
+    else if (document.querySelector('.chat-screen, .modal-overlay')) el.style.top = '64px';   /* 채팅 상단 '‹ 목록'·⋯ 버튼을 덮지 않게 */
     el.addEventListener('click', function () {
       if (Date.now() - _shownAt < 300) return;
       if (el.parentNode) el.remove();
+      /* 쓰던 글이나 AI 대화가 있는 창이 열려 있으면 닫지 않음 — 알림 줄만 치움 (안 읽음 숫자로 남아 있음) */
+      var busy = Array.prototype.some.call(document.querySelectorAll('.modal-overlay'), function (m) { return overlayHasDraft(m) || m._conv; });
+      if (busy) return;
       Array.prototype.forEach.call(document.querySelectorAll('.modal-overlay'), function (m) { closeModal(m); });
       if (_openChatClose && _openChatWith !== otherId) _openChatClose();
       openDmChat(otherId);
@@ -5198,16 +5236,25 @@
     function close() { _openAdminChatRedraw = null; closeModal(overlay); paint(currentState); }
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
     overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    /* 누르면 바로 말풍선이 보이고 서버는 뒤에서 — 구독으로 진짜 메시지가 오면 다시 그려짐. 실패하면 글을 입력칸에 되돌림 (2026-10-29) */
     overlay.querySelector('#ac-send').addEventListener('click', function () {
       var ta = overlay.querySelector('#ac-text'); var t = ta.value.trim();
       if (!t) return;
-      var btn = overlay.querySelector('#ac-send'); btn.disabled = true;
+      ta.value = '';
+      var el = overlay.querySelector('#ac-body');
+      var tmp = document.createElement('div');
+      tmp.style.opacity = '.6';
+      tmp.innerHTML = adminChatBubble({ from: 'admin', text: t, at: new Date().toISOString() }, false);
+      var emp = el.querySelector('p.modal-msg'); if (emp && !el.querySelector('div')) emp.remove();
+      el.appendChild(tmp); el.scrollTop = el.scrollHeight;
       sendMessageTo(entryId, 'admin', t).then(function () {
         appendLog('admin', '관리자', '메시지 발송 · ' + nick);
-        ta.value = ''; return refreshNow();
-      }).then(function () {
-        draw(); lastCount = threadFor(currentState, entryId, 'admin').length; btn.disabled = false;
-      }).catch(function (err) { btn.disabled = false; modalNotice('오류', '전송 실패: ' + (err.message || err)); });
+        tmp.style.opacity = '1';
+      }).catch(function (err) {
+        if (tmp.parentNode) tmp.remove();
+        if (!ta.value) ta.value = t;
+        modalNotice('오류', '전송 실패: ' + (err.message || err) + ' — 쓴 글은 입력칸에 되돌려 놨어요.');
+      });
     });
   }
   function msgLineHtml(m, del) {
@@ -5244,8 +5291,9 @@
           '<div class="chat-line">' + (mine ? t : '') + '<div class="chat-bubble' + (mine ? ' mine' : '') + '">' + escapeHtml(m.text) + '</div>' + (mine ? '' : t) + '</div>' +
         '</div></div>';
     };
+    /* 빈 대화도 AI 도우미 창처럼 첫 인사 말풍선으로 (2026-10-29 점검: 두 창 모양 맞추기) */
     var body = thread.length ? thread.map(bubble).join('')
-      : '<p class="modal-msg" style="margin:10px 0 4px;">아직 주고받은 메시지가 없어요. 궁금한 점이나 건의를 남겨 주세요!</p>';
+      : '<div class="chat-row first" data-empty="1"><div class="chat-av" style="background:var(--gold);">👑</div><div class="chat-col"><div class="chat-name">베니브릿지 관리자</div><div class="chat-line"><div class="chat-bubble">궁금한 점이나 건의를 남겨 주세요! 관리자가 직접 답장해요 😊</div></div></div></div>';
     try { localStorage.setItem('bb-admsg-seen:' + currentUser.id, new Date().toISOString()); } catch (e) {}
     /* 2026-10-28: AI 도우미 창과 같은 틀(.chat-modal). 카카오톡 문의 대신 '🤖 AI에게 먼저 물어보기', '자주 찾는 것' → '빠른 버튼' */
     var _qm = dataMode === 'full' ? findMyEntry(currentState) : null;
@@ -5267,7 +5315,7 @@
         '<button type="button" class="cm-x" id="modal-cancel" aria-label="닫기">&times;</button></div>' +
       '<p class="cm-sub">관리자가 직접 확인하고 답장해요. 답장이 오면 알림으로 알려 드려요.</p>' +
       quick +
-      '<div class="cm-thread" id="mc-thread">' + body + '</div>' +
+      '<div class="cm-thread" id="mc-thread" role="log" aria-live="polite">' + body + '</div>' +
       '<div class="cm-bar"><textarea class="modal-input" id="mc-text" rows="1" maxlength="300" placeholder="관리자에게 메시지"></textarea>' +
         '<button type="button" class="card-btn primary" id="mc-send">보내기</button></div>'
     );
@@ -5280,15 +5328,31 @@
     overlay.addEventListener('click', function (e) { if ((e.target === overlay && !overlayHasDraft(overlay)) || (e.target.closest && e.target.closest('.qa-quick button'))) close(); });   /* 바로가기는 창을 닫고 그 기능으로 */
     var qaAi = overlay.querySelector('#qa-ai');
     if (qaAi) qaAi.addEventListener('click', function () { setTimeout(openAiHelper, 0); });
-    overlay.querySelector('#mc-send').addEventListener('click', function () {
-      var t = overlay.querySelector('#mc-text').value.trim();
+    /* 보내면 창을 닫지 않고 대화칸에 내 말풍선을 붙임 · 두 번 눌림 막기 (2026-10-29 점검) */
+    var mcSend = overlay.querySelector('#mc-send'), mcText = overlay.querySelector('#mc-text'), mcThread = overlay.querySelector('#mc-thread');
+    /* 누르면 바로 말풍선이 보이고 서버는 뒤에서 (2026-10-29 Benny '앞에선 빠릿하게') — 실패하면 쓴 글을 입력칸에 되돌림 */
+    mcSend.addEventListener('click', function () {
+      var t = mcText.value.trim();
       if (!t) return;
+      mcText.value = ''; mcText.style.height = '';
+      var emp = mcThread.querySelector('[data-empty]'); if (emp) emp.remove();
+      var wrap = document.createElement('div');
+      wrap.innerHTML = bubble({ from: 'user', text: t, at: new Date().toISOString() }) +
+        '<p class="modal-msg" style="font-size:0.76rem;color:var(--muted);text-align:right;margin:2px 4px 6px;">보내는 중…</p>';
+      var note = wrap.lastChild;
+      wrap.style.opacity = '.65';
+      mcThread.appendChild(wrap); mcThread.scrollTop = mcThread.scrollHeight;
       (dataMode === 'full' ? sendMessageTo(currentUser.id, 'user', t)
         : callFn('applicantAction', { op: 'message', text: t }).then(function () { refreshPendingView(); })).then(function () {
         appendLog('message', currentUser.nickname, '관리자에게 메시지');
-        close();
-        modalNotice('보냈어요 ✅', '관리자에게 메시지를 전달했어요. 답장이 오면 알림으로 알려드릴게요.');
-      }).catch(function (err) { modalNotice('오류', '전송 실패: ' + (err.message || err)); });
+        wrap.style.opacity = '1';
+        note.textContent = '보냈어요 ✅ 답장이 오면 알림으로 알려 드려요';
+      }).catch(function (err) {
+        note.textContent = '⚠️ 못 보냈어요 — 쓴 글을 입력칸에 되돌려 놨어요. 다시 보내 주세요.';
+        note.style.color = 'var(--accent)';
+        if (!mcText.value) mcText.value = t;
+        try { console.warn('qa send', err && (err.code || err.message)); } catch (e) {}
+      });
     });
     var da = overlay.querySelector('#mc-delall');
     if (da) da.addEventListener('click', function () {
@@ -5347,78 +5411,33 @@
     var uid = currentUser && currentUser.id;
     if (!uid) return Promise.resolve();
     if (dataMode !== 'full') return callFn('applicantAction', { op: 'hideMessages' }).then(function () { return refreshPendingView(); });
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.entryId === uid && !m.hiddenByUser) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByUser = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); });
+    return callFn('msgAction', { op: 'hide' });   /* B-2: 내 화면에서만 (관리자 쪽 기록은 그대로) */
   }
   /* 회원: 내 관리자 메시지 중 한 건만 숨기기(내 화면에서 삭제) */
   function deleteMyMessage(id) {
     var uid = currentUser && currentUser.id;
     if (!uid) return Promise.resolve();
     if (dataMode !== 'full') return callFn('applicantAction', { op: 'hideMessages', id: id }).then(function () { return refreshPendingView(); });
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.id === id && m.entryId === uid) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByUser = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); });
+    return callFn('msgAction', { op: 'hide', id: id });
   }
   function deleteAdminMessage(id) {
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.id === id) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByAdmin = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); });
+    var m = (currentState.messages || []).find(function (x) { return x.id === id; });
+    if (!m) return Promise.resolve();
+    return callFn('msgAction', { op: 'adminHide', items: [{ entryId: m.entryId, id: id }] });   /* 관리자 목록에서만 숨김 */
   }
   /* 관리자: 특정 회원과의 메시지 전체 삭제 (내 화면) */
   /* 자동 안내만 있는(회원 답·직접 쓴 말 없음) 대화를 관리자 목록에서 숨김 */
   function cleanAutoOnlyThreads() {
-    var n = 0;
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var by = {};
-        (s.messages || []).forEach(function (m) { if (!m.hiddenByAdmin) (by[m.entryId] = by[m.entryId] || []).push(m); });
-        var target = {};
-        Object.keys(by).forEach(function (eid) { if (!by[eid].some(function (m) { return m.from === 'user' || !isAutoMsg(m); })) target[eid] = 1; });
-        n = Object.keys(target).length;
-        if (!n) return;
-        var msgs = (s.messages || []).map(function (m) {
-          if (target[m.entryId] && !m.hiddenByAdmin) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByAdmin = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { _amFilter = 'talk'; return refreshNow(); }).then(function () { modalNotice("정리 완료", n + "명을 목록에서 정리했어요."); })
+    var by = {};
+    (currentState.messages || []).forEach(function (m) { if (!m.hiddenByAdmin) (by[m.entryId] = by[m.entryId] || []).push(m); });
+    var target = Object.keys(by).filter(function (eid) { return !by[eid].some(function (m) { return m.from === 'user' || !isAutoMsg(m); }); });
+    if (!target.length) { _amFilter = 'talk'; paint(currentState); modalNotice('정리 완료', '정리할 자동 안내만 있는 대화가 없어요.'); return Promise.resolve(); }
+    return callFn('msgAction', { op: 'adminHide', entryIds: target })   /* B-2: 서버가 회원 문서마다 '관리자 목록에서 숨김' */
+      .then(function () { _amFilter = 'talk'; paint(currentState); modalNotice('정리 완료', target.length + '명을 목록에서 정리했어요.'); })
       .catch(function (e) { modalNotice('정리 실패', (e && e.message) || String(e)); });
   }
   function deleteAdminThread(entryId) {
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.entryId === entryId && !m.hiddenByAdmin) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByAdmin = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); });
+    return callFn('msgAction', { op: 'adminHide', entryIds: [entryId] });
   }
   /* ---- 안 읽음(unread) 계산: 마지막으로 본 시각 이후의 이벤트 수 ---- */
   function userUnread(state, me, noChat) {
@@ -5451,16 +5470,7 @@
     if (!isAdminUnlocked) return;
     var has = (currentState.messages || []).some(function (m) { return m.entryId === eid && m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin; });
     if (!has) return;
-    db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.entryId === eid && m.from === 'user' && !m.readByAdmin) { var c = JSON.parse(JSON.stringify(m)); c.readByAdmin = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).catch(function () {});
+    callFn('msgAction', { op: 'adminRead', entryId: eid }).catch(function () {});   /* B-2 */
   }
   /* 하루 경계를 한국시간(KST, UTC+9) 기준으로 계산 (UTC로 하면 KST 오전 9시 이전 접속이 전날로 잡혀 누락됨) */
   function kstDay(iso) { return new Date(new Date(iso).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
@@ -7062,7 +7072,7 @@
     '</button>';
   }
   function chatModalGrow(ta) {   /* 한 줄 입력바: 내용만큼 늘어남(최대 약 4줄) */
-    ta.addEventListener('input', function () { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 110) + 'px'; });
+    ta.addEventListener('input', function () { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + (ta.offsetHeight - ta.clientHeight), 110) + 'px'; });   /* 테두리만큼 더해 2px 잘림·첫 글자 때 튐 방지 */
   }
   function openAiHelper() {
     var me = findMyEntry(currentState);
@@ -7077,7 +7087,7 @@
         '<button type="button" class="req-chip" data-q="대화가 연결됐는데 첫 메시지를 뭐라고 보내면 좋을까요?">💬 첫 메시지 고민</button>' +
         '<button type="button" class="req-chip gold" id="ai-to-admin">👑 관리자에게 직접</button>' +
       '</div>' +
-      '<div class="cm-thread" id="ai-h-log"></div>' +
+      '<div class="cm-thread" id="ai-h-log" role="log" aria-live="polite"></div>' +
       '<div class="cm-bar"><textarea class="modal-input" id="ai-h-in" rows="1" maxlength="500" placeholder="무엇이든 물어보세요"></textarea>' +
         '<button type="button" class="card-btn primary" id="ai-h-send">보내기</button></div>'
     );
@@ -7104,6 +7114,13 @@
       var row = document.createElement('div');
       row.className = 'cm-acts';
       var text = myTexts();   /* 전달은 이 창에서 회원이 쓴 글만 (AI 답은 안 보냄) */
+      var meNow = findMyEntry(currentState) || {};
+      buttons = buttons.filter(function (b) {   /* 이미 요청한 것은 다시 내밀지 않음 (2026-10-29 점검) */
+        if (b.act === 'deactivate' && (meNow.deactivateRequested || meNow.deactivated)) return false;
+        if (b.act === 'delete' && meNow.deleteRequested) return false;
+        return true;
+      });
+      if (!buttons.length) return;
       buttons.forEach(function (b) {
         var btn = document.createElement('button');
         btn.type = 'button'; btn.className = 'req-chip' + (b.soft ? ' soft' : (b.act === 'forward' ? ' gold' : '')); btn.textContent = b.label;
@@ -7119,8 +7136,12 @@
       bubble(text, true);
       var wait = bubble('…', false);
       sendBtn.disabled = true;
+      setChips(true);
+      /* 첫 질문 뒤엔 빠른 질문 칩을 접어 대화칸을 넓게 (👑 관리자에게 직접은 남김) */
+      Array.prototype.forEach.call(ov.querySelectorAll('.qa-quick [data-q], .qa-quick > span'), function (el) { el.hidden = true; });
       var past = hist.slice(-6);
       hist.push({ r: 'me', t: text.slice(0, 300) });
+      ov._conv = true;
       callFn('aiConcierge', { op: 'member_chat', message: text, history: past }).then(function (r) {
         var d = (r && r.data) || r || {};
         var rep = d.reply || '조금만 더 자세히 말씀해 주세요.';
@@ -7132,8 +7153,9 @@
       }).catch(function (e) {
         wait.textContent = (e && /resource-exhausted/.test(e.code || '')) ? e.message : '지금은 답하기 어려워요. 관리자에게 바로 전달할 수 있어요.';
         buttonsRow([{ act: 'forward', label: '📨 관리자에게 전달', tag: '문의' }]);
-      }).then(function () { sendBtn.disabled = false; });
+      }).then(function () { sendBtn.disabled = false; setChips(false); });
     }
+    function setChips(off) { Array.prototype.forEach.call(ov.querySelectorAll('[data-q]'), function (c) { c.disabled = !!off; }); }
     bubble('안녕하세요! 앱 사용법, 불편한 점, 소개팅 고민(첫 메시지·만남 등) 무엇이든 편하게 물어보세요 😊', false);
     chatModalGrow(inp);
     sendBtn.addEventListener('click', function () { send(); });
@@ -7141,21 +7163,31 @@
     /* 폰은 Enter = 줄바꿈(보내기 버튼으로), 한글 조합 중(keyCode 229) Enter 는 안 보냄 — 회원 채팅과 같은 규칙 (2026-10-29) */
     inp.addEventListener('keydown', function (e) { if (!aiTouch && e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); } });
     Array.prototype.forEach.call(ov.querySelectorAll('[data-q]'), function (c) { c.addEventListener('click', function () { send(c.getAttribute('data-q')); }); });
-    ov.querySelector('#ai-to-admin').addEventListener('click', function () { closeModal(ov); openMemberMsgCenter(); });
-    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+    ov.querySelector('#ai-to-admin').addEventListener('click', function () { openMemberMsgCenter(); });   /* 위에 열어 이 대화는 그대로 둠 (2026-10-29) */
+    /* 대화를 나눴으면 닫기 전에 한 번 물음 — 저장되지 않아 닫으면 사라짐 (✕·안드로이드 뒤로 가기 모두 이 버튼을 거침) */
+    ov.querySelector('#modal-cancel').addEventListener('click', function (e) {
+      if (ov._closeOk || !hist.length) { closeModal(ov); return; }
+      e.stopImmediatePropagation();
+      modalConfirm('대화 닫기', 'AI 도우미와 나눈 대화는 저장되지 않아 닫으면 사라져요. 닫을까요?', '닫기').then(function (ok) { if (ok) { ov._closeOk = true; closeModal(ov); } });
+    });
     ov.addEventListener('click', function (e) { if (e.target === ov && !hist.length && !overlayHasDraft(ov)) closeModal(ov); });   /* 대화를 시작했으면 바깥 눌러도 안 닫힘(대화가 사라지니까) */
   }
   function aiHelperAct(b, text, ov, btn) {
     var myId = currentUser && currentUser.id;
     if (!myId) return;
     if (b.act === 'forward') {
-      btn.disabled = true;
-      sendMessageTo(myId, 'user', '[AI 도우미 · ' + (b.tag || '문의') + '] ' + text, '', { viaAi: true }).then(function () {
-        btn.textContent = '✅ 관리자에게 전달했어요';
-      }).catch(function (e) { btn.disabled = false; modalNotice('오류', '전달하지 못했어요: ' + ((e && e.message) || e)); });
+      /* 무엇이 전달되는지 보여 주고 고칠 수 있게 (2026-10-29 점검: 이 창에 쓴 말이 말없이 다 가던 것) */
+      modalMessage('📨 관리자에게 전달', '아래 내용이 관리자에게 전달돼요. 빼고 싶은 부분은 지우고 보내 주세요.', '전달', 'primary', '', true, text).then(function (t) {
+        t = (t == null ? '' : String(t)).trim();
+        if (!t) return;
+        btn.disabled = true;
+        sendMessageTo(myId, 'user', '[AI 도우미 · ' + (b.tag || '문의') + '] ' + t.slice(0, 500), '', { viaAi: true }).then(function () {
+          btn.textContent = '✅ 전달했어요 · 답장은 👑 관리자 방에서';
+        }).catch(function (e) { btn.disabled = false; modalNotice('오류', '전달하지 못했어요: ' + ((e && e.message) || e)); });
+      });
       return;
     }
-    closeModal(ov);
+    /* 확인 창은 위에 겹쳐 열림 — AI 대화는 닫지 않음 (취소하면 대화로 돌아옴) */
     var me = findMyEntry(currentState);
     if (b.act === 'pin') { handleChangeMyPin(); return; }
     /* 주선자가 친구로 활동 중이거나 주선자 계정이면 💤·🗑 를 여기서 바로 하지 않음 — 친구 프로필이나 주선자 계정이 엉뚱하게 처리될 수 있음 (2026-10-29 점검) */
@@ -9785,6 +9817,7 @@
     _permIdx = null;   /* 권한 색인은 그릴 때마다 새로 (화면에서 바로 바꾼 요청도 반영) */
     overlayAdminPriv(state); /* 서버에서 새로 받은 state 로 그릴 때도 관리자 전용 값 유지 */
     overlayThumbs(state);
+    overlayMsgs(state);   /* 관리자 메시지 = memberMsgs (B-2) */
     currentState = state;
     /* 저장된 로그인으로 들어왔는데 임시 PIN 상태면 한 번 새 PIN 정하기를 권한다 */
     if (!_pinForceAsked && currentUser && !isAdminUnlocked) {
@@ -9926,7 +9959,8 @@
 
   function saveState(state) {
     currentState = state;
-    return stateRef.set(JSON.parse(JSON.stringify(state)));
+    var copy = JSON.parse(JSON.stringify(state)); delete copy.messages;   /* 메시지는 memberMsgs (B-2) — 모아 둔 것을 state 에 쓰지 않음 */
+    return stateRef.set(copy);
   }
 
   function decryptAllAdminData(state) {
@@ -10669,17 +10703,7 @@
     var targets = (currentState.entries || []).filter(function (e) { return !e.managedBy && !e.deactivated; });
     if (!targets.length) { modalNotice('안내', '공지를 보낼 대상이 없어요.'); return; }
     var loading = openModal('<h3>보내는 중…</h3><p class="modal-msg">' + targets.length + '명에게 보내고 있어요. 잠시만요…</p>');
-    db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var now = Date.now();
-        var live = (s.entries || []).filter(function (e) { return !e.managedBy && !e.deactivated; });
-        var newMsgs = live.map(function (t, i) { return { id: genId(), entryId: t.id, from: 'admin', text: text, at: new Date(now + i).toISOString(), broadcast: true }; });
-        var msgs = (s.messages || []).concat(newMsgs);
-        if (msgs.length > 5000) msgs = msgs.slice(msgs.length - 5000);
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () {
+    callFn('msgAction', { op: 'adminSend', ids: targets.map(function (t) { return t.id; }), text: text, extra: { broadcast: true } }).then(function () {   /* B-2 */
       appendLog('admin', '관리자', '전체 공지 발송(메시지함) · ' + targets.length + '명');
       return refreshNow();
     }).then(function () {

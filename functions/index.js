@@ -898,6 +898,8 @@ exports.onStateChange = functions
     jobs.push(bumpMemberEver(after).catch((e) => console.error('bumpMemberEver', e)));
     jobs.push(migrateDmToChats(after).catch((e) => console.error('migrateDmToChats', e)));
     jobs.push(refreshChatViewers(before, after).catch((e) => console.error('refreshChatViewers', e)));
+    jobs.push(sweepStateMessages(before, after).catch((e) => console.error('sweepStateMessages', e)));   /* 메시지는 memberMsgs 로 (B-2) */
+    jobs.push(refreshMsgViewers(before, after).catch((e) => console.error('refreshMsgViewers', e)));
     jobs.push(syncPhotoAcl(after, false).catch((e) => console.error('syncPhotoAcl', e)));
     jobs.push(detectTamper(before, after).catch((e) => console.error('detectTamper', e)));
     jobs.push(noteSecRelease(before, after).catch((e) => console.error('noteSecRelease', e)));
@@ -949,26 +951,8 @@ exports.onStateChange = functions
       }
     });
 
-    /* 새 메시지 → 상대에게 (회원→관리자 / 관리자→회원) */
-    const nickAny = (id) => {
-      const e = (after.entries || []).find((x) => x.id === id) || (after.pendingEntries || []).find((x) => x.id === id);
-      return e ? e.nickname : '회원';
-    };
-    const beforeMsg = {};
-    (before.messages || []).forEach((m) => { beforeMsg[m.id] = true; });
-    /* 관리자 메시지 푸시는 서버(_wn 그대로) 또는 관리자(_w='admin') 쓰기일 때만 — 회원이 from:'admin' 메시지를 꽂아 관리자 사칭 알림을 보내는 것 차단 */
-    const trustedMsgWrite = (after._w === 'admin') || (after._wn === before._wn);
-    (after.messages || []).forEach((m) => {
-      if (beforeMsg[m.id]) return;
-      const preview = (m.text || '').slice(0, 40);
-      if (m.from === 'user') jobs.push(sendToAdmin('💬 새 Q&A/메시지', nickAny(m.entryId) + ': ' + preview));
-      /* 대리(주선자 관리) 친구에게 온 관리자 메시지도 주선자에게 전달 (예전엔 친구 기기로만 → 대개 유실) */
-      else if (m.from === 'admin' && trustedMsgWrite) {
-        const me2 = entryById(after.entries || [], m.entryId);
-        if (me2 && me2.managedBy) jobs.push(notifyRecipient(after.entries || [], m.entryId, '💬 관리자 메시지', preview, { route: 'mine' }));
-        else jobs.push(sendTo(m.entryId, '💬 관리자 메시지', preview, { route: 'mine' }));
-      }
-    });
+    /* 회원↔관리자 메시지 푸시는 memberMsgs 트리거(onMemberMsg)가 보냄 — 옛 앱이 state.messages 에 쓴 것도 sweepStateMessages 가
+       옮기면 그때 한 번 알림 (여기서도 보내면 두 번 감). 관리자 사칭(from:'admin')은 옮길 때 버려짐 */
 
     /* 회원↔회원 데이트 채팅(dm): 새 메시지 → 받는 사람에게 (대리 프로필이면 주선자에게) */
     const beforeDm = {};
@@ -1035,13 +1019,13 @@ exports.remindPending = functions
         }
         return r;
       });
-      if (changed) {
-        const upd = { dateRequests: updated };
-        if (newMsgs.length) upd.messages = (state.messages || []).concat(newMsgs);
-        tx.update(ref, upd);
-      }
-      return { entries, sends };
+      if (changed) tx.update(ref, { dateRequests: updated });
+      return { entries, sends, newMsgs };
     });
+    /* 7일 안내 메시지는 그 회원 메시지 문서로 (B-2) — 요청 표시(remind3Sent)가 저장된 뒤에 */
+    if (result && result.newMsgs && result.newMsgs.length) {
+      await appendMemberMsgs(result.newMsgs.map((m) => Object.assign({ auto: true }, m)), result.entries).catch((e) => console.error('remind msgs', e));
+    }
     if (result && result.sends.length) {
       await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
     }
@@ -1342,9 +1326,11 @@ exports.applicantAction = functions
       const name = clip(data.name, 30).trim();
       if (!text || !name || !isSmallObj(data.phoneEnc)) throw new HttpsError('invalid-argument', '이름·전화번호·내용을 모두 입력해주세요.');
       const m = { id: nodeCrypto.randomUUID(), entryId: 'guest-' + nodeCrypto.randomUUID(), from: 'user', text, at: new Date().toISOString(), guestName: name, guestPhoneEnc: data.phoneEnc };
+      await appendMemberMsgs([m], []);   /* 손님 문의는 관리자만 보는 문서로 (B-2) */
+      /* 활동 기록은 회원 누구나 읽으니 손님 이름은 남기지 않음 */
       await db.runTransaction(async (tx) => {
         const s = (await tx.get(stateRef)).data() || {};
-        tx.update(stateRef, { messages: (s.messages || []).concat([m]), logs: (s.logs || []).concat([logItem('message', name + ' (비로그인)', '관리자에게 문의')]) });
+        tx.update(stateRef, { logs: (s.logs || []).concat([logItem('message', '비로그인 방문자', '관리자에게 문의')]) });
       });
       return { ok: true };
     }
@@ -1379,7 +1365,10 @@ exports.applicantAction = functions
       }
       const entry = Object.assign({}, me); delete entry.pinAuth; delete entry.pinHash;
       if (!entry.photoThumb) { const th = ((await db.doc('app/thumbs').get()).data() || {}).t || {}; if (th[uid]) entry.photoThumb = th[uid]; }   /* 썸네일은 app/thumbs 로 분리됨 */
-      const messages = (s.messages || []).filter((m) => m.entryId === uid);
+      /* 메시지는 memberMsgs/{uid} (B-2) + 아직 안 옮겨진 state 메시지(이전 직후 잠깐) */
+      const md = ((await msgsRef(uid).get().catch(() => null)) || { data: () => ({}) }).data() || {};
+      const seen = {}; const messages = [];
+      ((md.msgs || []).concat((s.messages || []).filter((m) => m.entryId === uid))).forEach((m) => { if (m && m.id && !seen[m.id]) { seen[m.id] = 1; messages.push(m); } });
       return { entry, messages };
     }
 
@@ -1387,7 +1376,9 @@ exports.applicantAction = functions
       const src = data.entry || {};
       const photos = data.photos === undefined ? undefined : cleanPhotos(data.photos);
       const resubmitMsg = clip(data.resubmitMsg, 300).trim();
+      let resubmitted = false;
       await db.runTransaction(async (tx) => {
+        resubmitted = false;
         const s = (await tx.get(stateRef)).data() || {};
         const me = (s.pendingEntries || []).find((e) => e.id === uid);
         if (!me) throw new HttpsError('not-found', '신청서를 찾을 수 없어요.');
@@ -1407,9 +1398,10 @@ exports.applicantAction = functions
           return u;
         });
         const upd = { pendingEntries: pend, logs: (s.logs || []).concat([logItem('edit', nick, (me.nickname !== nick ? '닉네임 변경: ' + me.nickname + ' → ' + nick : '신청서 수정'))]) };
-        if (resubmitMsg) upd.messages = (s.messages || []).concat([{ id: nodeCrypto.randomUUID(), entryId: uid, from: 'user', text: '[재신청] ' + resubmitMsg, at: new Date().toISOString() }]);
+        if (resubmitMsg) resubmitted = true;
         tx.update(stateRef, upd);
       });
+      if (resubmitted) await appendMemberMsgs([{ id: nodeCrypto.randomUUID(), entryId: uid, from: 'user', text: '[재신청] ' + resubmitMsg, at: new Date().toISOString() }], []);
       if (photos !== undefined) {
         await db.collection('photos').doc(uid).set({ photos: photos || [] }, { merge: true });
       }
@@ -1438,20 +1430,18 @@ exports.applicantAction = functions
         const s = (await tx.get(stateRef)).data() || {};
         const me = (s.pendingEntries || []).find((e) => e.id === uid);
         if (!me) throw new HttpsError('not-found', '신청서를 찾을 수 없어요.');
-        tx.update(stateRef, {
-          messages: (s.messages || []).concat([{ id: nodeCrypto.randomUUID(), entryId: uid, from: 'user', text, at: new Date().toISOString() }]),
-          logs: (s.logs || []).concat([logItem('message', me.nickname || '신청자', '관리자에게 메시지')])
-        });
+        tx.update(stateRef, { logs: (s.logs || []).concat([logItem('message', me.nickname || '신청자', '관리자에게 메시지')]) });
       });
+      await appendMemberMsgs([{ id: nodeCrypto.randomUUID(), entryId: uid, from: 'user', text, at: new Date().toISOString() }], []);   /* B-2 */
       return { ok: true };
     }
 
     if (op === 'hideMessages') {
       const one = data.id ? String(data.id) : '';
-      await db.runTransaction(async (tx) => {
-        const s = (await tx.get(stateRef)).data() || {};
-        const msgs = (s.messages || []).map((m) => (m.entryId === uid && !m.hiddenByUser && (!one || m.id === one)) ? Object.assign({}, m, { hiddenByUser: true }) : m);
-        tx.update(stateRef, { messages: msgs });
+      await editMemberMsgs(uid, (msgs) => {
+        let t = false;
+        const next = msgs.map((m) => { if (!m.hiddenByUser && (!one || m.id === one)) { t = true; return Object.assign({}, m, { hiddenByUser: true }); } return m; });
+        return t ? next : null;
       });
       return { ok: true };
     }
@@ -1469,6 +1459,7 @@ exports.applicantAction = functions
 const SECRET_KEYS = ['pinAuth', 'pinHash', 'pinEnc', 'contactSelfEnc'];
 const PRIV_KEYS = ['realNameEnc', 'contactEnc', 'referrerEnc'];
 const SECRET_PURGE_MS = 7 * 86400000; /* state 에서 사라진 계정의 금고는 7일 뒤 삭제 (실수로 지워졌다 복구될 때 대비) */
+const MSG_RETAIN_MS = 90 * 86400000;  /* 탈퇴 회원과 관리자 Q&A 는 분쟁 대비로 90일 (회원끼리 채팅과 같게, 2026-10-29 Benny) */
 function allOf(s) { return ((s && s.entries) || []).concat((s && s.pendingEntries) || []); }
 function stableJson(v) {
   if (v === undefined) return 'undefined';
@@ -1710,6 +1701,7 @@ async function sweepSecrets(before, after) {
     const at = new Date().toISOString();
     await db.collection('secrets').doc(id).set({ deletedAt: at }, { merge: true }).catch(() => {});
     await db.collection('adminOnly').doc(id).set({ deletedAt: at }, { merge: true }).catch(() => {});
+    await msgsRef(id).update({ deletedAt: at }).catch(() => {});   /* 관리자 Q&A 는 90일 뒤 정리 (문서가 없으면 넘어감) */
   }
 }
 /* 삭제 표시 후 7일 지난 금고 문서 정리 (그사이 계정이 되살아났으면 표시만 지움) */
@@ -1726,6 +1718,13 @@ async function purgeOldSecurityLogs() {
       if (qs.size < 400) break;
     }
   }
+  /* 손님 문의(비로그인 Q&A, 이름·암호화 번호)도 마지막 글 뒤 1년 */
+  const gq = await db.collection('memberMsgs').where('lastAt', '<', cut).limit(300).get().catch(() => null);
+  if (gq && !gq.empty) {
+    const gb = db.batch(); let gn = 0;
+    gq.docs.forEach((d) => { if (/^guest-/.test(d.id)) { gb.delete(d.ref); gn++; } });
+    if (gn) await gb.commit();
+  }
   /* 탈퇴 기록: 삭제 시각이 없던 옛 기록은 오늘을 기준으로 찍어 1년 뒤 지움 */
   const ref = db.collection('adminOnly').doc('deleted_profiles');
   const d = (await ref.get().catch(() => null));
@@ -1741,13 +1740,13 @@ async function purgeOldSecurityLogs() {
 async function purgeDeletedSecrets() {
   const st = (await db.doc('app/state').get()).data() || {};
   const alive = {}; allOf(st).forEach((e) => { alive[e.id] = 1; });
-  for (const col of ['secrets', 'adminOnly']) {
+  for (const col of ['secrets', 'adminOnly', 'memberMsgs']) {
     const qs = await db.collection(col).where('deletedAt', '!=', null).get().catch(() => null);
     if (!qs) continue;
     for (const d of qs.docs) {
       const t = new Date(d.data().deletedAt).getTime();
       if (alive[d.id]) await d.ref.set({ deletedAt: admin.firestore.FieldValue.delete() }, { merge: true });
-      else if (t && Date.now() - t > SECRET_PURGE_MS) await d.ref.delete();
+      else if (t && Date.now() - t > (col === 'memberMsgs' ? MSG_RETAIN_MS : SECRET_PURGE_MS)) await d.ref.delete();
     }
   }
 }
@@ -2014,6 +2013,231 @@ async function refreshChatViewers(before, after) {
   }
 }
 
+/* ══ 회원↔관리자 메시지 = memberMsgs/{entryId} (재설계 B-2, 2026-10-29) ══
+   전엔 app/state.messages 에 있어 승인 회원 누구나(개발자 도구로) 남의 관리자 Q&A·손님 문의·AI 신고 전달을 읽을 수 있었음.
+   문서마다 viewers(본인 + 담당 주선자)와 관리자만 읽기(규칙), 쓰기는 서버만:
+   msgAction(회원 보내기·숨기기, 관리자 보내기·읽음·숨기기) · applicantAction(손님·승인 대기) · remindPending(7일 안내) ·
+   AI 승인 환영 · onStateChange(옛 앱이 state.messages 에 쓴 것 옮기기 — 처음 한 번은 기존 메시지 전부 이전).
+   메시지 모양은 그대로({id, entryId, from, text, at, …}) — 앱은 구독한 문서들을 모아 state.messages 처럼 씀 */
+const MSG_DOC_MAX = 400;
+const msgsRef = (eid) => db.collection('memberMsgs').doc(eid);
+function msgViewers(entries, entryId) {
+  if (/^guest-/.test(String(entryId))) return [];   /* 손님 문의는 관리자만 */
+  const e = (entries || []).find((x) => x.id === entryId);
+  const v = [entryId];
+  if (e && e.managedBy) v.push(e.managedBy);
+  return v;
+}
+/* 메시지 여러 개를 회원 문서별로 덧붙임 (같은 id 는 한 번만) */
+async function appendMemberMsgs(list, entries) {
+  const by = {};
+  (list || []).forEach((m) => { if (m && m.id && m.entryId) (by[m.entryId] = by[m.entryId] || []).push(m); });
+  const groups = Object.entries(by);
+  for (let i = 0; i < groups.length; i += 8) await Promise.all(groups.slice(i, i + 8).map(([eid, ms]) =>   /* 8개씩 동시에 (전체 공지·첫 이전) */
+    db.runTransaction(async (tx) => {
+      const snap = await tx.get(msgsRef(eid));
+      const d = snap.exists ? (snap.data() || {}) : {};
+      const have = {}; (d.msgs || []).forEach((m) => { if (m && m.id) have[m.id] = 1; });
+      const add = ms.filter((m) => !have[m.id]);
+      if (!add.length && snap.exists) return;
+      let msgs = (d.msgs || []).concat(add).sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+      if (msgs.length > MSG_DOC_MAX) msgs = msgs.slice(msgs.length - MSG_DOC_MAX);
+      /* 회원 목록을 못 받은 호출(손님·승인 대기·환영 메시지)은 있던 viewers 를 그대로 둠 — 주선자가 친구 메시지를 못 보게 되지 않게 */
+      const viewers = (entries && entries.length) ? msgViewers(entries, eid) : (Array.isArray(d.viewers) ? d.viewers : msgViewers([], eid));
+      tx.set(msgsRef(eid), { entryId: eid, viewers, msgs, lastAt: msgs.length ? (msgs[msgs.length - 1].at || null) : null,
+        updatedAt: new Date().toISOString() }, { merge: true });
+    })));
+}
+/* 한 회원 문서의 메시지를 고침 — fn(msgs) 가 새 배열을 돌려주면 저장 (null 이면 그대로) */
+async function editMemberMsgs(eid, fn) {
+  let changed = false;
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(msgsRef(eid));
+    if (!snap.exists) return;
+    const next = fn((snap.data() || {}).msgs || []);
+    if (!next) return;
+    changed = true;
+    tx.update(msgsRef(eid), { msgs: next, updatedAt: new Date().toISOString() });
+  });
+  return changed;
+}
+/* 주선자 관계가 바뀌면 그 회원 메시지 문서의 viewers 도 (친구 독립·주선자 맡기기·전환) */
+async function refreshMsgViewers(before, after) {
+  const bm = {}; allOf(before).forEach((e) => { bm[e.id] = e; });
+  const changed = allOf(after).filter((e) => bm[e.id] && (bm[e.id].managedBy || '') !== (e.managedBy || ''));
+  for (const e of changed) {
+    await msgsRef(e.id).update({ viewers: msgViewers(after.entries || [], e.id) }).catch(() => {});   /* 문서가 없으면 그냥 넘어감 */
+  }
+}
+/* 옛 앱(≤v489)·첫 배포 직후: app/state.messages 에 있는 메시지를 회원 문서로 옮기고 state 에서 뺌.
+   회원이 쓴 새 메시지는 '내 계정(·관리하는 친구) 이름으로 보낸 회원 글'만 받음 — 관리자 사칭·남의 이름 글은 버림.
+   이미 있던 메시지는 바뀌기 전(before) 내용으로 옮김(같은 쓰기에서 내용을 바꿔치기해도 무시) */
+async function sweepStateMessages(before, after) {
+  const list = Array.isArray(after.messages) ? after.messages : [];
+  if (!list.length) return;
+  const writer = String(after._w || '');
+  const trusted = (after._wn === before._wn) || writer === 'admin';
+  const beforeById = {}; (before.messages || []).forEach((m) => { if (m && m.id) beforeById[m.id] = m; });
+  const owned = {}; if (writer) owned[writer] = 1;
+  allOf(before).forEach((e) => { if (e.managedBy === writer) owned[e.id] = 1; });
+  const keep = [], dropped = [];
+  list.forEach((m) => {
+    if (!m || !m.id || !m.entryId) return;
+    if (beforeById[m.id]) { keep.push(Object.assign({}, beforeById[m.id], { mig: 1 })); return; }
+    if (trusted) { keep.push(m); return; }
+    if (m.from === 'user' && owned[m.entryId]) {
+      const c = { id: String(m.id).slice(0, 80), entryId: m.entryId, from: 'user', text: String(m.text || '').slice(0, 600), at: new Date().toISOString() };
+      if (m.viaAi) c.viaAi = true;
+      keep.push(c); return;
+    }
+    dropped.push(m.id);
+  });
+  if (dropped.length) console.warn('[MSG_SWEEP_DROP]', JSON.stringify({ writer, n: dropped.length }));
+  await appendMemberMsgs(keep, after.entries || []);
+  const moved = {}; list.forEach((m) => { if (m && m.id) moved[m.id] = 1; });
+  await db.runTransaction(async (tx) => {
+    const ref = db.doc('app/state');
+    const s = (await tx.get(ref)).data() || {};
+    const rest = (s.messages || []).filter((m) => !(m && moved[m.id]));
+    if (rest.length !== (s.messages || []).length) tx.update(ref, { messages: rest });
+  });
+}
+
+/* 회원↔관리자 메시지 쓰기 (회원·관리자 공용) */
+exports.msgAction = functions
+  .region('asia-northeast3')
+  .runWith({ maxInstances: 10, timeoutSeconds: 120, memory: '256MB' })
+  .https.onCall(async (data, context) => {
+    data = data || {};
+    const op = String(data.op || '');
+    if (op === 'ping') return { ok: true };
+    const c = claimsOf(context);
+    const uid = (context.auth && context.auth.uid) || '';
+    if (!uid) throw new HttpsError('unauthenticated', '로그인이 필요해요.');
+    const state = (await db.doc('app/state').get()).data() || {};
+    const entries = state.entries || [];
+    const now = () => new Date().toISOString();
+
+    if (c.admin === 1) {
+      if (op === 'adminSend') {
+        const ids = Array.from(new Set((Array.isArray(data.ids) ? data.ids : []).map(String).filter((x) => ENTRY_ID_RE.test(x) || /^guest-[A-Za-z0-9-]{8,64}$/.test(x)))).slice(0, 1000);
+        const text = String(data.text || '').trim().slice(0, 2000);
+        if (!ids.length || !text) throw new HttpsError('invalid-argument', '받는 사람과 내용을 확인해 주세요.');
+        const ex = data.extra || {};
+        const t0 = Date.now();
+        const list = ids.map((eid, i) => {
+          const m = { id: nodeCrypto.randomUUID(), entryId: eid, from: 'admin', text, at: new Date(t0 + i).toISOString() };
+          if (ex.broadcast) m.broadcast = true;
+          if (ex.auto) m.auto = true;
+          return m;
+        });
+        await appendMemberMsgs(list, entries);
+        return { ok: true, n: list.length };
+      }
+      if (op === 'adminRead') {
+        const targets = data.entryId ? [String(data.entryId)] : (await db.collection('memberMsgs').get()).docs.map((d) => d.id);
+        let n = 0;
+        for (const eid of targets) {
+          const ch = await editMemberMsgs(eid, (msgs) => {
+            let t = false;
+            const next = msgs.map((m) => { if (m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin) { t = true; return Object.assign({}, m, { readByAdmin: true }); } return m; });
+            return t ? next : null;
+          });
+          if (ch) n++;
+        }
+        return { ok: true, n };
+      }
+      if (op === 'adminHide') {   /* items: [{entryId, id}] 한 건씩 · entryIds: 그 회원 대화 전체 (관리자 목록에서만 숨김) */
+        const items = (Array.isArray(data.items) ? data.items : []).slice(0, 500);
+        const whole = (Array.isArray(data.entryIds) ? data.entryIds : []).map(String).slice(0, 1000);
+        const by = {};
+        items.forEach((it) => { if (it && it.entryId && it.id) (by[String(it.entryId)] = by[String(it.entryId)] || {})[String(it.id)] = 1; });
+        whole.forEach((eid) => { by[eid] = '*'; });
+        let n = 0;
+        for (const [eid, sel] of Object.entries(by)) {
+          const ch = await editMemberMsgs(eid, (msgs) => {
+            let t = false;
+            const next = msgs.map((m) => { if (!m.hiddenByAdmin && (sel === '*' || sel[m.id])) { t = true; return Object.assign({}, m, { hiddenByAdmin: true }); } return m; });
+            return t ? next : null;
+          });
+          if (ch) n++;
+        }
+        return { ok: true, n };
+      }
+      throw new HttpsError('invalid-argument', '알 수 없는 요청이에요.');
+    }
+
+    if (c.m !== 1) throw new HttpsError('permission-denied', '승인된 회원만 쓸 수 있어요.');
+    if (secBlocked(state, uid)) throw new HttpsError('permission-denied', '보안 확인을 위해 이 계정은 잠시 잠겨 있어요. 관리자에게 문의해 주세요.');
+    const me = entries.find((e) => e.id === uid);
+    if (!me) throw new HttpsError('permission-denied', '회원 정보를 찾을 수 없어요.');
+    if (op === 'send') {
+      const text = String(data.text || '').trim().slice(0, 600);
+      if (!text) throw new HttpsError('invalid-argument', '내용을 입력해 주세요.');
+      /* 회원 1명당 1시간 30건 (도배 방지) */
+      const rref = db.collection('rateLimit').doc(guardKey('msg_', uid));
+      await db.runTransaction(async (tx) => {
+        const s = await tx.get(rref);
+        const t = Date.now();
+        const hits = (s.exists ? (s.data().hits || []) : []).filter((x) => t - x < 3600000);
+        if (hits.length >= 30) throw new HttpsError('resource-exhausted', '메시지를 너무 많이 보냈어요. 잠시 후 다시 보내 주세요.');
+        hits.push(t); tx.set(rref, { hits });
+      });
+      /* 내 계정, 또는 내가 관리하는 친구 이름으로만 (보류된 친구 신청서 보완 내용 전달 등) */
+      let eid = uid;
+      if (data.entryId && String(data.entryId) !== uid) {
+        const t = String(data.entryId);
+        const fr = entries.concat(state.pendingEntries || []).find((e) => e.id === t && e.managedBy === uid);
+        if (!fr) throw new HttpsError('permission-denied', '내 계정이나 관리하는 친구 이름으로만 보낼 수 있어요.');
+        eid = t;
+      }
+      const m = { id: nodeCrypto.randomUUID(), entryId: eid, from: 'user', text, at: now() };
+      if (data.viaAi) m.viaAi = true;
+      await appendMemberMsgs([m], entries);
+      return { ok: true, id: m.id };
+    }
+    if (op === 'hide') {   /* 내 화면에서만 지우기 (관리자 쪽 기록은 그대로) */
+      const one = data.id ? String(data.id) : '';
+      await editMemberMsgs(uid, (msgs) => {
+        let t = false;
+        const next = msgs.map((m) => { if (!m.hiddenByUser && (!one || m.id === one)) { t = true; return Object.assign({}, m, { hiddenByUser: true }); } return m; });
+        return t ? next : null;
+      });
+      return { ok: true };
+    }
+    throw new HttpsError('invalid-argument', '알 수 없는 요청이에요.');
+  });
+
+/* 새 회원↔관리자 메시지 → 상대에게 푸시 (회원→관리자 / 관리자→회원, 친구 프로필이면 담당 주선자에게).
+   옮겨 온 옛 메시지(mig)·15분 넘은 메시지는 알리지 않음 (이전할 때 옛 메시지 알림이 쏟아지지 않게) */
+exports.onMemberMsg = functions
+  .region('asia-northeast3')
+  .runWith({ maxInstances: 10, timeoutSeconds: 60, memory: '256MB' })
+  .firestore.document('memberMsgs/{eid}')
+  .onWrite(async (change) => {
+    if (!change.after.exists) return null;
+    const b = change.before.exists ? (change.before.data() || {}) : {};
+    const a = change.after.data() || {};
+    const had = {}; (b.msgs || []).forEach((m) => { if (m && m.id) had[m.id] = 1; });
+    const fresh = (a.msgs || []).filter((m) => m && m.id && !had[m.id] && !m.mig && Date.now() - Date.parse(m.at || 0) < 15 * 60000);
+    if (!fresh.length) return null;
+    const st = (await db.doc('app/state').get()).data() || {};
+    const ents = st.entries || [];
+    const nickAny = (id) => { const e = ents.concat(st.pendingEntries || []).find((x) => x.id === id); return e ? e.nickname : '회원'; };
+    const jobs = [];
+    fresh.forEach((m) => {
+      const preview = (m.text || '').slice(0, 40);
+      if (m.from === 'user') jobs.push(sendToAdmin('💬 새 Q&A/메시지', (m.guestName ? m.guestName + ' (비로그인)' : nickAny(m.entryId)) + ': ' + preview));
+      else if (m.from === 'admin') {
+        const me2 = entryById(ents, m.entryId);
+        if (me2 && me2.managedBy) jobs.push(notifyRecipient(ents, m.entryId, '💬 관리자 메시지', preview, { route: 'mine' }));
+        else jobs.push(sendTo(m.entryId, '💬 관리자 메시지', preview, { route: 'mine' }));
+      }
+    });
+    await Promise.all(jobs.map((p) => Promise.resolve(p).catch((e) => console.error('onMemberMsg push', e && e.message))));
+    return null;
+  });
+
 exports.chatAction = functions
   .region('asia-northeast3')
   .runWith({ maxInstances: 15, timeoutSeconds: 20, memory: '256MB' })
@@ -2123,7 +2347,8 @@ exports.chatAction = functions
       await ref.set({ reportedAt: new Date().toISOString(), reportedBy: asId, reportReason: reason }, { merge: true });
       await db.runTransaction(async (tx) => {
         const s = (await tx.get(db.doc('app/state'))).data() || {};
-        tx.update(db.doc('app/state'), { logs: (s.logs || []).concat([logItem('report', nameOf(entries, asId), '대화 신고 → ' + nameOf(entries, otherId))]) });
+        /* 활동 기록은 회원 누구나 읽으니 누가 누구를 신고했는지는 남기지 않음 (2026-10-29 점검) — 관리자는 🚨 신고된 대화에서 봄 */
+        tx.update(db.doc('app/state'), { logs: (s.logs || []).concat([logItem('report', '회원', '대화 신고 접수')]) });
       });
       await sendToAdmin('🚨 대화 신고', nameOf(entries, asId) + '님이 ' + nameOf(entries, otherId) + '님과의 대화를 신고했어요').catch(() => {});
       return { ok: true };
@@ -3185,7 +3410,7 @@ exports.betaSeed = functions
     const st = data && data.state;
     if (!st || !Array.isArray(st.entries) || !st.adminAuth) throw new HttpsError('invalid-argument', '시드 데이터가 올바르지 않아요.');
     const wiped = {};
-    for (const col of ['secrets', 'adminOnly', 'adminKey', 'photos', 'chats', 'pushTokens', 'securityAlerts', 'loginGuard', 'loginIp', 'rateLimit', 'acl', 'acqFilter', 'sendContacts']) {
+    for (const col of ['secrets', 'adminOnly', 'adminKey', 'photos', 'chats', 'pushTokens', 'securityAlerts', 'loginGuard', 'loginIp', 'rateLimit', 'acl', 'acqFilter', 'sendContacts', 'memberMsgs']) {
       wiped[col] = await wipeCollection(col);
     }
     await db.doc('app/logs').delete().catch(() => {});
@@ -3200,9 +3425,12 @@ exports.betaSeed = functions
       });
       await b.commit();
     }
+    const seedMsgs = Array.isArray(st.messages) ? st.messages : [];   /* 메시지는 memberMsgs 로 (B-2) */
+    st.messages = [];
     st._w = 'beta-seed'; st._wn = String(Date.now());
     await db.doc('app/state').delete().catch(() => {});   /* 지우고 새로 만들기 — 덮어쓰면 onStateChange(onUpdate)가 '이상 변경'으로 오탐 */
     await db.doc('app/state').set(st);
+    if (seedMsgs.length) await appendMemberMsgs(seedMsgs.map((m) => Object.assign({}, m, { mig: 1 })), st.entries);
     await syncPublicView(st);   /* 손님 화면용 공개 요약도 바로 (state 첫 생성은 onStateChange(onUpdate) 가 안 잡음) */
     return { ok: true, entries: st.entries.length, photos: ids.length, wiped };
   });
@@ -3557,12 +3785,14 @@ exports.aiConcierge = functions
       const heldEntries = [];
       const riskEntries = [];
       const editRiskList = [];
+      let welcomeMsgs = [];
       await db.runTransaction(async (tx) => {
         const snap = await tx.get(stateRef);
         const s = snap.data() || {};
         const entries = (s.entries || []).slice();
         const pend = (s.pendingEntries || []).slice();
-        const msgs = (s.messages || []).slice();
+        const msgs = [];   /* 새 환영 메시지만 — 트랜잭션 뒤 memberMsgs 로 (B-2) */
+        welcomeMsgs = msgs;
         const logs = (s.logs || []).slice();
         const nowIso = new Date().toISOString();
 
@@ -3653,10 +3883,10 @@ exports.aiConcierge = functions
         tx.update(stateRef, {
           pendingEntries: nextPend,
           entries: nextEntries,
-          messages: msgs,
           logs: logs.slice(-500)
         });
       });
+      if (welcomeMsgs.length) await appendMemberMsgs(welcomeMsgs, []).catch((e) => console.error('welcome msgs', e));
 
       for (const ent of approvedEntries) {
         await sendTo(ent.id, '🎉 베니브릿지 가입 승인 완료', '신청서가 승인되었어요! 지금 앱에서 명단을 확인해 보세요.', { route: 'list' }).catch(() => {});
