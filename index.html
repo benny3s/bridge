@@ -9125,7 +9125,7 @@
       var col = v === 'benign' ? '#137333' : (v === 'suspicious' ? '#c5221f' : '#8a6d00');
       return '<br><span style="color:' + col + ';">' + escapeHtml(lab) + (who ? ' (' + who + ')' : '') + (t.reason ? ' — ' + escapeHtml(t.reason) : '') + (t.state !== 'noted' && t.pushed ? ' · 알림 보냄' : '') + '</span>';
     }
-    var SEC_TYPE = { tamper: '🚨 이상 변경', quarantine: '⛔ 계정 자동 차단', 'login-lock': '🔒 회원 로그인 잠김', 'admin-lock': '🚨 관리자 로그인 잠김', 'ip-block': '🛡 IP 차단', suspicious: '👁 수상한 접속', 'vpn-hold': '🛂 VPN 로그인 검토' };
+    var SEC_TYPE = { tamper: '🚨 이상 변경', quarantine: '⛔ 계정 자동 차단', 'admin-device': '🔐 관리자 기기', 'login-lock': '🔒 회원 로그인 잠김', 'admin-lock': '🚨 관리자 로그인 잠김', 'ip-block': '🛡 IP 차단', suspicious: '👁 수상한 접속', 'vpn-hold': '🛂 VPN 로그인 검토' };
     var SUS_KIND = { ok: '로그인 성공', fail: '로그인 실패', blocked: '차단된 시도', notfound: '없는 계정', access: '앱 접속', weak: '쉬운 PIN 로그인(막음)' };
     /* AI 가 '본인으로 보임' 판정한 건(알림 안 보냄)은 확인 필요 수에서 빼고 흐리게 */
     var secQuiet = function (a) { return !!(a.triage && a.triage.state === 'benign'); };
@@ -9153,6 +9153,8 @@
         if (a.type === 'tamper') body = escapeHtml(a.writerNick || a.writer || '') + '님 계정으로 ' + (a.issues || []).length + '건 — ' + escapeHtml(a.summary || '');
         else if (a.type === 'quarantine') body = '<b>' + escapeHtml(a.nickname || a.target || '') + '</b> · 7일 안에 다른 회원 데이터를 ' + (a.strikes || 2) + '번 바꾸려 해 앱 접속·로그인을 막음' +
           ((state.secBlock || []).indexOf(a.target) >= 0 ? '' : ' <span style="color:#137333;">(지금은 풀림)</span>');
+        else if (a.type === 'admin-device') body = '<b>' + escapeHtml(a.nickname || a.device || '기기') + '</b> · ' + (a.kind === 'pending' ? '새 기기 로그인 대기' : '믿을 기기로 등록됨') +
+          (a.ip ? '<br><span class="sub">' + escapeHtml(a.ip) + (a.via ? ' · ' + escapeHtml(a.via) : '') + '</span>' : '');
         else if (a.type === 'ip-block') body = '한 곳에서 1시간에 ' + (a.fails || 0) + '번 실패 → 1시간 차단';
         else if (a.type === 'vpn-hold') body = '<b>' + escapeHtml(a.nickname || '') + '</b> · PIN은 맞았지만 VPN이라 보류' +
           '<br><span class="sub">' + escapeHtml(a.ip || '') + ' (' + escapeHtml([a.intel && a.intel.provider, a.intel && a.intel.country].filter(Boolean).join(' · ')) + ') · ' + escapeHtml(a.device || '') + '</span>' +

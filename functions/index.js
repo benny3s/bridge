@@ -2765,7 +2765,7 @@ async function detectTamper(before, after) {
 const SEC_STRIKES_TO_BLOCK = 2;
 const SEC_STRIKE_WINDOW_MS = 7 * 86400000;
 async function strikeTamper(uid, issues, nick) {
-  if (!ENTRY_ID_RE.test(String(uid || '')) || !(issues || []).some((i) => i.coll !== 'logs')) return;
+  if (!ENTRY_ID_RE.test(String(uid || '')) || !(issues || []).some((i) => i && i.coll && i.coll !== 'logs')) return;
   const ref = db.collection('secStrikes').doc(uid);
   const now = Date.now();
   let strikes = [];
