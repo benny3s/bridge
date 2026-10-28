@@ -1106,7 +1106,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-488';
+  var APP_VERSION = '2026-10-29-489';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -3002,7 +3002,7 @@
         '· 사진은 <b>서로 승인한 경우</b>에만 공개돼요(주선자가 관리하는 프로필이면 담당 주선자 포함).<br>' +
         '· 실명·연락처는 <b>암호화</b>되어 관리자만 볼 수 있고, 다른 회원에게 제공하지 않아요.') +
       sec('4. 보유 및 파기',
-        '· 삭제 요청이 승인되면 계정 정보(실명·번호·PIN·사진·프로필)는 7일 안에 파기해요. 다만 부정 재가입 방지를 위해 닉네임·성별·출생연도·지역·삭제 사유와 접속 기록(IP·기기)은 따로 보관해요.<br>' +
+        '· 삭제 요청이 승인되면 계정 정보(실명·번호·PIN·사진·프로필)는 7일 안에 파기해요. 다만 부정 재가입 방지를 위해 닉네임·성별·출생연도·지역·삭제 사유와 접속 기록(IP·기기)은 따로 <b>1년</b> 보관한 뒤 지워요.<br>' +
         '· 회원끼리 주고받은 대화는 상대방 대화함에 남을 수 있어요. 대화는 두 사람만 볼 수 있고(주선자가 관리하는 프로필이면 담당 주선자 포함), 관리자는 <b>신고가 접수된 대화만</b> 확인해요.<br>' +
         '· 신고·분쟁 대응을 위해, 두 사람이 모두 대화를 지우거나 탈퇴한 뒤에도 서버에 <b>90일간 보관</b> 후 삭제해요 (신고 처리 중인 대화는 처리 완료 때까지 보관).<br>' +
         '· 보관(휴면)을 고르면 다시 활동할 수 있도록 보관하며, 언제든 삭제를 요청할 수 있어요.<br>' +
@@ -10982,7 +10982,7 @@
         if (filled) tomb.restoredNote = '탈퇴 전 회원이 프로필을 지움 → 지우기 전 값으로 기록';
       })();
       var admTomb = { nickname: tomb.nickname, gender: tomb.gender, birthYear: tomb.birthYear, region: tomb.region, reason: tomb.reason,
-        entryId: id };   /* 삭제된 계정 기기가 다시 로그인하면 서버가 누구였는지 알아봄 (v481) */
+        entryId: id, deletedAt: new Date().toISOString() };   /* 1년 뒤 서버가 지움(purgeOldSecurityLogs). 삭제된 계정 기기가 다시 로그인하면 서버가 누구였는지 알아봄 (v481) */
       if (tomb.restoredNote) admTomb.restoredNote = tomb.restoredNote;
       var pubTomb = { id: tomb.id, serial: tomb.serial, uid: tomb.uid, gender: tomb.gender, joinedAt: tomb.joinedAt,
         connectedN: tomb.connectedN, countable: tomb.countable, deletedAt: tomb.deletedAt };
