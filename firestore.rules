@@ -103,6 +103,13 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // 회원↔관리자 메시지 (B-2, 2026-10-29): 본인·담당 주선자(viewers)와 관리자만 읽기, 쓰기는 서버(msgAction 등)만.
+    // 전엔 app/state.messages 라 승인 회원 누구나 남의 Q&A·손님 문의를 읽을 수 있었음
+    match /memberMsgs/{eid} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid in resource.data.viewers);
+      allow write: if false;
+    }
+
     // 포털(benny3s.github.io 메인) 목록 — 누구나 읽기, 관리자만 쓰기 (2026-10-08)
     // 포털이 adminLogin 토큰으로 숨김/공개·문구를 저장. 숨김은 단순 숨김(읽기는 공개)
     match /portal/config {

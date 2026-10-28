@@ -1077,7 +1077,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-489';
+  var APP_VERSION = '2026-10-29-490';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1515,6 +1515,42 @@
     });
     return state;
   }
+  /* 회원↔관리자 메시지 = memberMsgs/{회원} (재설계 B-2, 2026-10-29): 전엔 app/state.messages 라 승인 회원 누구나 남의 Q&A 를 읽을 수 있었음.
+     관리자는 전부, 회원은 viewers 에 내가 있는 문서(내 것 + 관리하는 친구)만 구독해 모아서 state.messages 처럼 씀(overlayMsgs)
+     → 메시지를 읽는 코드는 그대로. 쓰기는 전부 서버 msgAction (규칙상 앱이 직접 못 씀) */
+  var _msgDocs = {}, _msgsUnsub = null, _msgWarmed = false;
+  function stopMsgs() { if (_msgsUnsub) { try { _msgsUnsub(); } catch (e) {} } _msgsUnsub = null; _msgDocs = {}; }
+  function startMsgs(claims) {
+    stopMsgs();
+    var uid = authUid();
+    var q = null;
+    if (uid && claims.admin === 1) q = db.collection('memberMsgs');
+    else if (uid && claims.m === 1) q = db.collection('memberMsgs').where('viewers', 'array-contains', uid);
+    if (!q) return Promise.resolve();
+    return new Promise(function (resolve) {
+      _msgsUnsub = q.onSnapshot(function (qs) {
+        var m = {}; qs.forEach(function (d) { m[d.id] = (d.data() || {}).msgs || []; });
+        _msgDocs = m;
+        if (currentState && dataMode === 'full') {
+          overlayMsgs(currentState); schedulePaint();
+          if (_openAdminChatRedraw) { try { _openAdminChatRedraw(); } catch (e) {} }
+        }
+        resolve();
+      }, function (err) { try { console.warn('msgs listen', err && err.code); } catch (e) {} _msgsUnsub = null; resolve(); });
+    });
+  }
+  function overlayMsgs(state) {
+    if (!state || state._public) return state;
+    /* 서버에서 막 받은 state 의 messages(옛 앱이 쓴 것·이전 전 기록)는 따로 기억 — 다시 그릴 때 겹치지 않게, 저장되지 않게(열거 안 됨) */
+    if (!Object.prototype.hasOwnProperty.call(state, '_msgLegacy')) {
+      Object.defineProperty(state, '_msgLegacy', { value: Array.isArray(state.messages) ? state.messages : [], enumerable: false, writable: true });
+    }
+    var by = {};
+    state._msgLegacy.forEach(function (m) { if (m && m.id) by[m.id] = m; });
+    Object.keys(_msgDocs).forEach(function (k) { (_msgDocs[k] || []).forEach(function (m) { if (m && m.id) by[m.id] = m; }); });
+    state.messages = Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) { return String(a.at || '').localeCompare(String(b.at || '')); });
+    return state;
+  }
   function stopThumbs() { if (_thumbsUnsub) { try { _thumbsUnsub(); } catch (e) {} } _thumbsUnsub = null; _thumbs = {}; }
   function startThumbs() {
     if (_thumbsUnsub) return Promise.resolve();
@@ -1837,6 +1873,7 @@
     _lastDataAt = Date.now();
     overlayAdminPriv(state);
     overlayThumbs(state);
+    overlayMsgs(state);
     if (!currentUser) restoreSession(state);
     checkVersion(state);
     currentState = state;
@@ -1887,12 +1924,14 @@
       if (mode === 'public') _pendingView = null;
       _authIsAdmin = c.admin === 1;
       startChats(c);
+      var msgsReady = mode === 'full' ? Promise.race([startMsgs(c), new Promise(function (res) { setTimeout(res, 1500); })]) : (stopMsgs(), Promise.resolve());
+      if ((c.m === 1 || c.admin === 1) && !_msgWarmed) { _msgWarmed = true; setTimeout(function () { callFn('msgAction', { op: 'ping' }).catch(function () {}); }, 4000); }   /* 메시지 서버 함수 미리 깨움 */
       /* 회원이면 채팅 서버 함수를 뒤에서 미리 깨워 둠(첫 메시지 전송이 콜드 스타트로 5초 걸리던 문제) */
       if (c.m === 1 && !_chatWarmed) { _chatWarmed = true; setTimeout(function () { callFn('chatAction', { op: 'ping' }).catch(function () {}); }, 2500); }
       var privReady = _authIsAdmin ? startAdminPriv() : (stopAdminPriv(), Promise.resolve());
       /* 썸네일은 최대 1.5초만 기다림 — 늦게 오면 화면이 다시 그려지며 밀려 엉뚱한 곳이 눌림 (2026-10-15), 너무 늦으면 그냥 진행 */
       var thumbsReady = mode === 'full' ? Promise.race([startThumbs(), new Promise(function (res) { setTimeout(res, 1500); })]) : (stopThumbs(), Promise.resolve());
-      return Promise.all([privReady, thumbsReady]).then(function () { return subscribeData(mode); }).then(function (s) {
+      return Promise.all([privReady, thumbsReady, msgsReady]).then(function () { return subscribeData(mode); }).then(function (s) {
         if (mode === 'public' && c.p === 1) return refreshPendingView().then(function () { return currentState; });
         return s;
       });
@@ -2172,13 +2211,7 @@
   /* 관리자: 안 읽은 문의(Q&A) 전부 읽음 처리 */
   function markAllAdminMsgRead() {
     if (!isAdminUnlocked) return;
-    db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) { if (m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin) { var c = JSON.parse(JSON.stringify(m)); c.readByAdmin = true; return c; } return m; });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); }).catch(function () {});
+    callFn('msgAction', { op: 'adminRead' }).catch(function () {});   /* B-2: 서버가 회원 문서마다 읽음 표시, 화면은 구독으로 갱신 */
   }
   /* 새 소식 팝업 — 항목별 "보기"(이동+그 항목 읽음) + "모두 읽음" + 알림 설정.
      force=true(배너 '알림' 버튼): 새 소식이 없어도 팝업을 열어 상태·설정을 보여줌. force 없음(앱 열 때 자동): 있을 때만. */
@@ -4592,38 +4625,19 @@
     }).catch(function (err) { modalNotice('오류', '아카이브 로드 실패: ' + (err.message || err)); });
   }
   /* ---- 관리자 <-> 회원 메시지 ---- */
+  /* B-2 (2026-10-29): 메시지는 서버가 memberMsgs/{회원} 에 씀 — 관리자는 adminSend, 회원은 send(내 계정·관리하는 친구 이름으로만) */
   function sendMessageTo(entryId, from, text, guestName, extra) {
     text = (text || '').trim();
     if (!text || !entryId) return Promise.resolve();
-    var m = { id: genId(), entryId: entryId, from: from, text: text, at: new Date().toISOString() };
-    if (guestName) m.guestName = guestName;
-    if (extra) Object.keys(extra).forEach(function (k) { if (extra[k] != null) m[k] = extra[k]; });
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).concat([m]);
-        tx.update(stateRef, { messages: msgs });
-      });
-    });
+    if (from === 'admin') return callFn('msgAction', { op: 'adminSend', ids: [entryId], text: text, extra: extra || null });
+    return callFn('msgAction', { op: 'send', entryId: entryId, text: text, viaAi: !!(extra && extra.viaAi) });
   }
-  /* 여러 회원에게 같은 메시지 일괄 발송 — 반드시 '한 트랜잭션'으로 append (개별 sendMessageTo를 Promise.all로 돌리면 app/state 동시 쓰기 충돌 "stored version does not match") */
+  /* 여러 회원에게 같은 메시지 일괄 발송 (관리자) — 서버가 회원 문서마다 덧붙임 */
   function sendMessagesBulk(entryIds, from, text, extra) {
     text = (text || '').trim();
     var ids = (entryIds || []).filter(Boolean);
     if (!text || !ids.length) return Promise.resolve(0);
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data() || {};
-        var msgs = (s.messages || []).slice();
-        ids.forEach(function (eid) {
-          var m = { id: genId(), entryId: eid, from: from, text: text, at: new Date().toISOString() };
-          if (extra) Object.keys(extra).forEach(function (k) { if (extra[k] != null) m[k] = extra[k]; });
-          msgs.push(m);
-        });
-        if (msgs.length > 5000) msgs = msgs.slice(msgs.length - 5000);
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return ids.length; });
+    return callFn('msgAction', { op: 'adminSend', ids: ids, text: text, extra: extra || null }).then(function () { return ids.length; });
   }
   function threadFor(state, entryId, viewer) {
     var hideKey = viewer === 'admin' ? 'hiddenByAdmin' : 'hiddenByUser';
@@ -5347,78 +5361,33 @@
     var uid = currentUser && currentUser.id;
     if (!uid) return Promise.resolve();
     if (dataMode !== 'full') return callFn('applicantAction', { op: 'hideMessages' }).then(function () { return refreshPendingView(); });
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.entryId === uid && !m.hiddenByUser) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByUser = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); });
+    return callFn('msgAction', { op: 'hide' });   /* B-2: 내 화면에서만 (관리자 쪽 기록은 그대로) */
   }
   /* 회원: 내 관리자 메시지 중 한 건만 숨기기(내 화면에서 삭제) */
   function deleteMyMessage(id) {
     var uid = currentUser && currentUser.id;
     if (!uid) return Promise.resolve();
     if (dataMode !== 'full') return callFn('applicantAction', { op: 'hideMessages', id: id }).then(function () { return refreshPendingView(); });
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.id === id && m.entryId === uid) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByUser = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); });
+    return callFn('msgAction', { op: 'hide', id: id });
   }
   function deleteAdminMessage(id) {
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.id === id) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByAdmin = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); });
+    var m = (currentState.messages || []).find(function (x) { return x.id === id; });
+    if (!m) return Promise.resolve();
+    return callFn('msgAction', { op: 'adminHide', items: [{ entryId: m.entryId, id: id }] });   /* 관리자 목록에서만 숨김 */
   }
   /* 관리자: 특정 회원과의 메시지 전체 삭제 (내 화면) */
   /* 자동 안내만 있는(회원 답·직접 쓴 말 없음) 대화를 관리자 목록에서 숨김 */
   function cleanAutoOnlyThreads() {
-    var n = 0;
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var by = {};
-        (s.messages || []).forEach(function (m) { if (!m.hiddenByAdmin) (by[m.entryId] = by[m.entryId] || []).push(m); });
-        var target = {};
-        Object.keys(by).forEach(function (eid) { if (!by[eid].some(function (m) { return m.from === 'user' || !isAutoMsg(m); })) target[eid] = 1; });
-        n = Object.keys(target).length;
-        if (!n) return;
-        var msgs = (s.messages || []).map(function (m) {
-          if (target[m.entryId] && !m.hiddenByAdmin) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByAdmin = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { _amFilter = 'talk'; return refreshNow(); }).then(function () { modalNotice("정리 완료", n + "명을 목록에서 정리했어요."); })
+    var by = {};
+    (currentState.messages || []).forEach(function (m) { if (!m.hiddenByAdmin) (by[m.entryId] = by[m.entryId] || []).push(m); });
+    var target = Object.keys(by).filter(function (eid) { return !by[eid].some(function (m) { return m.from === 'user' || !isAutoMsg(m); }); });
+    if (!target.length) { _amFilter = 'talk'; paint(currentState); modalNotice('정리 완료', '정리할 자동 안내만 있는 대화가 없어요.'); return Promise.resolve(); }
+    return callFn('msgAction', { op: 'adminHide', entryIds: target })   /* B-2: 서버가 회원 문서마다 '관리자 목록에서 숨김' */
+      .then(function () { _amFilter = 'talk'; paint(currentState); modalNotice('정리 완료', target.length + '명을 목록에서 정리했어요.'); })
       .catch(function (e) { modalNotice('정리 실패', (e && e.message) || String(e)); });
   }
   function deleteAdminThread(entryId) {
-    return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.entryId === entryId && !m.hiddenByAdmin) { var c = JSON.parse(JSON.stringify(m)); c.hiddenByAdmin = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () { return refreshNow(); });
+    return callFn('msgAction', { op: 'adminHide', entryIds: [entryId] });
   }
   /* ---- 안 읽음(unread) 계산: 마지막으로 본 시각 이후의 이벤트 수 ---- */
   function userUnread(state, me, noChat) {
@@ -5451,16 +5420,7 @@
     if (!isAdminUnlocked) return;
     var has = (currentState.messages || []).some(function (m) { return m.entryId === eid && m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin; });
     if (!has) return;
-    db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var msgs = (s.messages || []).map(function (m) {
-          if (m.entryId === eid && m.from === 'user' && !m.readByAdmin) { var c = JSON.parse(JSON.stringify(m)); c.readByAdmin = true; return c; }
-          return m;
-        });
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).catch(function () {});
+    callFn('msgAction', { op: 'adminRead', entryId: eid }).catch(function () {});   /* B-2 */
   }
   /* 하루 경계를 한국시간(KST, UTC+9) 기준으로 계산 (UTC로 하면 KST 오전 9시 이전 접속이 전날로 잡혀 누락됨) */
   function kstDay(iso) { return new Date(new Date(iso).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
@@ -9785,6 +9745,7 @@
     _permIdx = null;   /* 권한 색인은 그릴 때마다 새로 (화면에서 바로 바꾼 요청도 반영) */
     overlayAdminPriv(state); /* 서버에서 새로 받은 state 로 그릴 때도 관리자 전용 값 유지 */
     overlayThumbs(state);
+    overlayMsgs(state);   /* 관리자 메시지 = memberMsgs (B-2) */
     currentState = state;
     /* 저장된 로그인으로 들어왔는데 임시 PIN 상태면 한 번 새 PIN 정하기를 권한다 */
     if (!_pinForceAsked && currentUser && !isAdminUnlocked) {
@@ -9926,7 +9887,8 @@
 
   function saveState(state) {
     currentState = state;
-    return stateRef.set(JSON.parse(JSON.stringify(state)));
+    var copy = JSON.parse(JSON.stringify(state)); delete copy.messages;   /* 메시지는 memberMsgs (B-2) — 모아 둔 것을 state 에 쓰지 않음 */
+    return stateRef.set(copy);
   }
 
   function decryptAllAdminData(state) {
@@ -10669,17 +10631,7 @@
     var targets = (currentState.entries || []).filter(function (e) { return !e.managedBy && !e.deactivated; });
     if (!targets.length) { modalNotice('안내', '공지를 보낼 대상이 없어요.'); return; }
     var loading = openModal('<h3>보내는 중…</h3><p class="modal-msg">' + targets.length + '명에게 보내고 있어요. 잠시만요…</p>');
-    db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var now = Date.now();
-        var live = (s.entries || []).filter(function (e) { return !e.managedBy && !e.deactivated; });
-        var newMsgs = live.map(function (t, i) { return { id: genId(), entryId: t.id, from: 'admin', text: text, at: new Date(now + i).toISOString(), broadcast: true }; });
-        var msgs = (s.messages || []).concat(newMsgs);
-        if (msgs.length > 5000) msgs = msgs.slice(msgs.length - 5000);
-        tx.update(stateRef, { messages: msgs });
-      });
-    }).then(function () {
+    callFn('msgAction', { op: 'adminSend', ids: targets.map(function (t) { return t.id; }), text: text, extra: { broadcast: true } }).then(function () {   /* B-2 */
       appendLog('admin', '관리자', '전체 공지 발송(메시지함) · ' + targets.length + '명');
       return refreshNow();
     }).then(function () {
