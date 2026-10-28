@@ -1569,14 +1569,15 @@ async function sweepSecrets(before, after) {
     const revoke = !!(prev && (prev.pinSet || hasPinInline(prev)) && !e.pinSet && !hasPinInline(e) && !e.pinFrom);
     if (!(Object.keys(sec).length || Object.keys(priv).length || e.pinFrom || e.privFrom || revoke)) return;
     if (ownerLegit(e)) { work.push({ e, sec, priv, revoke }); return; }
-    /* 이번 쓰기에서 바뀐 값만 따짐 — 본인이 막 넣은 PIN 이 금고로 옮겨지기 전(1초 안)에 다른 회원 앱이 문서를 저장하면
-       그 값이 그대로 실려 와 남의 쓰기로 보였음(10-28 대청마루→뜨아 오탐). 안 바뀐 값은 본인 쓰기의 차례가 금고로 옮김 */
+    /* 소유자 아닌 쓰기에 실린 비밀값은 (바뀌었든 아니든) 금고에 안 넣고 state 에서 지움 — 보안 리뷰: '이미 있던 값'이라고 믿으면 심어 둔 값이 나중에 금고로 감.
+       경고는 이번 쓰기에서 값이 바뀐 것만: 본인이 막 넣은 PIN 이 금고로 옮겨지기 전(1초 안)에 다른 회원 앱이 문서를 저장하면
+       그 값이 그대로 실려 와 오탐이 났음(10-28 대청마루→뜨아). 본인 값은 본인 쓰기 차례가 스냅샷으로 금고에 옮김 */
     const pe = prev || {};
     const moved = (k) => stableJson(e[k]) !== stableJson(pe[k]);
-    const fields = Object.keys(sec).concat(Object.keys(priv)).filter(moved);
-    if (e.pinFrom && moved('pinFrom')) fields.push('pinFrom');
-    if (e.privFrom && moved('privFrom')) fields.push('privFrom');
-    if (fields.length) rejected.push({ id: e.id, fields });   /* 소유자 아님 → 금고 반영 안 하고 state 에서 제거 + 경고 */
+    const fields = Object.keys(sec).concat(Object.keys(priv));
+    if (e.pinFrom) fields.push('pinFrom');
+    if (e.privFrom) fields.push('privFrom');
+    if (fields.length) rejected.push({ id: e.id, fields, alert: fields.filter(moved) });   /* 소유자 아님 → 금고 반영 안 하고 state 에서 제거 (+ 바뀐 값이면 경고) */
   });
   const removed = Object.keys(beforeMap).filter((id) => !afterIds[id]);
   const keyInline = (trusted && after.adminAuth && after.adminAuth.wrappedPrivateKey) ? after.adminAuth : null;
@@ -1661,10 +1662,12 @@ async function sweepSecrets(before, after) {
       const nextPending = strip(s.pendingEntries);
       if (changed) tx.update(ref, { entries: nextEntries, pendingEntries: nextPending, _w: 'admin', _wn: nodeCrypto.randomUUID() });
     });
-    try {
+    const alerted = rejected.filter((r) => r.alert.length).map((r) => ({ id: r.id, fields: r.alert }));
+    if (!alerted.length) console.info('[SECRET_RESAVE]', JSON.stringify({ writer, ids: rejected.map((r) => r.id) }));
+    if (alerted.length) try {
       const nickR = (id) => { const e = allOf(after).find((x) => x.id === id); return e ? e.nickname : id; };
-      const sumR = rejected.map((r) => nickR(r.id) + '(' + r.fields.join(',') + ')').join(' / ');
-      await securityAlert({ type: 'tamper', writer, writerNick: nickR(writer), summary: '비밀값 무단 쓰기 차단: ' + sumR, issues: rejected },
+      const sumR = alerted.map((r) => nickR(r.id) + '(' + r.fields.join(',') + ')').join(' / ');
+      await securityAlert({ type: 'tamper', writer, writerNick: nickR(writer), summary: '비밀값 무단 쓰기 차단: ' + sumR, issues: alerted },
         '🚨 비밀값 무단 변경 차단', nickR(writer) + '님 계정으로 남의 PIN·연락처 비밀값을 바꾸려 해 막았어요');
     } catch (e) { console.error('sweepSecrets reject alert', e); }
   }
