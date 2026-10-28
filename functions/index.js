@@ -1050,6 +1050,7 @@ exports.remindPending = functions
     /* 연락처 자동 가림은 중단(2026-10-27): '카톡·인스타' 단어만으로 일반 대화까지 가리고 지난 대화를 소급해 덮어씀 → 새 방식(안전 전달 버튼·실제 번호만) 나올 때까지 끔 */
     if (new Date().getUTCHours() === 19) {
       await purgeOldChats().catch((e) => console.error('purgeOldChats', e)); /* 매일 KST 04시 */
+      await purgeOldSecurityLogs().catch((e) => console.error('purgeOldSecurityLogs', e));
       const st = (await db.doc('app/state').get()).data() || {};
       await syncPhotoAcl(st, true).catch((e) => console.error('syncPhotoAcl(force)', e)); /* 사진 열람 목록 하루 한 번 전체 재기록 */
     }
@@ -1712,6 +1713,31 @@ async function sweepSecrets(before, after) {
   }
 }
 /* 삭제 표시 후 7일 지난 금고 문서 정리 (그사이 계정이 되살아났으면 표시만 지움) */
+/* 보안 기록 보관 기간 (2026-10-29 Benny "적당히 보관하고 지우면 됨, 공격 대비해 PC 에도"): 접속·로그인 기록(IP·기기)과
+   탈퇴 회원 기록(닉네임·성별·출생연도·지역·사유)은 1년 보관 후 삭제. 그 전에 PC 가 tools/export-security-logs.js 로 받아 둠 */
+const SEC_LOG_KEEP_MS = 365 * 86400000;
+async function purgeOldSecurityLogs() {
+  const cut = new Date(Date.now() - SEC_LOG_KEEP_MS).toISOString();
+  for (const [col, field] of [['loginAudit', 'at'], ['accessSeen', 'lastAt']]) {
+    for (let round = 0; round < 10; round++) {   /* 하루 최대 4천 건 */
+      const qs = await db.collection(col).where(field, '<', cut).limit(400).get().catch(() => null);
+      if (!qs || qs.empty) break;
+      const b = db.batch(); qs.docs.forEach((d) => b.delete(d.ref)); await b.commit();
+      if (qs.size < 400) break;
+    }
+  }
+  /* 탈퇴 기록: 삭제 시각이 없던 옛 기록은 오늘을 기준으로 찍어 1년 뒤 지움 */
+  const ref = db.collection('adminOnly').doc('deleted_profiles');
+  const d = (await ref.get().catch(() => null));
+  const m = (d && d.data()) || {};
+  const upd = {}; const now = new Date().toISOString();
+  Object.entries(m).forEach(([k, v]) => {
+    if (!v || typeof v !== 'object') return;
+    if (!v.deletedAt) upd[k] = { deletedAt: now };   /* merge 라 다른 칸은 그대로 */
+    else if (v.deletedAt < cut) upd[k] = admin.firestore.FieldValue.delete();
+  });
+  if (Object.keys(upd).length) await ref.set(upd, { merge: true }).catch((e) => console.error('deleted_profiles purge', e.message));
+}
 async function purgeDeletedSecrets() {
   const st = (await db.doc('app/state').get()).data() || {};
   const alive = {}; allOf(st).forEach((e) => { alive[e.id] = 1; });
