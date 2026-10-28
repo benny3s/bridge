@@ -124,6 +124,9 @@ async function callerOwns(context, state, entry, pin) {
   const uid = context.auth && context.auth.uid;
   if ((c.m === 1 || c.p === 1) && (uid === authE.id || uid === entry.id)) return true;
   if (!pin) return false;
+  /* 2026-10-28: 로그인은 흔한 PIN·출생연도 PIN 을 거부하는데 여기(번호 저장·지인 필터·숨김 목록)는 받아 줘서,
+     state 의 pinWeak 표시로 대상을 고른 뒤 PIN 몇 번으로 남의 지인 목록을 볼 수 있었음 → 로그인과 똑같이 거부 */
+  if (COMMON_WEAK_PINS.has(pin) || (authE.birthYear && pin === String(authE.birthYear))) return false;
   const ip = clientIp(context);
   await ipBlockedCheck(ip);
   const gk = memberGuardKey(authE.id, ip);
@@ -216,13 +219,14 @@ exports.memberLogin = functions
     const src = await pinSourceFor(entry, state);
     /* 물려받은 PIN 이 아직 금고로 안 옮겨짐(주선자 전환 직후 몇 초) → 실패로 세지 않고 잠시 뒤 다시 (앱이 자동 재시도) */
     if (src.pinPending) throw new HttpsError('unavailable', '계정을 정리하는 중이에요. 잠시 뒤 다시 시도해 주세요.');
-    /* 흔한 PIN(1234·0000…)은 맞든 틀리든 같은 안내로 로그인 거부 (2026-10-26 대입 공격으로 4계정 탈취) — 맞으면 계정에 pinWeak 표시해 새 PIN 받게.
+    /* 흔한 PIN(1234·0000…)은 맞든 틀리든 같은 안내로 로그인 거부 (2026-10-26 대입 공격으로 4계정 탈취) — 맞으면 관리자에게 경고(PIN 재설정 필요).
        같은 안내라 공격자는 그 PIN 이 맞았는지 알 수 없다 */
     if (COMMON_WEAK_PINS.has(pin) || (entry.birthYear && pin === String(entry.birthYear))) {   /* 출생연도 PIN 도 (2026-10-28) */
       const real = verifyPinServer(pin, src);
       await db.collection('loginAudit').add(Object.assign({ status: 'weak-refused', nickname: entry.nickname, correct: real }, auditMeta)).catch(() => {});
-      if (real) await markPinWeak([entry.id]).catch((e) => console.error('markPinWeak', e));
-      else { await loginGuardResult(guard, false); await ipFailRecord(ip, 'member', entryId); if (!familiar) await accountFailRecord(entry, ip); }
+      /* 맞아도 여기선 pinWeak 를 붙이지 않음 (2026-10-28) — 회원 누구나 state 를 읽으니, 남의 계정에 쉬운 PIN 을 대 보고
+         pinWeak 가 생기는지로 그 PIN 을 알아낼 수 있었음. 관리자에겐 아래 경고로 알림 */
+      if (!real) { await loginGuardResult(guard, false); await ipFailRecord(ip, 'member', entryId); if (!familiar) await accountFailRecord(entry, ip); }
       if (BREACHED_IDS.has(entry.id)) await addWatchIp(ip);
       const o = Object.assign({}, audO, { status: real ? 'weak' : 'fail', fails: 1 });
       const s = await suspicionOf(o);
