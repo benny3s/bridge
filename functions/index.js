@@ -748,6 +748,9 @@ exports.getHiddenIds = functions
     const myFh = new Set(Array.isArray(myFilter.fh) ? myFilter.fh : []);
     const myPh = ((await db.doc('sendContacts/' + entryId).get()).data() || {}).ph || null;
     const hide = new Set();
+    /* 회원 간 차단 (양방향, 내가 차단한 사람만 따로 돌려줌 — 나를 차단한 사람은 숨김 목록에만 섞여 드러나지 않음) */
+    const [myBlk, blkMe] = await Promise.all([db.doc('memberBlocks/' + entryId).get(), db.collection('memberBlocks').where('ids', 'array-contains', entryId).get()]);
+    const blocked = (myBlk.data() || {}).ids || [];
     /* 내가 건 사람: 그 회원의 번호해시가 내 필터에 있음 */
     if (myFh.size) {
       const sc = await db.collection('sendContacts').get();
@@ -759,7 +762,10 @@ exports.getHiddenIds = functions
       q.forEach((d) => { if (d.id !== entryId) hide.add(d.id); });
     }
     await auditP;
-    return { ids: Array.from(hide), filterCount: myFh.size, hiddenCount: hide.size };
+    const acqHidden = hide.size;   /* 지인 필터 화면의 '숨겨진 사람' 수는 지인 필터분만 */
+    blocked.forEach((id) => hide.add(id));
+    blkMe.forEach((d) => { if (d.id !== entryId) hide.add(d.id); });
+    return { ids: Array.from(hide), filterCount: myFh.size, hiddenCount: acqHidden, blocked };
   });
 
 /* (adminBackfill: 기존 회원 번호 일괄 백필 — 2026-09-08 완료 후 제거. 필요 시 재도입) */
@@ -1730,6 +1736,15 @@ function connLogRevokeS(s, a, b) {
   const now = new Date().toISOString();
   return s.connLog.map((e) => (!e.revokedAt && ((e.a === a && e.b === b) || (e.a === b && e.b === a))) ? Object.assign({}, e, { revokedAt: now }) : e);
 }
+/* ══ 회원 간 차단 (2026-10-28 Benny) ══
+   memberBlocks/{프로필 id}.ids = 그 프로필이 차단한 프로필 id — 서버 전용(규칙상 아무도 못 읽음, 상대는 차단됐는지 모름).
+   app/state 엔 아무 표시도 안 남김(회원 모두가 읽는 문서라서). 효과: 서로 명단에서 숨김(getHiddenIds), 사진·대화 신청·채팅 보내기 거부,
+   차단하는 순간 두 사람 사이 신청·연결을 지움(연결 회수와 같음 — 대화방은 '지난 대화'로 남아 신고는 됨) */
+const BLOCK_MAX = 500;
+async function blockedBetween(getter, a, b) {
+  const [x, y] = await Promise.all([getter(db.doc('memberBlocks/' + a)), getter(db.doc('memberBlocks/' + b))]);
+  return ((x.data() || {}).ids || []).includes(b) || ((y.data() || {}).ids || []).includes(a);
+}
 async function memberReqAction(op, data, context) {
   const uid = context.auth.uid;
   const asId = String(data.as || '');
@@ -1766,6 +1781,7 @@ async function memberReqAction(op, data, context) {
       need(!me.isMatchmaker, '주선자 계정은 본인이나 친구 프로필로 바꾼 뒤 요청할 수 있어요.');
       need(!(me.managedBy && target.managedBy && me.managedBy === target.managedBy), '같은 주선자 소속끼리는 사진·대화 요청을 보낼 수 없어요.');
       need(note.length >= 10, '간단한 인사·요청 이유를 10자 이상 남겨 주세요.');
+      need(!(await blockedBetween((r) => tx.get(r), me.id, toId)), '지금은 이 회원에게 요청할 수 없어요.');
       const dup = reqs.find((r) => r && r.fromId === me.id && r.toId === toId && (r.type || 'contact') === type && (r.hiddenBy || []).indexOf(me.id) < 0);
       need(!dup, dup && reqStatusOf(dup) === 'rejected' ? target.nickname + '님이 이 요청을 거절했어요.' : '이미 ' + target.nickname + '님에게 요청을 보냈어요.');
       const today = kstDayOf(now);
@@ -1795,6 +1811,23 @@ async function memberReqAction(op, data, context) {
       } else next = reqs.filter((r) => !(between(r) && (r.type || 'contact') === k));
       if (k !== 'photo') { const cl = connLogRevokeS(s, me.id, other); if (cl) upd.connLog = cl; }
       log = { photo: '사진 공개 회수', contact: '대화 연결 해제', all: '연결 회수' }[k] + ' → ' + nick(other);
+    } else if (op === 'reqBlock' || op === 'reqUnblock') {
+      /* 회원 간 차단·풀기 — 활동 기록(state.logs)엔 남기지 않음(회원 누구나 읽는 곳) */
+      const other = String(data.other || '');
+      need(ENTRY_ID_RE.test(other) && other !== me.id, '차단할 회원을 확인해 주세요.');
+      const bref = db.doc('memberBlocks/' + me.id);
+      const cur = ((await tx.get(bref)).data() || {}).ids || [];
+      if (op === 'reqBlock') {
+        need(entries.some((e) => e.id === other), '이미 탈퇴한 회원이에요.');
+        const between = (r) => r && ((r.fromId === me.id && r.toId === other) || (r.fromId === other && r.toId === me.id));
+        if (reqs.some(between)) next = reqs.filter((r) => !between(r));
+        const cl = connLogRevokeS(s, me.id, other);
+        if (cl && cl.some((e, i) => e !== s.connLog[i])) upd.connLog = cl;
+        tx.set(bref, { ids: cur.filter((x) => x !== other).concat([other]).slice(-BLOCK_MAX), updatedAt: now });
+      } else {
+        tx.set(bref, { ids: cur.filter((x) => x !== other), updatedAt: now });
+      }
+      console.info('[MEMBER_BLOCK]', JSON.stringify({ op, by: me.id, other, viaMm }));
     } else if (op === 'reqPurgeOwn') {
       /* 주선자 계정 삭제 직전: 내 계정·본인 프로필이 낀 요청 정리 (관리 중인 친구가 남아 있으면 안 됨 — 앱도 막음) */
       need(me.id === uid && me.isMatchmaker, '주선자 계정만 할 수 있어요.');
@@ -1861,6 +1894,7 @@ async function memberReqAction(op, data, context) {
       }
       if (op !== 'reqCancel') { next = reqs.slice(); next[idx] = c; }
     }
+    if (next === reqs && !log && !Object.keys(upd).length) return;   /* state 는 그대로 (예: 차단 풀기·지울 신청 없는 차단) */
     upd.dateRequests = next;
     if (log) upd.logs = (s.logs || []).concat([logItem('request', me.nickname || '', log)]);
     tx.update(ref, upd);   /* 서버 쓰기(_w·_wn 그대로) → 조작 감지 대상 아님, 푸시 알림은 onStateChange 가 예전처럼 */
@@ -1966,6 +2000,7 @@ exports.chatAction = functions
       if (otherE.deactivated) throw new HttpsError('failed-precondition', '상대가 지금 휴면(보관) 중이라 메시지를 보낼 수 없어요.');
       if (asE.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요.');
       if (!chatApproved(state, asId, otherId)) throw new HttpsError('failed-precondition', '대화 신청이 수락된 사이에서만 대화할 수 있어요.');
+      if (await blockedBetween((r) => r.get(), asId, otherId)) throw new HttpsError('failed-precondition', '지금은 이 회원에게 메시지를 보낼 수 없어요.');
       const m = { id: nodeCrypto.randomUUID(), fromId: asId, toId: otherId, text, at: new Date().toISOString() };
       if (asE.managedBy && context.auth.uid === asE.managedBy && !asE.ownerSelf) m.viaMm = true; /* 주선자가 친구 대신 보냄 */
       await db.runTransaction(async (tx) => {
