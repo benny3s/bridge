@@ -25,9 +25,12 @@ service cloud.firestore {
       return request.resource.data.get('_w', '') == request.auth.uid
           && request.resource.data.get('_wn', '') != resource.data.get('_wn', '');
     }
+    // 반복 조작으로 자동 차단된 계정(state.secBlock — 서버·관리자만 씀, 회원 쓰기 허용 키에 없음) → 앱 데이터 읽기·쓰기 거부 (2026-10-28)
+    function notSecBlocked(st) { return !(request.auth.uid in st.get('secBlock', [])); }
+    function stateNotSecBlocked() { return notSecBlocked(get(/databases/$(database)/documents/app/state).data); }
     match /app/state {
-      allow read: if isMember() || isAdmin();
-      allow update: if signedWrite() && (isAdmin() || (isMember() && memberStateKeysOnly()));
+      allow read: if isAdmin() || (isMember() && notSecBlocked(resource.data));
+      allow update: if signedWrite() && (isAdmin() || (isMember() && notSecBlocked(resource.data) && memberStateKeysOnly()));
       allow create, delete: if isAdmin();
     }
 
@@ -40,12 +43,12 @@ service cloud.firestore {
 
     // 활동 기록 아카이브 — 승인 회원·관리자만
     match /app/logs {
-      allow read, write: if isMember() || isAdmin();
+      allow read, write: if isAdmin() || (isMember() && stateNotSecBlocked());
     }
 
     // 명단용 작은 사진(썸네일) — 승인 회원·관리자만 읽기, 서버(onStateChange.sweepThumbs)만 씀 (2026-10-14 메인 문서에서 분리)
     match /app/thumbs {
-      allow read: if isMember() || isAdmin();
+      allow read: if isAdmin() || (isMember() && stateNotSecBlocked());
       allow write: if false;
     }
 

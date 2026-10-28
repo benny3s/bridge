@@ -138,12 +138,15 @@ async function deletedAccountOf(entryId, ip, state) {
   const intel = await ipIntel(ip).catch(() => null);
   return { tombId, nickname: (dp[tombId] || {}).nickname || '', serial: tomb.serial || '', sameNet, vpn: !!(intel && intel.dcvpn) };
 }
+/* 반복 조작으로 자동 차단된 계정(state.secBlock — 서버·관리자만 씀, 규칙이 app/state·logs·thumbs 접근도 막음) */
+function secBlocked(state, uid) { return !!(uid && Array.isArray(state && state.secBlock) && state.secBlock.includes(uid)); }
 /* PIN이 필요한 서버 기능(번호 저장·지인 필터) 공통 본인 확인: 서버 로그인 토큰이 그 계정이면 통과,
    아니면 PIN 확인(로그인과 같은 실패 횟수 잠금 적용 — 예전엔 잠금 없이 PIN을 무제한 시도할 수 있었음) */
 async function callerOwns(context, state, entry, pin) {
   const authE = authEntryFor(state, entry);
   const c = (context.auth && context.auth.token) || {};
   const uid = context.auth && context.auth.uid;
+  if (secBlocked(state, uid) || secBlocked(state, authE.id)) return false;
   if ((c.m === 1 || c.p === 1) && (uid === authE.id || uid === entry.id)) return true;
   if (!pin) return false;
   /* 2026-10-28: 로그인은 흔한 PIN·출생연도 PIN 을 거부하는데 여기(번호 저장·지인 필터·숨김 목록)는 받아 줘서,
@@ -278,6 +281,11 @@ exports.memberLogin = functions
       const s = await suspicionOf(o).catch(() => null);
       if (s && s.reasons.length) await suspiciousAlert(o, s).catch(() => {});
       throw new HttpsError('permission-denied', 'PIN이 올바르지 않아요.');
+    }
+    /* 반복 조작으로 자동 차단된 계정 — PIN 이 맞아도 관리자가 풀 때까지 거부 (틀린 PIN 엔 위의 보통 안내라 차단 여부가 드러나지 않음) */
+    if (secBlocked(state, entry.id)) {
+      await db.collection('loginAudit').add(Object.assign({ status: 'sec-blocked', nickname: entry.nickname }, auditMeta)).catch(() => {});
+      throw new HttpsError('permission-denied', '보안 확인을 위해 이 계정은 잠시 잠겨 있어요. 관리자에게 문의해 주세요.');
     }
     /* 데이터센터 VPN 으로 PIN 이 맞으면 바로 들이지 않고 관리자 검토 (2026-10-26 Benny: "VPN 접속 시도라서 관리자 검토 중이라고 띄우고 나한테 알려줘").
        PIN 이 틀린 시도는 위에서 실패로 끝나 계정 잠금에 합산 → PIN 모르는 공격자는 검토 요청을 만들 수 없음. iCloud 비공개 릴레이는 해당 없음 */
@@ -886,6 +894,7 @@ exports.onStateChange = functions
     jobs.push(refreshChatViewers(before, after).catch((e) => console.error('refreshChatViewers', e)));
     jobs.push(syncPhotoAcl(after, false).catch((e) => console.error('syncPhotoAcl', e)));
     jobs.push(detectTamper(before, after).catch((e) => console.error('detectTamper', e)));
+    jobs.push(noteSecRelease(before, after).catch((e) => console.error('noteSecRelease', e)));
     (after.dateRequests || []).forEach((r) => {
       const prev = beforeMap[r.id];
       const type = (r.type || 'contact') === 'photo' ? '사진' : '대화'; /* 앱 용어(대화 신청)와 통일 */
@@ -1780,6 +1789,7 @@ exports.chatAction = functions
     }
 
     if (c.m !== 1) throw new HttpsError('permission-denied', '승인된 회원만 대화할 수 있어요.');
+    if (secBlocked(state, context.auth.uid)) throw new HttpsError('permission-denied', '보안 확인을 위해 이 계정은 잠시 잠겨 있어요. 관리자에게 문의해 주세요.');
     const asId = String(data.as || '');
     const otherId = String(data.other || '');
     const asE = entries.find((e) => e.id === asId);
@@ -2745,6 +2755,45 @@ async function detectTamper(before, after) {
   }).join(' / ');
   await securityAlert({ type: 'tamper', writer: r.writer, writerNick: nick(r.writer), summary, issues: r.issues.slice(0, 30) },
     '🚨 이상 변경 감지', nick(r.writer) + '님 계정으로 다른 회원 데이터 ' + r.issues.length + '건 변경 — 관리자 화면에서 확인·되돌리기');
+  await strikeTamper(r.writer, r.issues, nick(r.writer)).catch((e) => console.error('strikeTamper', e));
+}
+/* ══ 반복 조작 계정 자동 차단 (2026-10-28 Benny: 공격자가 계속 조작하면 계정째 막기) ══
+   같은 계정이 7일 안에 남의 데이터를 2번 바꾸려 하면 state.secBlock 에 넣음 →
+   규칙이 그 계정의 app/state·logs·thumbs 읽기·쓰기를 바로 거부(열려 있던 화면도 끊김), memberLogin·채팅·AI·번호 저장 거부,
+   refresh 토큰도 끊어 늦어도 1시간 안에 로그인이 풀림. 관리자가 🛡 보안 경고에서 [차단 풀기] 하면 횟수도 처음부터.
+   활동 기록만 사라진 경고는 옛 앱의 동시 저장 충돌일 수 있어 횟수에 넣지 않음 */
+const SEC_STRIKES_TO_BLOCK = 2;
+const SEC_STRIKE_WINDOW_MS = 7 * 86400000;
+async function strikeTamper(uid, issues, nick) {
+  if (!ENTRY_ID_RE.test(String(uid || '')) || !(issues || []).some((i) => i.coll !== 'logs')) return;
+  const ref = db.collection('secStrikes').doc(uid);
+  const now = Date.now();
+  let strikes = [];
+  await db.runTransaction(async (tx) => {
+    const d = (await tx.get(ref)).data() || {};
+    strikes = (d.at || []).filter((t) => now - t < SEC_STRIKE_WINDOW_MS).concat([now]).slice(-20);
+    tx.set(ref, { at: strikes, nickname: nick || '', updatedAt: new Date(now).toISOString() }, { merge: true });
+  });
+  if (strikes.length < SEC_STRIKES_TO_BLOCK) return;
+  let added = false;
+  await db.runTransaction(async (tx) => {
+    const sref = db.doc('app/state');
+    const s = (await tx.get(sref)).data() || {};
+    if (secBlocked(s, uid)) return;
+    tx.update(sref, { secBlock: (Array.isArray(s.secBlock) ? s.secBlock : []).concat([uid]) });   /* 서버 쓰기(_w·_wn 그대로) */
+    added = true;
+  });
+  await admin.auth().revokeRefreshTokens(uid).catch((e) => console.error('revokeRefreshTokens', e.message));
+  if (added) {
+    await securityAlert({ type: 'quarantine', target: uid, nickname: nick || '', strikes: strikes.length },
+      '⛔ 계정 자동 차단 · ' + (nick || uid), (nick || '') + '님 계정이 7일 안에 다른 회원 데이터를 ' + strikes.length + '번 바꾸려 해 앱 접속·로그인을 막았어요. 본인 실수면 관리자탭 🛡 보안 경고에서 차단 풀기');
+  }
+}
+/* 관리자가 차단을 풀면(secBlock 에서 빠지면) 조작 횟수를 처음부터 */
+async function noteSecRelease(before, after) {
+  const now = (Array.isArray(after.secBlock) ? after.secBlock : []);
+  const freed = (Array.isArray(before.secBlock) ? before.secBlock : []).filter((id) => !now.includes(id) && ENTRY_ID_RE.test(String(id)));
+  for (const id of freed) await db.collection('secStrikes').doc(id).set({ at: [], releasedAt: new Date().toISOString() }, { merge: true });
 }
 
 /* ══ 베타 서버 전용: 시험 데이터 심기 (2026-10-09) ══
@@ -3280,7 +3329,7 @@ exports.aiConcierge = functions
     if (!isAdmin) {
       const stLive = (await db.doc('app/state').get()).data() || {};
       const live = ((tok.m === 1 ? stLive.entries : stLive.pendingEntries) || []).some((e) => e && e.id === context.auth.uid && !e.deactivated);
-      if (!live) throw new HttpsError('permission-denied', '지금은 쓸 수 없는 계정이에요.');
+      if (!live || secBlocked(stLive, context.auth.uid)) throw new HttpsError('permission-denied', '지금은 쓸 수 없는 계정이에요.');
       await aiQuotaTake(context.auth.uid, 60);
     }
     /* 제보자 이름은 앱이 보낸 값을 믿지 않고 서버가 토큰으로 정함 ('관리자'라고 사칭해 AI 판단을 바꾸는 것 차단) */
