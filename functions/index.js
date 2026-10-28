@@ -1459,6 +1459,7 @@ exports.applicantAction = functions
 const SECRET_KEYS = ['pinAuth', 'pinHash', 'pinEnc', 'contactSelfEnc'];
 const PRIV_KEYS = ['realNameEnc', 'contactEnc', 'referrerEnc'];
 const SECRET_PURGE_MS = 7 * 86400000; /* state 에서 사라진 계정의 금고는 7일 뒤 삭제 (실수로 지워졌다 복구될 때 대비) */
+const MSG_RETAIN_MS = 90 * 86400000;  /* 탈퇴 회원과 관리자 Q&A 는 분쟁 대비로 90일 (회원끼리 채팅과 같게, 2026-10-29 Benny) */
 function allOf(s) { return ((s && s.entries) || []).concat((s && s.pendingEntries) || []); }
 function stableJson(v) {
   if (v === undefined) return 'undefined';
@@ -1700,7 +1701,7 @@ async function sweepSecrets(before, after) {
     const at = new Date().toISOString();
     await db.collection('secrets').doc(id).set({ deletedAt: at }, { merge: true }).catch(() => {});
     await db.collection('adminOnly').doc(id).set({ deletedAt: at }, { merge: true }).catch(() => {});
-    await msgsRef(id).update({ deletedAt: at }).catch(() => {});   /* 관리자 Q&A 도 7일 뒤 함께 정리 (문서가 없으면 넘어감) */
+    await msgsRef(id).update({ deletedAt: at }).catch(() => {});   /* 관리자 Q&A 는 90일 뒤 정리 (문서가 없으면 넘어감) */
   }
 }
 /* 삭제 표시 후 7일 지난 금고 문서 정리 (그사이 계정이 되살아났으면 표시만 지움) */
@@ -1745,7 +1746,7 @@ async function purgeDeletedSecrets() {
     for (const d of qs.docs) {
       const t = new Date(d.data().deletedAt).getTime();
       if (alive[d.id]) await d.ref.set({ deletedAt: admin.firestore.FieldValue.delete() }, { merge: true });
-      else if (t && Date.now() - t > SECRET_PURGE_MS) await d.ref.delete();
+      else if (t && Date.now() - t > (col === 'memberMsgs' ? MSG_RETAIN_MS : SECRET_PURGE_MS)) await d.ref.delete();
     }
   }
 }
