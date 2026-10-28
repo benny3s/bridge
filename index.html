@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-28-483';
+  var APP_VERSION = '2026-10-28-484';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -2407,7 +2407,8 @@
   }
 
   /* ── 지인 필터 (마주치기 방지, 양방향 숨김) ── */
-  var myHiddenIds = [];                 /* 내 명단에서 숨길 회원 ID (서버 계산) */
+  var myHiddenIds = [];                 /* 내 명단에서 숨길 회원 ID (서버 계산 — 지인 필터 + 회원 간 차단, 양방향) */
+  var myBlockedIds = [];                /* 내가 차단한 회원 ID (⚙️ 내 계정 → 🚫 차단한 회원에서 풀기) */
   var acqCounts = { filter: 0, hidden: 0 };
   function acqAuth() {
     var me = (typeof findMyEntry === 'function') ? findMyEntry(currentState) : null;
@@ -2416,11 +2417,12 @@
   }
   function refreshMyHidden(cb) {
     var a = acqAuth();
-    if (!fns || !a) { myHiddenIds = []; acqCounts = { filter: 0, hidden: 0 }; if (cb) cb(); return; }
+    if (!fns || !a) { myHiddenIds = []; myBlockedIds = []; acqCounts = { filter: 0, hidden: 0 }; if (cb) cb(); return; }
     try {
       callFn('getHiddenIds', { entryId: a.entryId, pin: a.pin }).then(function (r) {
         var d = (r && r.data) || {};
         myHiddenIds = d.ids || [];
+        myBlockedIds = d.blocked || [];
         acqCounts = { filter: d.filterCount || 0, hidden: d.hiddenCount || 0 };
         if (cb) cb();
       }).catch(function () { if (cb) cb(); });
@@ -4965,12 +4967,13 @@
           (linkState().chat ? '<button type="button" class="card-btn" data-action="revoke-contact-link" data-id="' + escapeHtml(otherId) + '">💬 대화 회수 (연결 끊기)</button>' : '') +
           '<button type="button" class="card-btn" id="cm-clear">🗑 대화 지우기 (내 화면에서만)</button>' +
           '<button type="button" class="card-btn" id="cm-report" style="color:#c5221f;">🚨 신고</button>' +
+          (otherAlive && canBlockFrom(me, otherId) ? '<button type="button" class="card-btn" data-action="block-member" data-id="' + escapeHtml(otherId) + '" style="color:#c5221f;">🚫 차단</button>' : '') +
         '</div>' +
         '<p class="modal-msg" style="margin:10px 0 0;font-size:0.76rem;color:var(--muted);">🔒 대화는 두 사람만 볼 수 있고(친구 프로필은 담당 주선자 포함), 신고·분쟁에 대비해 서버에 안전하게 보관돼요.</p>' +
         '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>');
       ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
       /* 회수 버튼은 앱 공통 동작(확인 창)으로 넘기고 이 메뉴는 닫음 */
-      Array.prototype.forEach.call(ov.querySelectorAll('[data-action^="revoke-"]'), function (bt) { bt.addEventListener('click', function () { setTimeout(function () { closeModal(ov); }, 0); }); });
+      Array.prototype.forEach.call(ov.querySelectorAll('[data-action^="revoke-"], [data-action="block-member"]'), function (bt) { bt.addEventListener('click', function () { setTimeout(function () { closeModal(ov); }, 0); }); });
       var pf = ov.querySelector('#cm-profile');
       if (pf) pf.addEventListener('click', function () { closeModal(ov); handleCardDetail(otherId); });
       ov.querySelector('#cm-clear').addEventListener('click', function () {
@@ -6185,14 +6188,16 @@
     /* 주선자 계정은 소개팅 프로필이 없어 회원 카드로 열면 빈 칸뿐 → 관리자에겐 주선자 상세(실명·번호)로 바로 */
     if (isAdminUnlocked && entry.isMatchmaker) { handleDetail(id); return; }
     var idx = (state.entries || []).indexOf(entry);
+    var blockBtn = canBlockFrom(currentUser ? findMyEntry(state) : null, id)
+      ? '<div style="text-align:center;margin:10px 0 2px;"><button type="button" class="card-btn" data-action="block-member" data-id="' + escapeHtml(id) + '" style="flex:none;font-size:0.8rem;color:var(--muted);border-color:transparent;background:none;">🚫 이 회원 차단</button></div>' : '';
     var overlay = openModal(
       '<button type="button" class="card-close" id="card-detail-close" aria-label="닫기">&times;</button>' +
-      '<div class="card-scroll">' + cardHtml(entry, idx + 1, state, true) + '</div>'
+      '<div class="card-scroll">' + cardHtml(entry, idx + 1, state, true) + blockBtn + '</div>'
     );
     overlay.classList.add('card-detail-modal');
     /* 관리자: 알람 설정 여부를 pushTokens에서 조회해 채움 */
     if (isAdminUnlocked) fillNotifStatus(entry.id);
-    var closeActions = ['edit', 'delete', 'admin-manage', 'request-photo', 'request-contact', 'reapply', 'detail', 'card-detail', 'dm-chat'];
+    var closeActions = ['edit', 'delete', 'admin-manage', 'request-photo', 'request-contact', 'reapply', 'detail', 'card-detail', 'dm-chat', 'block-member'];
     overlay.addEventListener('click', function (e) {
       if (e.target === overlay) { closeModal(overlay); return; }
       if (e.target.closest('#card-detail-close')) { closeModal(overlay); return; }
@@ -6869,6 +6874,62 @@
       }).then(function () {
         modalNotice('회수 완료', nick + '님과의 연결을 해제했어요.');
       }).catch(function (err) { modalNotice('오류', '회수 실패: ' + (err.message || err)); });
+    });
+  }
+  /* 🚫 회원 간 차단 (2026-10-28): 서로 명단에서 숨김 · 신청·채팅 불가 · 지금 연결도 끊김. 상대에게 알리지 않음.
+     차단 목록은 서버 전용(memberBlocks) — state 에 남기지 않음. 풀기는 ⚙️ 내 계정 → 🚫 차단한 회원 */
+  function canBlockFrom(me, otherId) {
+    var o = ((currentState && currentState.entries) || []).find(function (x) { return x.id === otherId; });
+    return !!(me && o && currentUser && !isAdminUnlocked && o.id !== me.id && o.id !== currentUser.id && !o.isMatchmaker && o.managedBy !== currentUser.id);
+  }
+  function handleBlockMember(otherId) {
+    var me = findMyEntry(currentState);
+    if (!me) return modalNotice('로그인 필요', '먼저 로그인해주세요.');
+    var nick = nickForEntry(currentState, otherId);
+    modalConfirm('🚫 ' + nick + '님 차단', '차단하면 서로 명단에서 보이지 않고, 사진·대화 신청과 채팅을 주고받을 수 없어요. 지금 연결된 사진·대화도 끊겨요. 상대에게는 알리지 않아요. (⚙️ 내 계정 → 차단한 회원에서 언제든 풀 수 있어요)', '차단', 'danger').then(function (ok) {
+      if (!ok) return;
+      reqCall('reqBlock', { as: me.id, other: otherId }).then(function () {
+        if (_openChatClose && _openChatWith === otherId) _openChatClose();
+        return new Promise(function (res) { refreshMyHidden(res); });
+      }).then(function () { return refreshNow(); }).then(function () {
+        paint(currentState);
+        modalNotice('차단 완료', nick + '님을 차단했어요. 서로 명단에서 보이지 않아요.');
+      }).catch(function (err) { modalNotice('오류', '차단하지 못했어요: ' + ((err && err.message) || err)); });
+    });
+  }
+  function handleUnblockMember(otherId) {
+    var me = findMyEntry(currentState);
+    if (!me) return modalNotice('로그인 필요', '먼저 로그인해주세요.');
+    var alive = ((currentState.entries || []).some(function (x) { return x.id === otherId; }));
+    var nick = alive ? nickForEntry(currentState, otherId) : '탈퇴한 회원';
+    modalConfirm('차단 풀기', nick + '님 차단을 풀까요? 다시 서로 명단에 보이고 신청을 주고받을 수 있어요. (끊긴 연결은 다시 신청·수락해야 이어져요)', '풀기', 'primary').then(function (ok) {
+      if (!ok) return;
+      reqCall('reqUnblock', { as: me.id, other: otherId }).then(function () {
+        return new Promise(function (res) { refreshMyHidden(res); });
+      }).then(function () {
+        paint(currentState);
+        modalNotice('차단 풀림', nick + '님 차단을 풀었어요.');
+      }).catch(function (err) { modalNotice('오류', '풀지 못했어요: ' + ((err && err.message) || err)); });
+    });
+  }
+  function openBlockedList() {
+    var me = findMyEntry(currentState);
+    if (!me) return modalNotice('로그인 필요', '먼저 로그인해주세요.');
+    var ents = currentState.entries || [];
+    var rows = myBlockedIds.map(function (bid) {
+      var e = ents.find(function (x) { return x.id === bid; });
+      return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);">' +
+        '<div style="flex:1;min-width:0;">' + (e ? escapeHtml(e.nickname) + ' <span style="color:var(--muted);font-size:0.82rem;">' + genderLabel(e.gender) + '</span>' : '<span style="color:var(--muted);">탈퇴한 회원</span>') + '</div>' +
+        '<button type="button" class="card-btn" data-action="unblock-member" data-id="' + escapeHtml(bid) + '" style="flex:none;">차단 풀기</button></div>';
+    }).join('');
+    var ov = openModal('<h3>🚫 차단한 회원</h3>' +
+      (rows || '<p class="modal-msg">차단한 회원이 없어요.</p>') +
+      '<p class="modal-msg" style="margin:10px 0 0;font-size:0.78rem;color:var(--muted);">차단한 회원과는 서로 명단에서 보이지 않고 신청·채팅을 주고받을 수 없어요. 상대는 차단 여부를 알 수 없어요. 회원 프로필이나 채팅 ⋯ 메뉴에서 차단할 수 있어요.</p>' +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>');
+    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+    ov.addEventListener('click', function (e) {
+      if (e.target === ov) { closeModal(ov); return; }
+      if (e.target.closest && e.target.closest('[data-action="unblock-member"]')) closeModal(ov);   /* 앱 공통 처리(확인 창)로 넘김 */
     });
   }
   /* 메시지함 연결 리스트: 사진/대화 권한이 있는 상대를 한 줄씩, 상태를 버튼 4개로 표시.
@@ -10993,6 +11054,7 @@
         : row('data-action="sub-pin-issue" data-id="' + id + '"', '🔑', '임시 PIN 발급 (1일)', '친구가 직접 로그인해서 둘러볼 수 있게')) : '') +
       (viaMm ? row('data-action="sub-detach" data-id="' + id + '"', '🪪', '일반 계정으로 독립', '친구가 직접 관리하는 계정으로 바꾸기') : '') +
       (!isSub && !viaMm && !me.deleteRequested ? row('data-action="report-couple" data-id="' + id + '"', '💕', '좋은 인연 만났어요', '축하 후기 남기고 명단에서 내리기') : '') +
+      row('data-action="blocked-list" data-id="' + id + '"', '🚫', '차단한 회원', myBlockedIds.length ? myBlockedIds.length + '명 · 풀기' : '서로 안 보이게 한 회원 관리') +
       (!me.deactivateRequested && !me.deactivated && !me.deleteRequested ? row('data-action="deactivate" data-id="' + id + '"', '💤', '잠시 쉬기', '명단에서 숨기고 나중에 다시 활동') : '') +
       (!me.deleteRequested ? row('data-action="delete" data-id="' + id + '"', '🗑', '탈퇴하기', '바로 명단에서 숨김 · 관리자 확인 후 삭제', true) : row('data-action="cancel-delete" data-id="' + id + '"', '↩️', '탈퇴 요청 취소', '관리자 확인 중이에요')) +
       (!isSub && !viaMm && !amMM && !iManage ? (myJoinReq ? row('id="cancel-mm-req"', '⏳', '주선자 요청 취소', '승인 대기 중') : row('id="request-mm"', '🤝', '주선자에게 관리 요청', '친구가 내 프로필을 대신 관리')) : '') +
@@ -13115,6 +13177,9 @@
       else if (action === 'revoke-photo-link') handleRevokePhotoViewer(id);
       else if (action === 'revoke-contact-link') handleRevokeContactLink(id);
       else if (action === 'revoke-connection') handleRevokeConnection(id);
+      else if (action === 'block-member') handleBlockMember(id);
+      else if (action === 'unblock-member') handleUnblockMember(id);
+      else if (action === 'blocked-list') openBlockedList();
       else if (action === 'revoke-approve') handleRevokeApprove(id);
       else if (action === 'perm-photo') { if (isAdminUnlocked) openPermPopup(id, 'photo'); }
       else if (action === 'perm-contact') { if (isAdminUnlocked) openPermPopup(id, 'contact'); }
