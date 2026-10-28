@@ -1561,8 +1561,21 @@ async function sweepSecrets(before, after) {
   const trusted = serverWrite || writer === 'admin';
   const owned = {}; if (writer) owned[writer] = 1;
   allOf(before).forEach((e) => { if (e.managedBy === writer) owned[e.id] = 1; });
+  /* '새 계정'이라도 예전에 있던 id 면 새 계정 아님 (2026-10-29 보안 검증: 회원이 남의 entry 를 지웠다가 같은 id 로
+     {isMatchmaker, pinFrom: 자기} 를 다시 넣으면 자기 PIN 이 그 계정 금고로 복사돼 계정을 가로챌 수 있었음 — 삭제된 회원 id 도 마찬가지) */
+  const seenBefore = {};
+  const fresh = trusted ? [] : allOf(after).filter((e) => !beforeMap[e.id] && ENTRY_ID_RE.test(String(e.id || '')));
+  if (fresh.length) {
+    const delP = ((await db.collection('adminOnly').doc('deleted_profiles').get().catch(() => null)) || { data: () => ({}) }).data() || {};
+    const deletedIds = {}; Object.values(delP).forEach((t) => { if (t && t.entryId) deletedIds[t.entryId] = 1; });
+    await Promise.all(fresh.map(async (e) => {
+      if (deletedIds[e.id]) { seenBefore[e.id] = 1; return; }
+      const [a, b] = await Promise.all([db.collection('secrets').doc(e.id).get(), db.collection('adminOnly').doc(e.id).get()]).catch(() => [null, null]);
+      if (!a || !b || a.exists || b.exists) seenBefore[e.id] = 1;   /* 확인 못 하면 안전하게 '예전에 있던 id' 로 */
+    }));
+  }
   const ownerLegit = (e) => trusted || owned[e.id]
-    || (!beforeMap[e.id] && (e.managedBy === writer || (e.isMatchmaker && e.pinFrom && owned[e.pinFrom])));
+    || (!beforeMap[e.id] && !seenBefore[e.id] && (e.managedBy === writer || (e.isMatchmaker && e.pinFrom && owned[e.pinFrom])));
   const work = [];
   const rejected = [];
   allOf(after).forEach((e) => {
@@ -1573,7 +1586,9 @@ async function sweepSecrets(before, after) {
     const pe = prev || {};
     const moved = (k) => stableJson(e[k]) !== stableJson(pe[k]);
     /* PIN 회수: 전엔 PIN이 있었는데 지금은 표시·값·물려받기 모두 없음 → 금고의 PIN도 지움 */
-    const revoke = !!(prev && (prev.pinSet || hasPinInline(prev)) && !e.pinSet && !hasPinInline(e) && !e.pinFrom);
+    /* 금고에 있던 PIN(pinSet)만 기준 — 금고로 옮기기 전 인라인 값만 있던 걸 다른 쓰기가 지운 경우를 '회수'로 보면
+       막 넣은 새 PIN 이 금고에서 지워졌음 (2026-10-29 보안 검증: 다른 회원 저장과 1초 안에 겹칠 때) */
+    const revoke = !!(prev && prev.pinSet && !e.pinSet && !hasPinInline(e) && !e.pinFrom);
     if (!(Object.keys(sec).length || Object.keys(priv).length || e.pinFrom || e.privFrom || revoke)) return;
     if (ownerLegit(e)) {
       /* 금고에는 '이번 쓰기가 바꾼 값'만 (2026-10-29 보안 리뷰): 남이 심어 둔 값이 아직 state 에 남아 있을 때 서버·관리자·본인 쓰기가
@@ -3068,7 +3083,10 @@ async function detectTamper(before, after) {
       : (i.coll === 'dateRequests' ? nick((i.before || i.after).fromId) + '→' + nick((i.before || i.after).toId) : i.coll);
     return i.coll + ':' + who + '(' + (i.kind === 'changed' ? '변경 ' + i.fields.slice(0, 4).join(',') : (i.kind === 'removed' ? '삭제' : '추가')) + ')';
   }).join(' / ');
-  await securityAlert({ type: 'tamper', writer: r.writer, writerNick: nick(r.writer), summary, issues: r.issues.slice(0, 30) },
+  /* 경고에 PIN·연락처 비밀값은 싣지 않음 — 되돌리기가 남이 심은 값을 다시 쓰지 않게 (2026-10-29 보안 검증) */
+  const noSecrets = (o) => { if (!o || typeof o !== 'object' || Array.isArray(o)) return o; const c = Object.assign({}, o); SECRET_KEYS.concat(PRIV_KEYS, ['pinFrom', 'privFrom']).forEach((k) => { delete c[k]; }); return c; };
+  const safeIssues = r.issues.slice(0, 30).map((i) => (i && typeof i === 'object') ? Object.assign({}, i, { before: noSecrets(i.before), after: noSecrets(i.after) }) : i);
+  await securityAlert({ type: 'tamper', writer: r.writer, writerNick: nick(r.writer), summary, issues: safeIssues },
     '🚨 이상 변경 감지', nick(r.writer) + '님 계정으로 다른 회원 데이터 ' + r.issues.length + '건 변경 — 관리자 화면에서 확인·되돌리기');
   await strikeTamper(r.writer, r.issues, nick(r.writer)).catch((e) => console.error('strikeTamper', e));
 }

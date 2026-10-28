@@ -2996,7 +2996,7 @@
      '" onerror=...' 같은 값을 넣으면 명단을 보는 모든 회원·관리자 화면에서 스크립트가 돌 수 있었음) */
   function safeImgSrc(u) {
     u = String(u == null ? '' : u);
-    return (/^data:image\/(?:jpe?g|png|webp|gif);base64,[A-Za-z0-9+\/=\s]+$/.test(u) || /^https:\/\/[^\s"'<>]+$/.test(u)) ? escapeHtml(u) : '';
+    return (/^data:image\/(?:jpe?g|png|webp|gif);base64,[A-Za-z0-9+\/=\s]+$/.test(u) || /^https:\/\/firebasestorage\.googleapis\.com\/[^\s"'<>]+$/.test(u)) ? escapeHtml(u) : '';   /* 바깥 주소는 안 받음(보는 사람 IP 추적 방지) */
   }
   /* 바깥(어두운 곳)을 눌러 창을 닫기 전에: 입력칸에 쓴 글이 있으면 안 닫음 (2026-10-29 시험 — 실수로 눌러 쓰던 글이 사라졌음) */
   function overlayHasDraft(ov) {
@@ -5066,6 +5066,14 @@
             }
             var list = (upd[i.coll] || s[i.coll] || []).slice();
             var idx = list.findIndex(function (x) { return x && x.id === i.id; });
+            /* PIN·연락처 비밀값은 되돌리기로 다시 쓰지 않음 (2026-10-29 보안 검증: 경고에 실린 '바뀌기 전' 값에 남이 심은 PIN 이 섞여 있으면
+               관리자 되돌리기가 그 PIN 을 금고로 보낼 수 있었음). 지금 값의 비밀값은 그대로 둠 */
+            var SECRET_FIELDS = ['pinAuth', 'pinHash', 'pinEnc', 'contactSelfEnc', 'realNameEnc', 'contactEnc', 'referrerEnc', 'pinFrom', 'privFrom'];
+            if (i.before && typeof i.before === 'object') {
+              var restored = JSON.parse(JSON.stringify(i.before)), cur0 = idx >= 0 ? list[idx] : null;
+              SECRET_FIELDS.forEach(function (k) { delete restored[k]; if (cur0 && cur0[k] != null) restored[k] = cur0[k]; });
+              i = Object.assign({}, i, { before: restored });
+            }
             if (i.before) { if (idx >= 0) list[idx] = i.before; else list.push(i.before); }
             else if (idx >= 0) list.splice(idx, 1);
             upd[i.coll] = list;
