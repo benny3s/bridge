@@ -1708,6 +1708,165 @@ function actsAs(context, entry) {
   const uid = context.auth && context.auth.uid;
   return !!(entry && uid && (uid === entry.id || (entry.managedBy && uid === entry.managedBy)));
 }
+
+/* ══ 재설계 B-1 (2026-10-28 Benny OK): 회원의 사진·대화 신청 쓰기를 서버가 대행 ══
+   예전엔 회원 앱이 app/state.dateRequests 를 직접 고치고 서버는 나중에 감지해서 되돌렸음(그 사이 위조 신청이 잠깐 통할 수 있었음).
+   이제 앱은 chatAction{op:'req…'} 를 부르고, 서버가 트랜잭션 안에서 '이 프로필이 이 신청에 이걸 할 수 있는지' 확인한 뒤 고치고 활동 기록도 남김.
+   (chatAction 에 둔 건 앱을 열 때 미리 깨워 두는 함수라 첫 클릭이 빠르기 때문.) 옛 앱이 다 바뀐 뒤 규칙에서 회원 dateRequests 직접 쓰기를 막음 */
+const REQ_DAILY_LIMIT = 3;   /* 앱 DAILY_PHOTO_LIMIT·DAILY_TALK_LIMIT 와 같게 (프로필별·KST 하루·유형별) */
+const kstDayOf = (iso) => new Date(new Date(iso).getTime() + 9 * 3600000).toISOString().slice(0, 10);
+function reqStatusOf(r) { return r.approved ? 'approved' : (r.rejected ? 'rejected' : (r.held ? 'held' : (r.userApproved ? 'user_approved' : 'pending'))); }
+/* 앱 connEverNext·connLogAdd·connLogRevoke 와 같은 계산 (누적 연결 수·연결 이력) */
+function connEverNextS(s) {
+  const prev = (s.dateRequests || []).filter((x) => (x.type || 'contact') === 'contact' && x.approved).length;
+  return (typeof s.connEver === 'number' ? s.connEver : prev) + 1;
+}
+function connLogAddS(s, a, b) {
+  const log = (Array.isArray(s.connLog) ? s.connLog.slice() : []).concat([{ id: nodeCrypto.randomUUID(), a, b, at: new Date().toISOString() }]);
+  return log.length > 2000 ? log.slice(log.length - 2000) : log;
+}
+function connLogRevokeS(s, a, b) {
+  if (!Array.isArray(s.connLog)) return null;
+  const now = new Date().toISOString();
+  return s.connLog.map((e) => (!e.revokedAt && ((e.a === a && e.b === b) || (e.a === b && e.b === a))) ? Object.assign({}, e, { revokedAt: now }) : e);
+}
+async function memberReqAction(op, data, context) {
+  const uid = context.auth.uid;
+  const asId = String(data.as || '');
+  const id = String(data.id || '');
+  const clip = (t, n) => String(t == null ? '' : t).trim().slice(0, n);
+  const ref = db.doc('app/state');
+  const result = { ok: true };
+  await db.runTransaction(async (tx) => {
+    const s = (await tx.get(ref)).data() || {};
+    if (secBlocked(s, uid)) throw new HttpsError('permission-denied', '보안 확인을 위해 이 계정은 잠시 잠겨 있어요. 관리자에게 문의해 주세요.');
+    const entries = s.entries || [];
+    const me = entries.find((e) => e.id === asId);
+    if (!me || !actsAs(context, me)) throw new HttpsError('permission-denied', '이 프로필로 할 수 없어요.');
+    if (me.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 프로필이에요.');
+    const authE = entries.find((e) => e.id === uid);
+    const viaMm = !!(me.managedBy && me.managedBy === uid && !me.ownerSelf && authE && authE.isMatchmaker);   /* 주선자가 친구 대신 */
+    const nick = (x) => (entries.find((e) => e.id === x) || {}).nickname || '상대방';
+    const now = new Date().toISOString();
+    const reqs = (s.dateRequests || []).slice();
+    const idx = id ? reqs.findIndex((r) => r && r.id === id) : -1;
+    const req = idx >= 0 ? reqs[idx] : null;
+    const copy = () => JSON.parse(JSON.stringify(req));
+    const kind = (r) => ((r.type || 'contact') === 'photo' ? '사진' : '대화');
+    const need = (cond, msg) => { if (!cond) throw new HttpsError('failed-precondition', msg || '이 요청은 지금 바꿀 수 없어요. 새로고침 후 다시 해 주세요.'); };
+    const upd = {};
+    let next = reqs, log = '';
+    if (op === 'reqCreate') {
+      const type = data.type === 'photo' ? 'photo' : (data.type === 'contact' ? 'contact' : '');
+      const toId = String(data.to || '');
+      const target = entries.find((e) => e.id === toId);
+      const note = clip(data.note, 200);
+      need(type && target && toId !== me.id, '요청할 상대를 확인해 주세요.');
+      need(!target.deactivated, (target.nickname || '이 회원') + '님은 지금 휴면(보관) 중이라 요청할 수 없어요.');
+      need(!me.isMatchmaker, '주선자 계정은 본인이나 친구 프로필로 바꾼 뒤 요청할 수 있어요.');
+      need(!(me.managedBy && target.managedBy && me.managedBy === target.managedBy), '같은 주선자 소속끼리는 사진·대화 요청을 보낼 수 없어요.');
+      need(note.length >= 10, '간단한 인사·요청 이유를 10자 이상 남겨 주세요.');
+      const dup = reqs.find((r) => r && r.fromId === me.id && r.toId === toId && (r.type || 'contact') === type && (r.hiddenBy || []).indexOf(me.id) < 0);
+      need(!dup, dup && reqStatusOf(dup) === 'rejected' ? target.nickname + '님이 이 요청을 거절했어요.' : '이미 ' + target.nickname + '님에게 요청을 보냈어요.');
+      const today = kstDayOf(now);
+      const sent = reqs.filter((r) => r && r.fromId === me.id && (r.type || 'contact') === type && r.submittedAt && kstDayOf(r.submittedAt) === today).length;
+      if (sent >= REQ_DAILY_LIMIT) throw new HttpsError('resource-exhausted', '오늘 보낼 수 있는 ' + (type === 'photo' ? '사진 보기 요청' : '대화 신청') + '을 모두 썼어요. 내일 다시 보내 주세요.');
+      const nr = { id: nodeCrypto.randomUUID(), type, fromId: me.id, toId, note, submittedAt: now };
+      if (viaMm) nr.viaMm = true;
+      if (type === 'photo' && data.reveal) nr.fromRevealed = true;
+      next = reqs.concat([nr]);
+      result.id = nr.id;
+      log = (type === 'photo' ? '사진 보기 요청' : '대화 신청') + ' → ' + target.nickname + (nr.fromRevealed ? ' (사진 공개)' : '');
+    } else if (op === 'reqRevoke') {
+      /* 연결 회수: photo = 두 사람 사이 사진 요청 삭제, contact = 대화 요청 삭제 + 이력 해제, all = 둘 다 권한만 끔 + 이력 해제 */
+      const other = String(data.other || '');
+      const k = String(data.kind || '');
+      need(other && other !== me.id && ['photo', 'contact', 'all'].indexOf(k) >= 0, '해제할 상대를 확인해 주세요.');
+      const between = (r) => r && ((r.fromId === me.id && r.toId === other) || (r.fromId === other && r.toId === me.id));
+      if (k === 'all') {
+        next = reqs.map((r) => {
+          if (!between(r)) return r;
+          const c = JSON.parse(JSON.stringify(r));
+          if (c.approved) c.approved = false;
+          if (c.userApproved) c.userApproved = false;
+          if (c.fromRevealed) c.fromRevealed = false;
+          return c;
+        });
+      } else next = reqs.filter((r) => !(between(r) && (r.type || 'contact') === k));
+      if (k !== 'photo') { const cl = connLogRevokeS(s, me.id, other); if (cl) upd.connLog = cl; }
+      log = { photo: '사진 공개 회수', contact: '대화 연결 해제', all: '연결 회수' }[k] + ' → ' + nick(other);
+    } else if (op === 'reqPurgeOwn') {
+      /* 주선자 계정 삭제 직전: 내 계정·본인 프로필이 낀 요청 정리 (관리 중인 친구가 남아 있으면 안 됨 — 앱도 막음) */
+      need(me.id === uid && me.isMatchmaker, '주선자 계정만 할 수 있어요.');
+      const subs = entries.filter((e) => e.managedBy === uid);
+      need(!subs.some((e) => !e.ownerSelf), '관리 중인 친구를 먼저 정리해 주세요.');
+      const del = new Set([uid].concat(subs.map((e) => e.id)));
+      next = reqs.filter((r) => !(r && (del.has(r.fromId) || del.has(r.toId))));
+    } else if (op === 'reqUnhideAll') {
+      let n = 0;
+      next = reqs.map((r) => {
+        if (!r || (r.fromId !== me.id && r.toId !== me.id) || (r.hiddenBy || []).indexOf(me.id) < 0) return r;
+        n++; const c = JSON.parse(JSON.stringify(r)); c.hiddenBy = c.hiddenBy.filter((x) => x !== me.id); return c;
+      });
+      result.n = n;
+      if (n) log = '숨긴 요청 복구 ' + n + '건';
+    } else {
+      need(req, '요청을 찾을 수 없어요. 새로고침 후 다시 해 주세요.');
+      const st = reqStatusOf(req);
+      const isFrom = req.fromId === me.id, isTo = req.toId === me.id;
+      const msg = clip(data.msg, 300);
+      const c = copy();
+      if (op === 'reqReveal') {                       /* 보낸 사진 요청에서 내 사진 먼저 공개 */
+        need(isFrom && (req.type || 'contact') === 'photo' && !req.fromRevealed);
+        c.fromRevealed = true; c.fromRevealedAt = now;
+        log = '내 사진 공개 → ' + nick(req.toId);
+      } else if (op === 'reqApprove' || op === 'reqReject' || op === 'reqHold') {   /* 받은 사람만, 대기·보류 중일 때만 */
+        need(isTo && (st === 'pending' || st === 'held'));
+        if (viaMm) c.decidedViaMm = true;
+        c.decidedAt = now;
+        if (op === 'reqApprove') {
+          need(msg.length >= 10, '상대에게 전할 인사를 10자 이상 남겨 주세요.');
+          c.held = false; c.approved = true; c.approveMessage = msg;
+          if ((req.type || 'contact') === 'contact') { upd.connEver = connEverNextS(s); upd.connLog = connLogAddS(s, req.fromId, req.toId); }
+          log = ((req.type || 'contact') === 'photo' ? '사진 요청' : '대화 신청') + ' 수락 → ' + nick(req.fromId);
+        } else if (op === 'reqReject') {
+          c.rejected = true; c.held = false; c.rejectMessage = msg || '이번엔 인연이 아닌 것 같아요. 좋은 인연 만나시길 바랄게요 🙂'; c.rejectedBy = 'user';
+          log = kind(req) + ' 요청 거절 → ' + nick(req.fromId);
+        } else {
+          need(msg.length >= 10, '더 알고 싶은 점을 10자 이상 남겨 주세요.');
+          c.held = true; c.holdMessage = msg; c.heldBy = 'user';
+          log = kind(req) + ' 요청 보류 → ' + nick(req.fromId);
+        }
+      } else if (op === 'reqUnapprove') {             /* 받은 사람이 수락 취소 → 다시 대기 */
+        need(isTo && (st === 'approved' || st === 'user_approved'));
+        ['approved', 'userApproved', 'held', 'approveMessage', 'decidedAt', 'toContact'].forEach((k) => { delete c[k]; });
+        log = kind(req) + ' 요청 승인 취소 → ' + nick(req.fromId);
+      } else if (op === 'reqReapply') {               /* 보낸 사람이 보류·거절된 요청을 다시 */
+        need(isFrom && (st === 'held' || st === 'rejected'));
+        const to = entries.find((e) => e.id === req.toId);
+        need(to && !to.deactivated, nick(req.toId) + '님은 지금 휴면(보관) 중이라 다시 요청할 수 없어요.');
+        c.note = clip(data.note, 200);
+        ['held', 'holdMessage', 'heldBy', 'rejected', 'rejectMessage', 'rejectedBy', 'approved', 'userApproved', 'approveMessage', 'decidedAt', 'revealedContact', 'toContact'].forEach((k) => { delete c[k]; });
+        c.submittedAt = now; c.reappliedAt = now;
+        log = kind(req) + ' 요청 재신청 → ' + nick(req.toId);
+      } else if (op === 'reqCancel') {                /* 보낸 사람이 취소 = 삭제 */
+        need(isFrom);
+        next = reqs.filter((r) => !(r && r.id === id));
+      } else if (op === 'reqHide' || op === 'reqUnhide') {   /* 내 목록에서만 숨기기·되돌리기 */
+        need(isFrom || isTo);
+        const h = (c.hiddenBy || []).filter((x) => x !== me.id);
+        c.hiddenBy = op === 'reqHide' ? h.concat([me.id]) : h;
+      } else {
+        throw new HttpsError('invalid-argument', '알 수 없는 요청이에요.');
+      }
+      if (op !== 'reqCancel') { next = reqs.slice(); next[idx] = c; }
+    }
+    upd.dateRequests = next;
+    if (log) upd.logs = (s.logs || []).concat([logItem('request', me.nickname || '', log)]);
+    tx.update(ref, upd);   /* 서버 쓰기(_w·_wn 그대로) → 조작 감지 대상 아님, 푸시 알림은 onStateChange 가 예전처럼 */
+  });
+  return result;
+}
 /* 예전 state.dm(한 배열)을 대화방 문서로 이동. 옮긴 메시지는 state.dm 에서 제거 */
 async function migrateDmToChats(after) {
   const dm = after.dm || [];
@@ -1790,6 +1949,7 @@ exports.chatAction = functions
 
     if (c.m !== 1) throw new HttpsError('permission-denied', '승인된 회원만 대화할 수 있어요.');
     if (secBlocked(state, context.auth.uid)) throw new HttpsError('permission-denied', '보안 확인을 위해 이 계정은 잠시 잠겨 있어요. 관리자에게 문의해 주세요.');
+    if (/^req[A-Z]/.test(op)) return memberReqAction(op, data, context);   /* 사진·대화 신청 (재설계 B-1) */
     const asId = String(data.as || '');
     const otherId = String(data.other || '');
     const asE = entries.find((e) => e.id === asId);

@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-28-482';
+  var APP_VERSION = '2026-10-28-483';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -4059,13 +4059,15 @@
     /* 실제 삭제(즉시) — 2단계 확인 뒤에만 실행 */
     function doDelete() {
       var delIds = {}; delIds[me.id] = true; if (ownSelf) delIds[ownSelf.id] = true;
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var entries = (s.entries || []).filter(function (e) { return !delIds[e.id]; });
-          var reqs = (s.dateRequests || []).filter(function (r) { return !delIds[r.fromId] && !delIds[r.toId]; });
-          var jrs = (s.joinRequests || []).filter(function (j) { return !delIds[j.fromId] && !delIds[j.toId]; });
-          tx.update(stateRef, { entries: entries, dateRequests: reqs, joinRequests: jrs });
+      /* 요청 정리는 서버가 먼저(재설계 B-1) → 그다음 계정 삭제 */
+      reqCall('reqPurgeOwn', { as: me.id }).then(function () {
+        return db.runTransaction(function (tx) {
+          return tx.get(stateRef).then(function (doc) {
+            var s = doc.data();
+            var entries = (s.entries || []).filter(function (e) { return !delIds[e.id]; });
+            var jrs = (s.joinRequests || []).filter(function (j) { return !delIds[j.fromId] && !delIds[j.toId]; });
+            tx.update(stateRef, { entries: entries, joinRequests: jrs });
+          });
         });
       }).then(function () {
         Object.keys(delIds).forEach(function (id) { try { photosRef.doc(id).delete().catch(function () {}); } catch (e) {} try { pushTokensRef.doc(id).delete().catch(function () {}); } catch (e) {} });
@@ -6822,25 +6824,18 @@
       '<p class="sub" style="margin:0 0 6px;">삭제하면 그 사람은 더 이상 내 사진을 볼 수 없어요. (사진은 서로 공개라, 나도 그 사람 사진을 못 보게 돼요.)</p>' +
       rows + '</div>';
   }
+  /* 사진·대화 신청 쓰기는 서버가 대행 (재설계 B-1, 2026-10-28) — 권한 확인·활동 기록은 서버 chatAction{op:'req…'} 가 함 */
+  function reqCall(op, payload) {
+    return callFn('chatAction', Object.assign({ op: op }, payload)).then(function (r) { return (r && r.data) || {}; });
+  }
   function handleRevokePhotoViewer(otherId) {
     var me = findMyEntry(currentState);
     if (!me) return modalNotice('로그인 필요', '먼저 로그인해주세요.');
     var otherNick = nickForEntry(currentState, otherId);
     modalConfirm('사진 공개 회수', otherNick + '님과의 사진 공개를 회수하시겠습니까? 회수하면 서로 사진을 볼 수 없게 돼요.', '회수', 'danger').then(function (ok) {
       if (!ok) return;
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          /* 회수 = 두 사람 사이 사진 요청 자체를 제거 → 요청 목록으로 되돌아가지 않고 완전히 사라짐 */
-          var reqs = (s.dateRequests || []).filter(function (r) {
-            if ((r.type || 'contact') !== 'photo') return true;
-            var between = (r.fromId === me.id && r.toId === otherId) || (r.fromId === otherId && r.toId === me.id);
-            return !between;
-          });
-          tx.update(stateRef, { dateRequests: reqs });
-        });
-      }).then(function () {
-        appendLog('request', me.nickname, '사진 공개 회수 → ' + otherNick);
+      /* 회수 = 두 사람 사이 사진 요청 자체를 제거 → 요청 목록으로 되돌아가지 않고 완전히 사라짐 */
+      reqCall('reqRevoke', { as: me.id, other: otherId, kind: 'photo' }).then(function () {
         return refreshNow();
       }).then(function () {
         modalNotice('회수 완료', otherNick + '님과의 사진 공개를 회수했어요.');
@@ -6854,21 +6849,8 @@
     var otherNick = nickForEntry(currentState, otherId);
     modalConfirm('대화 연결 해제', otherNick + '님과의 대화 연결을 해제할까요? 해제하면 서로 채팅할 수 없어요. (다시 대화 신청·수락하면 재연결돼요)', '해제', 'danger').then(function (ok) {
       if (!ok) return;
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          /* 회수 = 두 사람 사이 대화 요청 자체를 제거 → 요청 목록으로 되돌아가지 않음 */
-          var reqs = (s.dateRequests || []).filter(function (r) {
-            if ((r.type || 'contact') !== 'contact') return true;
-            var between = (r.fromId === me.id && r.toId === otherId) || (r.fromId === otherId && r.toId === me.id);
-            return !between;
-          });
-          var _p = { dateRequests: reqs };
-          var _cl = connLogRevoke(s, me.id, otherId); if (_cl) _p.connLog = _cl;
-          tx.update(stateRef, _p);
-        });
-      }).then(function () {
-        appendLog('request', me.nickname, '대화 연결 해제 → ' + otherNick);
+      /* 회수 = 두 사람 사이 대화 요청 자체를 제거 → 요청 목록으로 되돌아가지 않음 */
+      reqCall('reqRevoke', { as: me.id, other: otherId, kind: 'contact' }).then(function () {
         return refreshNow();
       }).then(function () {
         modalNotice('해제 완료', otherNick + '님과의 대화 연결이 해제됐어요.');
@@ -6882,24 +6864,7 @@
     var nick = nickForEntry(currentState, otherId);
     modalConfirm('연결 회수', nick + '님과의 사진·대화 연결을 모두 해제할까요? 서로 사진·채팅을 할 수 없게 돼요. (다시 요청·수락하면 재연결)', '회수', 'danger').then(function (ok) {
       if (!ok) return;
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = (s.dateRequests || []).map(function (r) {
-            var between = (r.fromId === me.id && r.toId === otherId) || (r.fromId === otherId && r.toId === me.id);
-            if (!between) return r;
-            var c = JSON.parse(JSON.stringify(r));
-            if (c.approved) c.approved = false;
-            if (c.userApproved) c.userApproved = false;
-            if (c.fromRevealed) c.fromRevealed = false;
-            return c;
-          });
-          var _p = { dateRequests: reqs };
-          var _cl = connLogRevoke(s, me.id, otherId); if (_cl) _p.connLog = _cl;
-          tx.update(stateRef, _p);
-        });
-      }).then(function () {
-        appendLog('request', me.nickname, '연결 회수 → ' + nick);
+      reqCall('reqRevoke', { as: me.id, other: otherId, kind: 'all' }).then(function () {
         return refreshNow();
       }).then(function () {
         modalNotice('회수 완료', nick + '님과의 연결을 해제했어요.');
@@ -10449,13 +10414,7 @@
         return rq.fromId === myEntry.id && rq.toId === toId && reqStatus(rq) === 'pending';
       });
       if (!req) return modalNotice('안내', '취소할 수 있는 요청이 없어요.');
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var newRequests = (s.dateRequests || []).filter(function (rq) { return rq.id !== req.id; });
-          tx.update(stateRef, { dateRequests: newRequests });
-        });
-      }).then(function () {
+      reqCall('reqCancel', { as: myEntry.id, id: req.id }).then(function () {
         modalNotice('완료', '요청이 취소되었어요.');
       }).catch(function (err) {
         modalNotice('오류', '취소에 실패했어요: ' + (err.message || err));
@@ -11337,19 +11296,10 @@
         noteOverlay.addEventListener('click', function (e) { if (e.target === noteOverlay) finish(null); });
       }).then(function (result) {
         if (!result) return;
-        /* 대화 신청은 번호를 공유하지 않음 — 수락되면 앱 내 채팅으로만 대화 */
-        var req = {
-          id: genId(), type: type, fromId: fromEntry.id, toId: toId,
-          note: result.note || '', submittedAt: new Date().toISOString()
-        };
-        /* 주선자가 친구 대신 보내는 요청이면 표시 → 받는 사람에게 안내, 채팅서 발신 주체 구분 */
-        if (fromEntry.managedBy && fromEntry.managedBy === currentUser.id && !fromEntry.ownerSelf && isMatchmakerEntry(myAuthEntry(state))) req.viaMm = true;
-        if (isPhoto && result.reveal) req.fromRevealed = true; /* 요청과 동시에 내 사진 미리 공개 */
-        return stateRef.update({
-          dateRequests: firebase.firestore.FieldValue.arrayUnion(req)
-        }).then(function () {
-          appendLog('request', fromEntry.nickname, actionText + ' → ' + target.nickname + (req.fromRevealed ? ' (사진 공개)' : ''));
-          notifyAdmin(actionText, fromEntry.nickname + '님이 ' + target.nickname + '님에게 ' + actionText + '을 보냈어요!');
+        /* 대화 신청은 번호를 공유하지 않음 — 수락되면 앱 내 채팅으로만 대화.
+           주선자 대신 표시(viaMm)·하루 한도·중복은 서버가 다시 확인 (재설계 B-1) */
+        var req = { fromRevealed: !!(isPhoto && result.reveal) }; /* 요청과 동시에 내 사진 미리 공개 */
+        return reqCall('reqCreate', { as: fromEntry.id, to: toId, type: type, note: result.note || '', reveal: req.fromRevealed }).then(function () {
           return refreshNow();
         }).then(function () {
           modalNotice('요청 완료', target.nickname + '님에게 ' + actionText + '을 보냈어요!' + (req.fromRevealed ? ' 내 사진도 함께 공개했어요.' : '') + ' "메시지함" 탭에서 상태를 볼 수 있어요.');
@@ -11726,17 +11676,7 @@
     var toName = nickForEntry(currentState, req.toId);
     modalConfirm('내 사진 공개', escapeHtml(toName) + '님에게 내 사진을 공개할까요? 공개하면 상대가 바로 내 사진을 볼 수 있어요.', '공개', 'primary').then(function (ok) {
       if (!ok) return;
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = (s.dateRequests || []).map(function (r) {
-            if (r.id === id) { var c = JSON.parse(JSON.stringify(r)); c.fromRevealed = true; c.fromRevealedAt = new Date().toISOString(); return c; }
-            return r;
-          });
-          tx.update(stateRef, { dateRequests: reqs });
-        });
-      }).then(function () {
-        appendLog('request', me.nickname, '내 사진 공개 → ' + toName);
+      reqCall('reqReveal', { as: me.id, id: id }).then(function () {
         return refreshNow();
       }).then(function () {
         modalNotice('공개 완료', escapeHtml(toName) + '님이 이제 내 사진을 볼 수 있어요.');
@@ -11812,20 +11752,7 @@
     var fromName = nickForEntry(currentState, req.fromId);
     modalConfirm('승인 취소', fromName + '님의 ' + (isPhoto ? '사진' : '대화') + ' 요청 승인을 취소할까요? 상대는 더 이상 ' + (isPhoto ? '사진을 볼' : '채팅을 할') + ' 수 없고, 요청은 다시 "대기중"으로 돌아가요.', '승인 취소', 'danger').then(function (ok) {
       if (!ok) return;
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = (s.dateRequests || []).map(function (r) {
-            if (r.id !== id) return r;
-            var c = JSON.parse(JSON.stringify(r));
-            delete c.approved; delete c.userApproved; delete c.held;
-            delete c.approveMessage; delete c.decidedAt; delete c.toContact;
-            return c;
-          });
-          tx.update(stateRef, { dateRequests: reqs });
-        });
-      }).then(function () {
-        appendLog('request', me.nickname, (isPhoto ? '사진' : '대화') + ' 요청 승인 취소 → ' + fromName);
+      reqCall('reqUnapprove', { as: me.id, id: id }).then(function () {
         return refreshNow();
       }).then(function () {
         modalNotice('승인 취소됨', fromName + '님의 요청이 다시 대기 상태가 됐어요. 상대는 더 이상 ' + (isPhoto ? '사진을' : '번호를') + ' 볼 수 없어요.');
@@ -11851,26 +11778,8 @@
     if (respViaMm) msg = '🤝 주선자로 ' + me.nickname + '님을 대신해 응답하는 중이에요 (상대에게 안내돼요). ' + msg;
     modalMessage('요청 수락', msg, '수락', 'primary', '예: 반가워요! 잘 부탁드려요 :)', false, null, 10).then(function (replyMsg) {
       if (replyMsg === null) return;
-      return db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = (s.dateRequests || []).map(function (r) {
-            if (r.id !== id) return r;
-            var c = JSON.parse(JSON.stringify(r));
-            c.decidedAt = new Date().toISOString();
-            c.held = false;
-            c.approved = true; /* 사진·대화 모두 수락 즉시 연결 (번호 공유 없음) */
-            if (replyMsg) c.approveMessage = replyMsg;
-            if (respViaMm) c.decidedViaMm = true;
-            return c;
-          });
-          var _patch = { dateRequests: reqs };
-          if (!isPhoto) { _patch.connEver = connEverNext(s); _patch.connLog = connLogAdd(s, req.fromId, req.toId); } /* 누적 연결 +1 · 이력 기록 */
-          tx.update(stateRef, _patch);
-        });
-      }).then(function () {
-        appendLog('request', me.nickname, (isPhoto ? '사진 요청' : '대화 신청') + ' 수락 → ' + fromName);
-        notifyAdmin('요청 수락', me.nickname + '님이 ' + fromName + '님의 ' + (isPhoto ? '사진 요청' : '대화 신청') + '을 수락했어요.');
+      /* 사진·대화 모두 수락 즉시 연결 (번호 공유 없음). 대화면 누적 연결 +1·이력 기록 — 서버가 함께 */
+      return reqCall('reqApprove', { as: me.id, id: id, msg: replyMsg || '' }).then(function () {
         return refreshNow();
       }).then(function () {
         modalNotice('수락 완료', isPhoto
@@ -11910,24 +11819,7 @@
     modalMessage('요청 거절', (respViaMm ? '🤝 주선자로 ' + me.nickname + '님을 대신해 응답하는 중이에요 (상대에게 안내돼요). ' : '') + fromName + '님의 ' + (isPhoto ? '사진' : '대화') + ' 요청을 거절할까요? 전할 말을 아래에서 고르거나 직접 적어도 되고, 비워두면 정중한 기본 인사로 전달돼요.', '거절하기', 'danger', '(선택) 직접 적어도 돼요', false, null, 0, REJECT_CHIPS).then(function (rejectMsg) {
       if (rejectMsg === null || rejectMsg === undefined) return;
       if (!rejectMsg) rejectMsg = REJECT_CHIPS[0];
-      return db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = (s.dateRequests || []).map(function (r) {
-            if (r.id !== id) return r;
-            var c = JSON.parse(JSON.stringify(r));
-            c.rejected = true;
-            c.held = false;
-            c.rejectMessage = rejectMsg || '';
-            c.rejectedBy = 'user';
-            if (respViaMm) c.decidedViaMm = true;
-            c.decidedAt = new Date().toISOString();
-            return c;
-          });
-          tx.update(stateRef, { dateRequests: reqs });
-        });
-      }).then(function () {
-        appendLog('request', me.nickname, (isPhoto ? '사진' : '대화') + ' 요청 거절 → ' + fromName);
+      return reqCall('reqReject', { as: me.id, id: id, msg: rejectMsg }).then(function () {
         return refreshNow();
       }).then(function () {
         modalNotice('거절 완료', '요청을 거절했어요.');
@@ -11951,23 +11843,7 @@
     var fromName = from ? from.nickname : '상대방';
     modalMessage('요청 보류', (respViaMm ? '🤝 주선자로 ' + me.nickname + '님을 대신해 응답하는 중이에요 (상대에게 안내돼요). ' : '') + fromName + '님의 요청을 보류할까요? 더 알고 싶은 점을 아래에서 고르거나 직접 남겨주세요 (최소 10자). 상대가 정보를 담아 다시 요청할 수 있어요.', '보류하기', 'primary', '예: 직장·직업이 궁금해요. 알려주시면 결정할게요! / 키가 어떻게 되세요?', true, null, 10, HOLD_CHIPS).then(function (holdMsg) {
       if (holdMsg === null || holdMsg === undefined) return;
-      return db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = (s.dateRequests || []).map(function (r) {
-            if (r.id !== id) return r;
-            var c = JSON.parse(JSON.stringify(r));
-            c.held = true;
-            c.holdMessage = holdMsg || '';
-            c.heldBy = 'user';
-            if (respViaMm) c.decidedViaMm = true;
-            c.decidedAt = new Date().toISOString();
-            return c;
-          });
-          tx.update(stateRef, { dateRequests: reqs });
-        });
-      }).then(function () {
-        appendLog('request', me.nickname, (isPhoto ? '사진' : '대화') + ' 요청 보류 → ' + fromName);
+      return reqCall('reqHold', { as: me.id, id: id, msg: holdMsg || '' }).then(function () {
         return refreshNow();
       }).then(function () {
         modalNotice('보류', '요청을 보류했어요. 나중에 다시 결정할 수 있어요.');
@@ -11990,16 +11866,11 @@
         currentState.dateRequests = (currentState.dateRequests || []).filter(function (r) { return r.id !== id; });
         paint(currentState);
       } catch (e) {}
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = (s.dateRequests || []).filter(function (r) { return r.id !== id; });
-          tx.update(stateRef, { dateRequests: reqs });
-        });
-      }).then(function () {
+      reqCall('reqCancel', { as: me.id, id: id }).then(function () {
         return refreshNow();
       }).catch(function (err) {
         modalNotice('오류', '취소에 실패했어요: ' + (err.message || err));
+        refreshNow();
       });
     });
   }
@@ -12038,27 +11909,8 @@
       overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
     }).then(function (note) {
       if (note === null || note === undefined) return;
-      return db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = (s.dateRequests || []).map(function (r) {
-            if (r.id !== id) return r;
-            var c = JSON.parse(JSON.stringify(r));
-            c.note = note || '';
-            /* 대기 상태로 초기화 (이전 보류/거절/답장 흔적 제거) */
-            delete c.held; delete c.holdMessage; delete c.heldBy;
-            delete c.rejected; delete c.rejectMessage; delete c.rejectedBy;
-            delete c.approved; delete c.userApproved; delete c.approveMessage;
-            delete c.decidedAt; delete c.revealedContact; delete c.toContact;
-            c.submittedAt = new Date().toISOString();
-            c.reappliedAt = new Date().toISOString();
-            return c;
-          });
-          tx.update(stateRef, { dateRequests: reqs });
-        });
-      }).then(function () {
-        appendLog('request', me.nickname, (isPhoto ? '사진' : '대화') + ' 요청 재신청 → ' + toName);
-        notifyAdmin('요청 재신청', me.nickname + '님이 ' + toName + '님에게 다시 요청했어요.');
+      /* 대기 상태로 초기화 (이전 보류/거절/답장 흔적 제거) — 서버가 */
+      return reqCall('reqReapply', { as: me.id, id: id, note: note || '' }).then(function () {
         return refreshNow();
       }).then(function () {
         modalNotice('다시 요청 완료', escapeHtml(toName) + '님에게 다시 요청했어요! 상대가 확인하면 결정해 줄 거예요.');
@@ -12085,22 +11937,8 @@
         });
         paint(currentState);
       } catch (e) {}
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = [];
-          (s.dateRequests || []).forEach(function (r) {
-            if (r.id !== id) { reqs.push(r); return; }
-            var c = JSON.parse(JSON.stringify(r));
-            var hidden = c.hiddenBy || [];
-            if (hidden.indexOf(me.id) < 0) hidden.push(me.id);
-            c.hiddenBy = hidden;
-            /* 개인 삭제는 본인 화면에서만 숨김 — 기록은 항상 유지 (관리자만 완전 삭제 가능) */
-            reqs.push(c);
-          });
-          tx.update(stateRef, { dateRequests: reqs });
-        });
-      }).then(function () {
+      /* 개인 삭제는 본인 화면에서만 숨김 — 기록은 항상 유지 (관리자만 완전 삭제 가능) */
+      reqCall('reqHide', { as: me.id, id: id }).then(function () {
         return refreshNow();
       }).catch(function (err) {
         modalNotice('오류', '삭제에 실패했어요: ' + (err.message || err));
@@ -12111,16 +11949,7 @@
   function handleUnhideRequest(id) {
     var me = findMyEntry(currentState); if (!me) return;
     try { (currentState.dateRequests || []).forEach(function (r) { if (r.id === id && r.hiddenBy) r.hiddenBy = r.hiddenBy.filter(function (x) { return x !== me.id; }); }); paint(currentState); } catch (e) {}
-    db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) {
-        var s = doc.data();
-        var reqs = (s.dateRequests || []).map(function (r) {
-          if (r.id !== id || (r.hiddenBy || []).indexOf(me.id) < 0) return r;
-          var c = JSON.parse(JSON.stringify(r)); c.hiddenBy = (c.hiddenBy || []).filter(function (x) { return x !== me.id; }); return c;
-        });
-        tx.update(stateRef, { dateRequests: reqs });
-      });
-    }).then(function () { return refreshNow(); }).catch(function (err) { modalNotice('오류', '되돌리지 못했어요: ' + ((err && err.message) || err)); });
+    reqCall('reqUnhide', { as: me.id, id: id }).then(function () { return refreshNow(); }).catch(function (err) { modalNotice('오류', '되돌리지 못했어요: ' + ((err && err.message) || err)); });
   }
   /* 내가 숨긴(내역 삭제한) 요청을 모두 되돌리기 — hiddenBy에서 내 id 제거 */
   function handleRestoreHidden() {
@@ -12130,18 +11959,7 @@
     if (!n) return modalNotice('안내', '숨긴 내역이 없어요.');
     modalConfirm('숨긴 내역 복구', '숨긴 요청 ' + n + '건을 다시 목록에 표시할까요?', '복구', 'primary').then(function (ok) {
       if (!ok) return;
-      db.runTransaction(function (tx) {
-        return tx.get(stateRef).then(function (doc) {
-          var s = doc.data();
-          var reqs = (s.dateRequests || []).map(function (r) {
-            if ((r.fromId !== me.id && r.toId !== me.id) || (r.hiddenBy || []).indexOf(me.id) < 0) return r;
-            var c = JSON.parse(JSON.stringify(r));
-            c.hiddenBy = (c.hiddenBy || []).filter(function (x) { return x !== me.id; });
-            return c;
-          });
-          tx.update(stateRef, { dateRequests: reqs });
-        });
-      }).then(function () { appendLog('request', me.nickname, '숨긴 요청 복구 ' + n + '건'); return refreshNow(); })
+      reqCall('reqUnhideAll', { as: me.id }).then(function () { return refreshNow(); })
         .then(function () { modalNotice('복구 완료', '숨긴 내역을 다시 표시했어요.'); })
         .catch(function (err) { modalNotice('오류', '복구 실패: ' + ((err && err.message) || err)); });
     });
