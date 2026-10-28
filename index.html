@@ -13513,6 +13513,9 @@
       if (currentUser && currentUser.id) {
         var meAny = (state.entries || []).concat(state.pendingEntries || []).find(function (e) { return e.id === currentUser.id; });
         formRole = (meAny && meAny.isMatchmaker) ? 'matchmaker' : 'self';
+        /* 로그인 유지로 다시 연 회원이 빈 '본인을 소개해 주세요' 신청서부터 보지 않게 (10-28 베타 시험) — 명단/메시지함으로 */
+        var meApproved = (state.entries || []).some(function (e) { return e.id === currentUser.id; });
+        if (meAny && activeTab === 'form' && !editingEntryId) activeTab = (meAny.isMatchmaker || !meApproved) ? 'mine' : 'list';
       }
 
       var adminPromise = Promise.resolve();
