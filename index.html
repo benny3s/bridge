@@ -860,9 +860,23 @@
   .chat-av.big { width: 40px; height: 40px; font-size: 1rem; }
   .chat-av.md { width: 36px; height: 36px; font-size: 0.95rem; }
   @media (pointer: coarse) { input, textarea, select { font-size: 16px !important; } }   /* 16px 미만이면 아이폰이 확대한 채로 남음 */
-  .admin-room-wrap { margin-bottom: 10px; }
-  .chat-item.admin-room { background: var(--gold-soft); border: 1px solid var(--gold); border-radius: 12px; padding: 8px 10px; }
-  .chat-item.admin-room:last-child { border-bottom: 1px solid var(--gold); }
+  /* 고객센터 카드: 👑 관리자 + 🤖 AI 도우미 두 줄을 한 카드에 (2026-10-28 Argon 리뷰 — 두 방은 따로, 생김새는 하나로) */
+  .support-card { background: var(--gold-soft); border: 1px solid var(--gold); border-radius: 12px; padding: 0 10px; margin-bottom: 10px; }
+  .support-card .chat-item { padding: 9px 0; border-bottom: 1px solid var(--line); }
+  .support-card .chat-item:last-child { border-bottom: 0; }
+  /* 관리자 Q&A · AI 도우미 창 공통 틀: 머리(제목·✕) · 한두 줄 안내 · 빠른 버튼 · 고정 높이 대화 · 한 줄 입력바 */
+  .modal-overlay.chat-modal .modal-box { padding: 16px 14px; }
+  .cm-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .cm-head h3 { flex: 1; margin: 0; }
+  .cm-x { border: 0; background: none; font-size: 1.5rem; line-height: 1; color: var(--muted); cursor: pointer; padding: 2px 6px; }
+  .cm-sub { font-size: 0.74rem; color: var(--muted); line-height: 1.5; margin: 0 0 8px; }
+  .cm-thread { height: 38vh; overflow-y: auto; background: var(--paper); border-radius: 12px; padding: 2px 8px 10px; margin: 0 0 8px; }
+  .cm-bar { display: flex; gap: 6px; align-items: flex-end; }
+  .cm-bar textarea.modal-input { flex: 1; resize: none; min-height: 42px; max-height: 110px; margin: 0; }
+  .cm-bar .card-btn { flex: none; min-height: 42px; }
+  .cm-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0 42px; }
+  .req-chip.soft { border-style: dashed; font-size: 0.75rem; }
+  .req-chip.gold { border-color: var(--gold); background: var(--gold-soft); color: var(--ink); }
   .admin-room-tag { font-size: 0.68rem; font-weight: 400; color: var(--gold); border: 1px solid var(--gold); border-radius: 999px; padding: 0 6px; margin-left: 4px; vertical-align: 1px; }
   .chat-sec-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 2px 0 2px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
   .chat-sec-label b { font-size: 0.86rem; color: var(--ink); }
@@ -1057,7 +1071,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-28-484';
+  var APP_VERSION = '2026-10-28-485';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -5109,14 +5123,19 @@
     flush();
     return out;
   }
+  /* AI 도우미가 회원 대신 전달한 글('[AI 도우미 · 태그] 본문') — 관리자 화면에선 접두어 대신 🤖 배지 (2026-10-28) */
+  function aiFwdOf(m) {
+    var x = (!m || m.from === 'admin') ? null : /^\[AI 도우미 · ([^\]]{1,12})\]\s*/.exec(m.text || '');
+    return x ? { tag: x[1], text: (m.text || '').slice(x[0].length) } : null;
+  }
   function adminChatBubble(m, withDel) {
-    var mine = m.from === 'admin';
-    var who = (mine ? '👑 관리자' : (m.guestName ? '🙋 ' + escapeHtml(m.guestName) + ' · 비회원' : '🙋 회원')) + (m.broadcast ? ' · 📢 공지' : '');
+    var mine = m.from === 'admin', af = aiFwdOf(m);
+    var who = (mine ? '👑 관리자' : (m.guestName ? '🙋 ' + escapeHtml(m.guestName) + ' · 비회원' : '🙋 회원')) + (af ? ' · <span class="admin-room-tag" style="margin-left:0;">🤖 AI 도우미 전달 · ' + escapeHtml(af.tag) + '</span>' : '') + (m.broadcast ? ' · 📢 공지' : '');
     var delBtn = withDel ? ' <button type="button" data-action="msg-del" data-id="' + escapeHtml(m.id) + '" title="관리자 목록에서 숨기기" style="border:none;background:none;color:var(--muted);cursor:pointer;font-size:0.82rem;padding:0;">&#10005;</button>' : '';
     return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? 'flex-end' : 'flex-start') + ';margin:6px 0;">' +
       '<div style="font-size:0.66rem;font-weight:700;color:var(--muted);margin-bottom:2px;' + (mine ? 'text-align:right;' : '') + '">' + who + ' · ' + fmtDate(m.at) + delBtn + '</div>' +
-      '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:' + (mine ? 'var(--accent)' : '#efefef') + ';color:' + (mine ? '#fff' : 'var(--ink)') + ';white-space:pre-wrap;word-break:break-word;">' +
-        escapeHtml(m.text) +
+      '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:' + (mine ? 'var(--accent)' : '#efefef') + ';color:' + (mine ? '#fff' : 'var(--ink)') + ';white-space:pre-wrap;word-break:break-word;' + (af ? 'border-left:3px solid var(--gold);' : '') + '">' +
+        escapeHtml(af ? af.text : m.text) +
       '</div></div>';
   }
   /* 관리자용 대화방: 회원과 주고받은 내역을 말풍선으로 보여주고 그 자리에서 답장 (openDmChat과 동일 패턴, 폴링·읽음처리) */
@@ -5200,35 +5219,41 @@
         '</div></div>';
     };
     var body = thread.length ? thread.map(bubble).join('')
-      : '<p class="modal-msg" style="margin:0 0 4px;">아직 주고받은 메시지가 없어요. 궁금한 점이나 건의를 남겨 주세요!</p>';
+      : '<p class="modal-msg" style="margin:10px 0 4px;">아직 주고받은 메시지가 없어요. 궁금한 점이나 건의를 남겨 주세요!</p>';
     try { localStorage.setItem('bb-admsg-seen:' + currentUser.id, new Date().toISOString()); } catch (e) {}
+    /* 2026-10-28: AI 도우미 창과 같은 틀(.chat-modal). 카카오톡 문의 대신 '🤖 AI에게 먼저 물어보기', '자주 찾는 것' → '빠른 버튼' */
+    var _qm = dataMode === 'full' ? findMyEntry(currentState) : null;
+    var quick = (function () {
+      var _m = _qm;
+      if (!_m || isMatchmakerEntry(_m)) return '';
+      if (actingAs && currentUser && actingAs !== currentUser.id && !_m.ownerSelf) return '';   /* 친구로 활동 중: 친구 계정은 ⚙️ 친구 계정에서 */
+      var _id = escapeHtml(_m.id);
+      return '<div class="qa-quick"><span>빠른 버튼</span>' +
+        '<button type="button" class="req-chip gold" id="qa-ai">🤖 AI에게 먼저 물어보기</button>' +
+        (!isProxyEntry(_m) ? '<button type="button" class="req-chip" id="change-my-pin">🔑 PIN 변경</button>' : '') +
+        (!_m.deactivateRequested && !_m.deactivated ? '<button type="button" class="req-chip" data-action="deactivate" data-id="' + _id + '">💤 잠시 쉬기</button>' : '') +
+        (!_m.deleteRequested ? '<button type="button" class="req-chip" data-action="delete" data-id="' + _id + '">🗑 탈퇴하기</button>' : '') +
+      '</div>';
+    })();
     var overlay = openModal(
-      '<h3>👑 관리자와 대화 · Q&amp;A</h3>' +
-      (function () {
-        var _m = dataMode === 'full' ? findMyEntry(currentState) : null;
-        if (!_m || isMatchmakerEntry(_m)) return '';
-        if (actingAs && currentUser && actingAs !== currentUser.id && !_m.ownerSelf) return '';   /* 친구로 활동 중: 친구 계정은 ⚙️ 친구 계정에서 */
-        var _id = escapeHtml(_m.id);
-        return '<div class="qa-quick"><span>자주 찾는 것</span>' +
-          (!_m.deleteRequested ? '<button type="button" class="req-chip" data-action="delete" data-id="' + _id + '">🗑 탈퇴하기</button>' : '') +
-          (!_m.deactivateRequested && !_m.deactivated ? '<button type="button" class="req-chip" data-action="deactivate" data-id="' + _id + '">💤 잠시 쉬기</button>' : '') +
-          (!isProxyEntry(_m) ? '<button type="button" class="req-chip" id="change-my-pin">🔑 PIN 변경</button>' : '') +
-        '</div>';
-      })() +
-      '<div id="mc-thread" style="max-height:42vh;overflow-y:auto;margin:6px 0 10px;padding:4px 2px;background:var(--paper);border-radius:12px;">' + body + '</div>' +
-      '<textarea class="modal-input" id="mc-text" rows="3" maxlength="300" placeholder="건의사항이나 궁금한 점을 남겨주세요"></textarea>' +
-      '<button type="button" class="card-btn" data-kakao="1" style="width:100%;box-sizing:border-box;margin-top:8px;background:#FEE500;border-color:#FEE500;color:#3C1E1E;font-weight:700;">💬 카카오톡으로 문의</button>' +
-      '<div class="modal-actions">' +
-        (thread.length ? '<button type="button" class="card-btn" id="mc-delall" style="font-size:0.8rem;color:var(--muted);">기록 지우기</button>' : '') +
-        '<button type="button" class="card-btn" id="modal-cancel">닫기</button>' +
-        '<button type="button" class="card-btn primary" id="mc-send">보내기</button>' +
-      '</div>'
+      '<div class="cm-head"><h3>👑 베니브릿지 관리자</h3>' +
+        (thread.length ? '<button type="button" class="req-chip" id="mc-delall" style="font-size:0.72rem;padding:3px 9px;">기록 지우기</button>' : '') +
+        '<button type="button" class="cm-x" id="modal-cancel" aria-label="닫기">&times;</button></div>' +
+      '<p class="cm-sub">관리자가 직접 확인하고 답장해요. 답장이 오면 알림으로 알려 드려요.</p>' +
+      quick +
+      '<div class="cm-thread" id="mc-thread">' + body + '</div>' +
+      '<div class="cm-bar"><textarea class="modal-input" id="mc-text" rows="1" maxlength="300" placeholder="관리자에게 메시지"></textarea>' +
+        '<button type="button" class="card-btn primary" id="mc-send">보내기</button></div>'
     );
     overlay.classList.add('wide-modal');
+    overlay.classList.add('chat-modal');
     try { var _th = overlay.querySelector('#mc-thread'); if (_th) _th.scrollTop = _th.scrollHeight; } catch (e) {}   /* 최근 메시지가 보이게 */
+    chatModalGrow(overlay.querySelector('#mc-text'));
     function close() { closeModal(overlay); schedulePaint(); }   /* paint() 직접 호출은 작성 중인 신청서를 비움 → 보호(isEditingForm)가 있는 예약 그리기 */
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
     overlay.addEventListener('click', function (e) { if (e.target === overlay || (e.target.closest && e.target.closest('.qa-quick button'))) close(); });   /* 바로가기는 창을 닫고 그 기능으로 */
+    var qaAi = overlay.querySelector('#qa-ai');
+    if (qaAi) qaAi.addEventListener('click', function () { setTimeout(openAiHelper, 0); });
     overlay.querySelector('#mc-send').addEventListener('click', function () {
       var t = overlay.querySelector('#mc-text').value.trim();
       if (!t) return;
@@ -5258,7 +5283,6 @@
       '<textarea class="modal-input" id="guest-text" rows="4" maxlength="300" placeholder="궁금한 점이나 건의사항을 남겨주세요" style="margin-top:8px;">' + escapeHtml(opts.prefill || '') + '</textarea>' +
       '<p id="guest-warn" class="modal-msg" style="color:var(--accent);margin:4px 0 0;font-size:0.82rem;" hidden>이름·전화번호·내용을 모두 입력해주세요. (전화번호는 01012345678 형식)</p>' +
       '<p class="modal-msg" style="color:var(--muted);margin:6px 0 0;font-size:0.78rem;">' + ICON_LOCK + ' 전화번호는 암호화되어 관리자만 확인할 수 있어요.</p>' +
-      '<button type="button" class="card-btn" data-kakao="1" style="width:100%;box-sizing:border-box;margin-top:10px;background:#FEE500;border-color:#FEE500;color:#3C1E1E;font-weight:700;">💬 카카오톡으로 문의</button>' +
       '<div class="modal-actions">' +
         '<button type="button" class="card-btn" id="modal-cancel">닫기</button>' +
         '<button type="button" class="card-btn primary" id="guest-send">보내기</button>' +
@@ -6999,76 +7023,93 @@
     return threadFor(state, currentUser.id, 'user').filter(function (m) { return m.from === 'admin' && (m.at || '') > seen; }).length;
   }
   /* ── 🤖 회원 AI 도우미 (v478) ──
-     서버(aiConcierge member_chat)가 정해진 분류 하나만 고르고 정해진 답·버튼을 돌려줌. 앱은 버튼으로 기존 화면(PIN 바꾸기·잠시 쉬기·탈퇴 확인)을 열거나,
-     회원이 누를 때만 관리자 메시지로 전달. 처음 열 때 AI 고지(AI 기본법). 대화는 이 화면에만 있고 저장하지 않음 */
+     서버(aiConcierge member_chat)가 분류 하나를 고르고, 사용법·불편이면 먼저 해결을 도와줌(앞 대화 몇 줄을 같이 보내 이어서 상담).
+     앱은 버튼으로 기존 화면(PIN 바꾸기·잠시 쉬기·탈퇴 확인)을 열거나, 회원이 누를 때만 관리자 메시지로 전달.
+     AI 고지(AI 기본법)는 창 머리에 늘 한두 줄. 대화는 이 창에만 있고 저장하지 않음.
+     2026-10-28: 관리자 Q&A 창과 같은 틀(.chat-modal — 머리·안내·빠른 버튼·말풍선·한 줄 입력바) */
   function aiHelperRowHtml(me) {
     if (!me || !currentUser || isAdminUnlocked || !currentState || currentState._public) return '';
-    return '<div class="chat-list"><button type="button" class="chat-item" id="ai-helper-open">' +
-      '<div class="chat-av md" style="background:var(--accent-soft);font-size:1.1rem;">🤖</div>' +
-      '<div class="chat-item-mid"><div class="chat-item-name">AI 도우미 <span class="admin-room-tag">사용법·불편</span></div>' +
-        '<div class="chat-item-prev">궁금한 점을 물어보거나 관리자에게 전할 말을 남겨 주세요</div></div>' +
-    '</button></div>';
+    return '<button type="button" class="chat-item" id="ai-helper-open">' +
+      '<div class="chat-av md" style="background:var(--ink);font-size:1.1rem;">🤖</div>' +
+      '<div class="chat-item-mid"><div class="chat-item-name">AI 도우미 <span class="admin-room-tag">바로 답해요</span></div>' +
+        '<div class="chat-item-prev">사용법·불편한 점을 물어보면 바로 도와드려요</div></div>' +
+    '</button>';
   }
-  var AI_NOTICE_KEY = 'aiHelperNotice_v1';
+  function chatModalGrow(ta) {   /* 한 줄 입력바: 내용만큼 늘어남(최대 약 4줄) */
+    ta.addEventListener('input', function () { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 110) + 'px'; });
+  }
   function openAiHelper() {
     var me = findMyEntry(currentState);
     if (!me || !currentUser) { modalNotice('안내', '로그인한 뒤 쓸 수 있어요.'); return; }
-    var seen = false; try { seen = localStorage.getItem(AI_NOTICE_KEY) === '1'; } catch (e) {}
-    var notice = '<div style="font-size:0.78rem;color:var(--muted);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px;line-height:1.55;">' +
-      '🤖 이 상담은 <b>AI가 답해요</b>. 정확하지 않을 수 있으니 중요한 건 관리자에게 전달해 주세요. ' +
-      '입력한 글은 답을 만드는 데만 AI 업체(미국)로 보내지고, 베니브릿지는 저장하지 않아요. 다른 회원 정보는 알려 드리지 않아요.</div>';
     var ov = openModal(
-      '<h3>🤖 AI 도우미</h3>' + (seen ? '' : notice) +
-      '<div id="ai-h-log" style="max-height:46vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin:6px 0 10px;">' +
-        '<div class="ai-h-bot" style="align-self:flex-start;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:8px 11px;font-size:0.88rem;line-height:1.55;max-width:88%;">안녕하세요! 앱 사용법, 불편한 점, 관리자에게 전할 말을 편하게 남겨 주세요 😊</div>' +
+      '<div class="cm-head"><h3>🤖 AI 도우미</h3><button type="button" class="cm-x" id="modal-cancel" aria-label="닫기">&times;</button></div>' +
+      '<p class="cm-sub">AI가 바로 답해요 · 정확하지 않을 수 있어요. 입력한 글은 답을 만들 때만 AI 업체(미국)로 보내고 저장하지 않아요. 다른 회원 정보는 알려 드리지 않아요.</p>' +
+      '<div class="qa-quick"><span>빠른 질문</span>' +
+        '<button type="button" class="req-chip" data-q="사진 보기 신청은 어떻게 해요?">📷 사진 신청</button>' +
+        '<button type="button" class="req-chip" data-q="알림이 안 와요">🔔 알림이 안 와요</button>' +
+        '<button type="button" class="req-chip" data-q="화면이 이상하게 보여요">🛠 화면이 이상해요</button>' +
+        '<button type="button" class="req-chip gold" id="ai-to-admin">👑 관리자에게 직접</button>' +
       '</div>' +
-      '<div style="display:flex;gap:6px;"><textarea id="ai-h-in" rows="2" maxlength="500" placeholder="예: 사진 신청은 하루에 몇 번까지예요?" style="flex:1;resize:none;"></textarea>' +
-        '<button type="button" class="card-btn primary" id="ai-h-send" style="flex:none;">보내기</button></div>' +
-      (seen ? '<div style="font-size:0.72rem;color:var(--muted);margin-top:6px;">🤖 AI가 답해요 · 입력한 글은 저장하지 않아요</div>' : '') +
-      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>'
+      '<div class="cm-thread" id="ai-h-log"></div>' +
+      '<div class="cm-bar"><textarea class="modal-input" id="ai-h-in" rows="1" maxlength="500" placeholder="무엇이든 물어보세요"></textarea>' +
+        '<button type="button" class="card-btn primary" id="ai-h-send">보내기</button></div>'
     );
-    try { localStorage.setItem(AI_NOTICE_KEY, '1'); } catch (e) {}
+    ov.classList.add('wide-modal');
+    ov.classList.add('chat-modal');
     var log = ov.querySelector('#ai-h-log'), inp = ov.querySelector('#ai-h-in'), sendBtn = ov.querySelector('#ai-h-send');
-    var lastText = '';
-    function bubble(text, mine) {
+    var hist = [];   /* 이 창에서만 기억 — 앞 대화 몇 줄을 서버에 같이 보내 이어서 상담 (저장 안 함) */
+    function bubble(text, mine) {   /* 관리자 Q&A 창과 같은 말풍선 (.chat-row·.chat-bubble) */
       var d = document.createElement('div');
-      d.style.cssText = 'align-self:' + (mine ? 'flex-end' : 'flex-start') + ';background:' + (mine ? 'var(--accent-soft)' : 'var(--paper)') +
-        ';border:1px solid var(--line);border-radius:12px;padding:8px 11px;font-size:0.88rem;line-height:1.55;max-width:88%;white-space:pre-wrap;';
-      d.textContent = text;
+      d.className = 'chat-row first' + (mine ? ' mine' : '');
+      d.innerHTML = mine ? '<div class="chat-line"><div class="chat-bubble mine"></div></div>'
+        : '<div class="chat-av" style="background:var(--ink);">🤖</div><div class="chat-col"><div class="chat-name">AI 도우미</div><div class="chat-line"><div class="chat-bubble"></div></div></div>';
+      var b = d.querySelector('.chat-bubble');
+      b.textContent = text;
       log.appendChild(d); log.scrollTop = log.scrollHeight;
-      return d;
+      return b;
     }
-    function buttonsRow(buttons, text) {
+    function myTexts() { return hist.filter(function (h) { return h.r === 'me'; }).map(function (h) { return h.t; }).join(' / ').slice(0, 450); }
+    function buttonsRow(buttons) {
       if (!buttons || !buttons.length) return;
       var row = document.createElement('div');
-      row.style.cssText = 'align-self:flex-start;display:flex;flex-wrap:wrap;gap:6px;';
+      row.className = 'cm-acts';
+      var text = myTexts();   /* 전달은 이 창에서 회원이 쓴 글만 (AI 답은 안 보냄) */
       buttons.forEach(function (b) {
         var btn = document.createElement('button');
-        btn.type = 'button'; btn.className = 'card-btn'; btn.style.flex = 'none'; btn.textContent = b.label;
+        btn.type = 'button'; btn.className = 'req-chip' + (b.soft ? ' soft' : (b.act === 'forward' ? ' gold' : '')); btn.textContent = b.label;
         btn.addEventListener('click', function () { aiHelperAct(b, text, ov, btn); });
         row.appendChild(btn);
       });
       log.appendChild(row); log.scrollTop = log.scrollHeight;
     }
-    function send() {
-      var text = (inp.value || '').trim();
+    function send(q) {
+      var text = (q != null ? q : (inp.value || '')).trim();
       if (!text || sendBtn.disabled) return;
-      lastText = text; inp.value = '';
+      if (q == null) { inp.value = ''; inp.style.height = ''; }
       bubble(text, true);
       var wait = bubble('…', false);
       sendBtn.disabled = true;
-      callFn('aiConcierge', { op: 'member_chat', message: text }).then(function (r) {
+      var past = hist.slice(-6);
+      hist.push({ r: 'me', t: text.slice(0, 300) });
+      callFn('aiConcierge', { op: 'member_chat', message: text, history: past }).then(function (r) {
         var d = (r && r.data) || r || {};
-        wait.textContent = d.reply || '조금만 더 자세히 말씀해 주세요.';
-        buttonsRow(d.buttons, text);
+        var rep = d.reply || '조금만 더 자세히 말씀해 주세요.';
+        wait.textContent = rep;
+        hist.push({ r: 'ai', t: rep.slice(0, 300) });
+        buttonsRow(d.buttons);
       }).catch(function (e) {
         wait.textContent = (e && /resource-exhausted/.test(e.code || '')) ? e.message : '지금은 답하기 어려워요. 관리자에게 바로 전달할 수 있어요.';
-        buttonsRow([{ act: 'forward', label: '📨 관리자에게 직접 전달', tag: '문의' }], text);
+        buttonsRow([{ act: 'forward', label: '📨 관리자에게 전달', tag: '문의' }]);
       }).then(function () { sendBtn.disabled = false; });
     }
-    sendBtn.addEventListener('click', send);
+    bubble('안녕하세요! 앱 사용법이나 불편한 점을 편하게 물어보세요 😊', false);
+    chatModalGrow(inp);
+    sendBtn.addEventListener('click', function () { send(); });
     inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+    Array.prototype.forEach.call(ov.querySelectorAll('[data-q]'), function (c) { c.addEventListener('click', function () { send(c.getAttribute('data-q')); }); });
+    ov.querySelector('#ai-to-admin').addEventListener('click', function () { closeModal(ov); openMemberMsgCenter(); });
     ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
+    ov.addEventListener('click', function (e) { if (e.target === ov && !hist.length) closeModal(ov); });   /* 대화를 시작했으면 바깥 눌러도 안 닫힘(대화가 사라지니까) */
   }
   function aiHelperAct(b, text, ov, btn) {
     var myId = currentUser && currentUser.id;
@@ -7111,12 +7152,17 @@
   function adminRoomHtml(state, me) {
     if (!adminRoomVisible(me)) return '';
     var th = threadFor(state, currentUser.id, 'user'), last = th[th.length - 1], un = adminUnreadFor(state, me);
-    return '<div class="chat-list admin-room-wrap"><button type="button" class="chat-item admin-room" id="member-msg-open">' +
+    return '<button type="button" class="chat-item" id="member-msg-open">' +
       '<div class="chat-av md" style="background:var(--gold);font-size:1.1rem;">👑</div>' +
       '<div class="chat-item-mid"><div class="chat-item-name">베니브릿지 관리자 <span class="admin-room-tag">문의·공지</span></div>' +
-        '<div class="chat-item-prev">' + (last ? (last.from === 'admin' ? '' : '나: ') + escapeHtml(last.text) : '궁금한 점·건의·탈퇴 문의는 여기로 보내 주세요') + '</div></div>' +
+        '<div class="chat-item-prev">' + (last ? (last.from === 'admin' ? '' : '나: ') + escapeHtml(last.text) : '궁금한 점·건의는 관리자에게 직접 보내 주세요') + '</div></div>' +
       '<div class="chat-item-right">' + (last ? '<div class="chat-item-time">' + escapeHtml(chatListTime(last.at)) + '</div>' : '') + (un ? '<div class="chat-item-badge">' + un + '</div>' : '') + '</div>' +
-    '</button></div>';
+    '</button>';
+  }
+  /* 💬 대화 탭 맨 위 고객센터 카드: 👑 관리자(문의·공지) + 🤖 AI 도우미(바로 답) — 한 카드, 같은 줄 모양 (2026-10-28) */
+  function supportRowsHtml(state, me) {
+    var a = adminRoomHtml(state, me), b = aiHelperRowHtml(me);
+    return (a || b) ? '<div class="chat-list support-card">' + a + b + '</div>' : '';
   }
   function chatRoomsHtml(state, me, bare) {
     if (!me) return '';
@@ -7283,7 +7329,7 @@
       { k: 'conn', ic: '🔗', t: '내 연결', todo: 0, n: connN }
     ];
     var panes = {
-      chat: adminRoomHtml(state, me) + aiHelperRowHtml(me) + chatRoomsHtml(state, me, true),
+      chat: supportRowsHtml(state, me) + chatRoomsHtml(state, me, true),
       'in': '<div class="mine-section">' + (pin.hasAny ? pin.html : '<p class="sub mine-empty">아직 받은 요청이 없어요.</p>') +
         '<p class="sub" style="margin:10px 0 0;font-size:0.76rem;">승인한 요청은 3일 뒤 🔗 내 연결로 옮겨져요.</p></div>',
       out: '<div class="mine-section">' + (pout.hasAny ? pout.html : '<p class="sub mine-empty">아직 보낸 요청이 없어요.<br>명단에서 마음에 드는 분께 요청해 보세요.</p>') + '</div>',
@@ -7377,7 +7423,7 @@
           friendsNews +
           joinSection +
           '';
-      var mmAdminSec = '<div class="mine-section" style="margin-top:22px;"><h3 style="margin-bottom:6px;">💬 관리자와 대화</h3>' + adminRoomHtml(state, myAuthEntry(state)) + aiHelperRowHtml(myAuthEntry(state)) + '</div>';
+      var mmAdminSec = '<div class="mine-section" style="margin-top:22px;"><h3 style="margin-bottom:6px;">💬 관리자와 대화</h3>' + supportRowsHtml(state, myAuthEntry(state)) + '</div>';
     }
     /* Case A: 주선자 계정 자체로 보고 있음(본인 미전환/미등록) → 관리 홈만 */
     if (isMatchmakerEntry(me)) {
@@ -7531,7 +7577,7 @@
         '<p class="sub">' + escapeHtml(me.nickname) + '님, 반가워요! 받은 요청은 직접 승인하거나 거절할 수 있어요.</p>' +
         (me.deleteRequested ? '<div class="mine-note reject" style="margin-top:10px;">🗑 삭제 요청이 접수되어 <b>관리자 확인 중</b>이에요. <button type="button" class="card-btn" data-action="cancel-delete" data-id="' + escapeHtml(me.id) + '" style="flex:none;padding:4px 12px;margin-left:8px;">삭제 요청 취소</button></div>' : '') +
         (me.deactivateRequested ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">🗄 비활성화(보관) 요청이 접수되어 <b>관리자 확인 중</b>이에요. <button type="button" class="card-btn" data-action="cancel-deactivate" data-id="' + escapeHtml(me.id) + '" style="flex:none;padding:4px 12px;margin-left:8px;">요청 취소</button></div>' : '') +
-        (me.deactivated ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">🗄 <b>보관 상태</b>예요 (명단에 노출되지 않아요). 복구는 상단 <b>💬 Q&amp;A</b>로 문의하거나 카카오톡으로 요청해 주세요.</div>' : '') +
+        (me.deactivated ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">🗄 <b>보관 상태</b>예요 (명단에 노출되지 않아요). 복구는 상단 <b>💬 Q&amp;A</b>로 관리자에게 요청해 주세요.</div>' : '') +
         '' + /* 관리자 메시지는 💬 대화 탭 맨 위 '👑 베니브릿지 관리자' 방으로 (2026-10-15) */
         (isSubProfile ? '' : joinRequestSectionHtml(state, false)) + /* 나에게 온 주선자 요청 있으면 표시 */
         tabsHtml +
@@ -9020,7 +9066,7 @@
       var lines = adminThreadHtml(msgs);
       var realMsgs = msgs.filter(function (m) { return !isAutoMsg(m); });
       var last = realMsgs.length ? realMsgs[realMsgs.length - 1] : msgs[msgs.length - 1];
-      var preview = (last.from === 'admin' ? '나: ' : '') + (last.broadcast ? '📢 ' : '') + (last.text || '');
+      var preview = (last.from === 'admin' ? '나: ' : '') + (last.broadcast ? '📢 ' : '') + (aiFwdOf(last) ? '🤖 AI 전달 · ' + aiFwdOf(last).text : (last.text || ''));
       var unreadHere = amUnreadOf(eid);
       var unreadBadge = unreadHere ? ' <span class="blink-soft" style="display:inline-block;margin-left:6px;background:var(--accent);color:#fff;border-radius:999px;padding:1px 9px;font-size:0.72rem;font-weight:700;vertical-align:middle;">🔔 새 ' + unreadHere + '</span>' : '';
       var isGuest = eid.indexOf('guest-') === 0;
@@ -9543,7 +9589,7 @@
         /* 2줄: 개발자 응원하기 / Q&A */
         '<div class="admin-bar-row">' +
           '<button type="button" class="admin-link" id="buy-coffee" style="background:var(--gold-soft);border-color:var(--gold);color:var(--gold);opacity:1;font-weight:700;">&#9749; 개발자 응원하기</button>' +
-          '<button type="button" class="admin-link" id="feedback-btn" style="background:#FEE500;border-color:#FEE500;color:#3C1E1E;opacity:1;font-weight:700;">&#128172; Q&amp;A</button>' +
+          '<button type="button" class="admin-link" id="feedback-btn" style="background:var(--gold-soft);border-color:var(--gold);color:var(--ink);opacity:1;font-weight:700;">&#128172; Q&amp;A</button>' +
         '</div>' +
         /* 3줄: 홈에 추가 / 알림 / 로그인 */
         '<div class="admin-bar-row">' +
@@ -10996,7 +11042,7 @@
     }
     if (entry.deactivateRequested) { modalNotice('안내', '이미 잠시 쉬기를 요청했어요. 관리자 확인 중이에요.'); return; }
     modalMessage('💤 잠시 쉬기',
-      '소개팅을 잠시 쉬는 동안 명단에서 내 프로필이 숨겨져요. 다시 활동하고 싶으면 관리자에게 Q&A나 카카오톡으로 알려 주세요. 이유를 짧게 남겨 주세요.',
+      '소개팅을 잠시 쉬는 동안 명단에서 내 프로필이 숨겨져요. 다시 활동하고 싶으면 상단 Q&A로 관리자에게 알려 주세요. 이유를 짧게 남겨 주세요.',
       '잠시 쉬기 요청', 'primary', '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요', true).then(function (reason) {
       if (reason === null || reason === undefined) return;
       db.runTransaction(function (tx) {
@@ -12936,10 +12982,6 @@
       handleBuyCoffee();
       return;
     }
-    if (e.target.closest('[data-kakao]')) {
-      try { window.open(KAKAO_CHAT_URL, '_blank'); } catch (err) { location.href = KAKAO_CHAT_URL; }
-      return;
-    }
     if (e.target.closest('#pick-referrer')) {
       handlePickReferrer();
       return;
@@ -13948,8 +13990,6 @@
   }
   /* 개발자 응원하기(카카오페이 후원). PC·모바일 모두 팝업(QR + 링크 복사 + 링크 열기) */
   var COFFEE_URL = 'https://qr.kakaopay.com/281006011000080950628454';
-  var KAKAO_CHANNEL_URL = 'http://pf.kakao.com/_axijrX';
-  var KAKAO_CHAT_URL = 'http://pf.kakao.com/_axijrX/chat';
   function handleBuyCoffee() {
     var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
     /* '개발자 응원하기' 버튼과 동일한 골드 강조 디자인 */
