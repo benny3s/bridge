@@ -10592,7 +10592,7 @@
         notifyAdmin('🗑 삭제 요청', entry.nickname + '님이 프로필 삭제를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        modalNotice('탈퇴 요청 접수', '관리자 확인 후 삭제돼요. 그때까지는 명단에 남아 있어요.');
+        modalNotice('탈퇴 요청 접수', '명단에서 바로 숨겨졌고, 관리자 확인 후 완전히 삭제돼요. 그 전엔 ⚙️ 내 계정에서 취소할 수 있어요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
