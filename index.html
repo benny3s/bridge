@@ -1074,7 +1074,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-28-486';
+  var APP_VERSION = '2026-10-28-487';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -2976,7 +2976,7 @@
         '· 보관(휴면)을 고르면 다시 활동할 수 있도록 보관하며, 언제든 삭제를 요청할 수 있어요.<br>' +
         '· 장애 복구용 백업은 최대 7일 뒤 자동으로 사라져요.') +
       sec('5. 처리 위탁 및 저장 위치', 'Google(Firebase) — 데이터 저장·서버 기능·알림 발송. 저장 위치: 대한민국(서울 리전). 관리자 안내 문자는 관리자 휴대폰으로 직접 보내요.') +
-      sec('5-1. AI 기능과 국외 이전', '· 🤖 AI 도우미·✨ 소개글 다듬기를 <b>쓸 때만</b>, 입력한 글이 답을 만들기 위해 AI 업체로 전송돼요: Ollama(미국, 보관하지 않음), 장애 시 Anthropic(미국, 최대 30일 후 삭제). 베니브릿지는 이 글을 저장하지 않아요(관리자에게 전달을 누른 경우만 관리자 메시지로 남아요).<br>· 가입 심사·보안 점검에 AI 가 보조로 쓰이며, 최종 판단과 처리 책임은 관리자에게 있어요. 다른 회원의 정보는 AI 답변에 쓰지 않아요.') +
+      sec('5-1. AI 기능과 국외 이전', '· 🤖 AI 도우미·✨ 소개글 다듬기를 <b>쓸 때만</b>, 입력한 글이 답을 만들기 위해 AI 업체로 전송돼요: Ollama(미국, 보관하지 않음), 장애 시 Anthropic(미국, 최대 30일 후 삭제). 베니브릿지는 이 글을 저장하지 않아요(관리자에게 전달을 누른 경우만 관리자 메시지로 남아요).<br>· 가입 심사·보안 점검에 AI 가 보조로 쓰이며, 최종 판단과 처리 책임은 관리자에게 있어요. 다른 회원의 정보는 AI 답변에 쓰지 않아요.<br>· AI 도우미의 소개팅 고민 상담에는 상대의 이름·연락처를 쓰지 말아 주세요(전화번호는 AI 업체로 보내기 전에 자동으로 가려요).') +
       sec('6. 제3자 제공', '법령에 따른 요청이 있는 경우를 제외하고 제3자에게 제공하지 않아요.') +
       sec('7. 이용자의 권리', '내 정보 열람·정정(프로필 수정), 삭제·보관 요청, 처리 정지를 언제든 요청할 수 있어요. 앱의 💬 Q&A로 말씀해 주세요.') +
       sec('8. 이용 연령', '만 19세 이상만 이용할 수 있어요.') +
@@ -7048,15 +7048,16 @@
     if (!me || !currentUser) { modalNotice('안내', '로그인한 뒤 쓸 수 있어요.'); return; }
     var ov = openModal(
       '<div class="cm-head"><h3>🤖 AI 도우미</h3><button type="button" class="cm-x" id="modal-cancel" aria-label="닫기">&times;</button></div>' +
-      '<p class="cm-sub">AI가 바로 답해요 · 정확하지 않을 수 있어요. 입력한 글은 답을 만들 때만 AI 업체(미국)로 보내고 저장하지 않아요. 다른 회원 정보는 알려 드리지 않아요.</p>' +
+      '<p class="cm-sub">앱 사용법도, 소개팅 고민도 AI가 바로 답해요 · 정확하지 않을 수 있어요. 입력한 글은 답을 만들 때만 AI 업체(미국)로 보내고 저장하지 않아요. 상대 이름·번호는 빼고 써 주세요.</p>' +
       '<div class="qa-quick"><span>빠른 질문</span>' +
         '<button type="button" class="req-chip" data-q="사진 보기 신청은 어떻게 해요?">📷 사진 신청</button>' +
         '<button type="button" class="req-chip" data-q="알림이 안 와요">🔔 알림이 안 와요</button>' +
         '<button type="button" class="req-chip" data-q="화면이 이상하게 보여요">🛠 화면이 이상해요</button>' +
+        '<button type="button" class="req-chip" data-q="대화가 연결됐는데 첫 메시지를 뭐라고 보내면 좋을까요?">💬 첫 메시지 고민</button>' +
         '<button type="button" class="req-chip gold" id="ai-to-admin">👑 관리자에게 직접</button>' +
       '</div>' +
       '<div class="cm-thread" id="ai-h-log"></div>' +
-      '<div class="cm-bar"><textarea class="modal-input" id="ai-h-in" rows="1" maxlength="500" placeholder="무엇이든 물어보세요"></textarea>' +
+      '<div class="cm-bar"><textarea class="modal-input" id="ai-h-in" rows="1" maxlength="500" placeholder="앱 사용법·소개팅 고민 무엇이든"></textarea>' +
         '<button type="button" class="card-btn primary" id="ai-h-send">보내기</button></div>'
     );
     ov.classList.add('wide-modal');
