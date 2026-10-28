@@ -879,7 +879,7 @@
   .cm-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0 42px; }
   .req-chip.soft { border-style: dashed; font-size: 0.75rem; }
   .req-chip.gold { border-color: var(--gold); background: var(--gold-soft); color: var(--ink); }
-  .admin-room-tag { font-size: 0.68rem; font-weight: 400; color: var(--gold); border: 1px solid var(--gold); border-radius: 999px; padding: 0 6px; margin-left: 4px; vertical-align: 1px; }
+  .admin-room-tag { font-size: 0.68rem; font-weight: 400; color: var(--gold); border: 1px solid var(--gold); border-radius: 999px; padding: 0 6px; margin-left: 4px; vertical-align: 1px; white-space: nowrap; }
   .chat-sec-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 2px 0 2px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
   .chat-sec-label b { font-size: 0.86rem; color: var(--ink); }
   .chat-sec-label span { font-size: 0.72rem; color: var(--muted); }
@@ -5240,7 +5240,9 @@
     var thread = threadFor(currentState, currentUser.id, 'user');
     var bubble = function (m) {   /* 관리자 = 왼쪽(👑), 나 = 오른쪽 — 채팅과 같은 모양 (2026-10-15) */
       var mine = m.from !== 'admin', t = '<div class="chat-meta"><span>' + escapeHtml(fmtDate(m.at)) + '</span></div>';
-      if (mine) return '<div class="chat-row first mine"><div class="chat-line">' + t + '<div class="chat-bubble mine">' + escapeHtml(m.text) + '</div></div></div>';   /* 내 말풍선은 넓게 */
+      var af = mine ? aiFwdOf(m) : null;   /* AI 도우미로 전달한 글은 접두어 대신 작은 표시 */
+      if (af) t = '<div class="chat-meta"><span>🤖 AI 도우미로 전달 · ' + escapeHtml(fmtDate(m.at)) + '</span></div>';
+      if (mine) return '<div class="chat-row first mine"><div class="chat-line">' + t + '<div class="chat-bubble mine">' + escapeHtml(af ? af.text : m.text) + '</div></div></div>';   /* 내 말풍선은 넓게 */
       return '<div class="chat-row first">' +
         '<div class="chat-av" style="background:var(--gold);">👑</div>' +
         '<div class="chat-col">' + (mine ? '' : '<div class="chat-name">베니브릿지 관리자</div>') +
@@ -7184,7 +7186,7 @@
     return '<button type="button" class="chat-item" id="member-msg-open">' +
       '<div class="chat-av md" style="background:var(--gold);font-size:1.1rem;">👑</div>' +
       '<div class="chat-item-mid"><div class="chat-item-name">베니브릿지 관리자 <span class="admin-room-tag">문의·공지</span></div>' +
-        '<div class="chat-item-prev">' + (last ? (last.from === 'admin' ? '' : '나: ') + escapeHtml(last.text) : '궁금한 점·건의는 관리자에게 직접 보내 주세요') + '</div></div>' +
+        '<div class="chat-item-prev">' + (last ? (last.from === 'admin' ? '' : '나: ') + (aiFwdOf(last) ? '🤖 ' + escapeHtml(aiFwdOf(last).text) : escapeHtml(last.text)) : '궁금한 점·건의는 관리자에게 직접 보내 주세요') + '</div></div>' +
       '<div class="chat-item-right">' + (last ? '<div class="chat-item-time">' + escapeHtml(chatListTime(last.at)) + '</div>' : '') + (un ? '<div class="chat-item-badge">' + un + '</div>' : '') + '</div>' +
     '</button>';
   }
