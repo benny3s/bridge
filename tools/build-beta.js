@@ -66,7 +66,8 @@ if (fs.existsSync(hotfixCssPath)) {
 /* 5) 🧪 베타 패널 + ✦ 베니 AI 살롱 컨시어지 — 앱 코드 안(마지막 })(); 직전)에 넣어 앱 함수·변수를 그대로 씀 */
 const panel = fs.readFileSync(path.join(__dirname, 'beta-panel.js'), 'utf8');
 const aiPath = path.join(__dirname, 'benny-ai-beta.js');
-const aiPanel = fs.existsSync(aiPath) ? fs.readFileSync(aiPath, 'utf8') : '';
+/* 2026-10-28: AI 자율 수리는 10-27 에 중단(VOC 는 베니+Claude) → 기본은 빼서 베타 = 운영 화면. 옛 실험을 다시 보려면 AI_BETA=1 */
+const aiPanel = (process.env.AI_BETA === '1' && fs.existsSync(aiPath)) ? fs.readFileSync(aiPath, 'utf8') : '';
 const endRe = /\}\)\(\);\s*<\/script>\s*<\/body>/g;
 let at = -1, mm;
 while ((mm = endRe.exec(h))) at = mm.index;   /* 마지막 것 (줄바꿈 CRLF·LF 모두) */
