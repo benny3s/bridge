@@ -1126,7 +1126,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-492';
+  var APP_VERSION = '2026-10-29-493';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -13738,8 +13738,43 @@
   function noteAutoPopup(kind) { if (!autoPopups[kind]) { autoPopups[kind] = 1; autoPopupCount++; } }
   function autoPopupOk(kind) {
     if (kind === 'checkin') return autoPopupCount === 0;
+    if (kind === 'notif') return autoPopupCount === 0;   /* 알림 켜기 권유는 다른 자동 팝업이 없을 때만 */
     if (kind === 'nudge' && autoPopups.news) return false;
     return autoPopupCount < AUTO_POPUP_MAX;
+  }
+  /* 알림이 꺼져 있거나 막혀 있으면 가끔 켜 달라고 권함 (2026-10-29 Benny) — 승인 회원만, 다른 자동 팝업이 없을 때만.
+     · 아직 안 물어본 상태: 3일에 1번 [알림 켜기] — 누르면 휴대폰이 '허용'을 물음(브라우저 규칙상 자동으로 켤 수는 없음)
+     · 막힘(거부됨): 7일에 1번 설정에서 허용하는 방법 · 아이폰 사파리 탭: 7일에 1번 홈 화면 앱 안내(아이폰은 앱에서만 알림) */
+  var NOTIF_NUDGE_EVERY = 3 * 86400000, NOTIF_NUDGE_SLOW = 7 * 86400000;
+  function maybeShowNotifNudge(tries) {
+    tries = tries || 0;
+    if (!currentUser || isAdminUnlocked || !NOTIF_ENABLED) return;
+    if (!currentState || !currentState.entries || dataMode !== 'full') { if (tries < 5) setTimeout(function () { maybeShowNotifNudge(tries + 1); }, 3000); return; }
+    if (document.querySelector('.modal-overlay, .chat-screen') || userBusy()) { if (tries < 8) setTimeout(function () { maybeShowNotifNudge(tries + 1); }, 5000); return; }
+    var auth = myAuthEntry(currentState); if (!auth || auth.deactivated) return;
+    if (memberNotifActive()) return;
+    var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+    var kind = (isIOS && !isStandalone()) ? 'ios' : (!('Notification' in window) ? '' : (Notification.permission === 'denied' ? 'blocked' : 'off'));
+    if (!kind) return;
+    var key = 'notif-nudge-' + currentUser.id, last = 0;
+    try { last = parseInt(localStorage.getItem(key) || '0', 10) || 0; } catch (e) {}
+    if (Date.now() - last < (kind === 'off' ? NOTIF_NUDGE_EVERY : NOTIF_NUDGE_SLOW)) return;
+    if (!autoPopupOk('notif')) return;
+    try { localStorage.setItem(key, String(Date.now())); } catch (e) {}
+    noteAutoPopup('notif');
+    if (kind === 'off') {
+      modalConfirm('🔔 알림을 켜 둘까요?', '사진·대화 신청, 승인, 채팅, 관리자 답장이 오면 바로 알려 드려요. 휴대폰이 "허용"을 물으면 허용을 눌러 주세요.', '알림 켜기')
+        .then(function (ok) { if (ok) handleNotifToggle(); });
+    } else if (kind === 'ios') {
+      modalConfirm('🔔 아이폰은 앱에서 알림이 와요', '사파리에서 "홈 화면에 추가"로 베니브릿지 아이콘을 만든 뒤 그 아이콘으로 열면 알림을 켤 수 있어요. 1분이면 돼요.', '방법 보기')
+        .then(function (ok) { if (ok) handleAddToHome(); });
+    } else {
+      modalNotice('🔕 알림이 막혀 있어요', isIOS
+        ? '아이폰 설정 → 알림 → 베니브릿지 → "알림 허용"을 켠 뒤, 앱 상단 🔔 알림 → 알림 설정에서 켜 주세요.'
+        : (isStandalone()
+          ? '휴대폰 설정 → 앱 → 베니브릿지(또는 크롬) → 알림 → 허용으로 바꾼 뒤, 상단 🔔 알림 → 알림 설정에서 켜 주세요.'
+          : '주소창 왼쪽 자물쇠(🔒) → 권한 → 알림 → 허용으로 바꾼 뒤, 상단 🔔 알림 → 알림 설정에서 켜 주세요.'));
+    }
   }
   /* 받은 요청 응답 재촉 팝업 — 2일+ 대기(pending) 요청이 있으면 앱 열 때 표시, 기기당 3일에 1번.
      주선자는 관리 중인 친구(본인 프로필 포함) 앞으로 온 요청까지 합산. 보낸 사람이 휴면·테스트면 제외. */
@@ -14455,6 +14490,7 @@
     setTimeout(showAnnouncement, 800);
     setTimeout(maybeShowOneOffPopup, 2600); /* 1회성 공지 팝업 (있으면) */
     setTimeout(maybeShowReqNudge, 3400); /* 받은 요청 응답 재촉 (2일+ 대기, 3일에 1번) */
+    setTimeout(maybeShowNotifNudge, 4100); /* 알림 꺼짐·막힘이면 켜기 권유 (3일·7일에 1번, 다른 자동 팝업 없을 때만) */
     setTimeout(maybeShowCheckin, 4600); /* 주간 예약 팝업 — 다른 자동 팝업이 없을 때만 (autoPopupOk) */
     try { consumeNotifHash(); } catch (e) {} /* 알림 클릭으로 새로 열린 경우 해당 화면으로 이동 */
     setTimeout(function () { try { showNewsPopup(); } catch (e) {} }, 1400); /* 인앱 새 소식 팝업 (푸시 없이도 새 소식 확인·이동) */
