@@ -28,6 +28,7 @@
     --gold: #C08A34;
     --gold-soft: #F1E2C4;
     --gold-btn: #F7D774;
+    --bubble: #efefef;
     --shadow: rgba(42, 31, 38, 0.12);
     --focus: #B23A48;
     --lock: #5B7A8C;
@@ -45,6 +46,7 @@
       --gold: #D9A94F;
       --gold-soft: #463823;
       --gold-btn: #6E5420;
+      --bubble: #3A2E35;
       --shadow: rgba(0, 0, 0, 0.45);
       --focus: #E58C96;
       --lock: #8FB2C7;
@@ -62,6 +64,7 @@
     --gold: #D9A94F;
     --gold-soft: #463823;
     --gold-btn: #6E5420;
+    --bubble: #3A2E35;
     --shadow: rgba(0, 0, 0, 0.45);
     --focus: #E58C96;
     --lock: #8FB2C7;
@@ -927,7 +930,7 @@
   .chat-lbl { font-size: 0.7rem; color: var(--muted); margin-bottom: 2px; }
   .chat-line { display: flex; align-items: flex-end; gap: 4px; max-width: 100%; }
   .chat-row.mine .chat-line { max-width: 80%; }
-  .chat-bubble { background: #efefef; color: #2A1F26; padding: 8px 12px; border-radius: 13px; white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.45; min-width: 0; }
+  .chat-bubble { background: var(--bubble); color: var(--ink); padding: 8px 12px; border-radius: 13px; white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.45; min-width: 0; }
   .chat-bubble.mine { background: var(--accent); color: #fff; }
   .chat-bubble.pending { opacity: 0.55; }
   @media (hover: none) { .chat-bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
@@ -5092,7 +5095,7 @@
       var mine = m.fromId === (r.members || [])[0];
       return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? 'flex-start' : 'flex-end') + ';margin:6px 0;">' +
         '<div style="font-size:0.66rem;font-weight:700;color:var(--muted);">' + escapeHtml(nickForEntry(currentState, m.fromId)) + (m.viaMm ? ' (🤝 주선자)' : '') + ' · ' + fmtDate(m.at) + '</div>' +
-        '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:#efefef;white-space:pre-wrap;word-break:break-word;">' + escapeHtml(m.text) + '</div></div>';
+        '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:var(--bubble);color:var(--ink);white-space:pre-wrap;word-break:break-word;">' + escapeHtml(m.text) + '</div></div>';
     }).join('');
     var ov = openModal('<h3>🚨 신고된 대화</h3>' +
       '<p class="modal-msg" style="font-size:0.8rem;">' + escapeHtml(names.join(' ↔ ')) + ' · 사유: ' + escapeHtml(r.reportReason || '') + '</p>' +
@@ -5137,7 +5140,7 @@
     var delBtn = withDel ? ' <button type="button" data-action="msg-del" data-id="' + escapeHtml(m.id) + '" title="관리자 목록에서 숨기기" style="border:none;background:none;color:var(--muted);cursor:pointer;font-size:0.82rem;padding:0;">&#10005;</button>' : '';
     return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? 'flex-end' : 'flex-start') + ';margin:6px 0;">' +
       '<div style="font-size:0.66rem;font-weight:700;color:var(--muted);margin-bottom:2px;' + (mine ? 'text-align:right;' : '') + '">' + who + ' · ' + fmtDate(m.at) + delBtn + '</div>' +
-      '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:' + (mine ? 'var(--accent)' : '#efefef') + ';color:' + (mine ? '#fff' : 'var(--ink)') + ';white-space:pre-wrap;word-break:break-word;' + (af ? 'border-left:3px solid var(--gold);' : '') + '">' +
+      '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:' + (mine ? 'var(--accent)' : 'var(--bubble)') + ';color:' + (mine ? '#fff' : 'var(--ink)') + ';white-space:pre-wrap;word-break:break-word;' + (af ? 'border-left:3px solid var(--gold);' : '') + '">' +
         escapeHtml(af ? af.text : m.text) +
       '</div></div>';
   }
@@ -7057,7 +7060,7 @@
         '<button type="button" class="req-chip gold" id="ai-to-admin">👑 관리자에게 직접</button>' +
       '</div>' +
       '<div class="cm-thread" id="ai-h-log"></div>' +
-      '<div class="cm-bar"><textarea class="modal-input" id="ai-h-in" rows="1" maxlength="500" placeholder="앱 사용법·소개팅 고민 무엇이든"></textarea>' +
+      '<div class="cm-bar"><textarea class="modal-input" id="ai-h-in" rows="1" maxlength="500" placeholder="무엇이든 물어보세요"></textarea>' +
         '<button type="button" class="card-btn primary" id="ai-h-send">보내기</button></div>'
     );
     ov.classList.add('wide-modal');
@@ -7108,7 +7111,7 @@
         buttonsRow([{ act: 'forward', label: '📨 관리자에게 전달', tag: '문의' }]);
       }).then(function () { sendBtn.disabled = false; });
     }
-    bubble('안녕하세요! 앱 사용법이나 불편한 점을 편하게 물어보세요 😊', false);
+    bubble('안녕하세요! 앱 사용법, 불편한 점, 소개팅 고민(첫 메시지·만남 등) 무엇이든 편하게 물어보세요 😊', false);
     chatModalGrow(inp);
     sendBtn.addEventListener('click', function () { send(); });
     inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
