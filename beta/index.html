@@ -30,6 +30,7 @@
     --gold: #C08A34;
     --gold-soft: #F1E2C4;
     --gold-btn: #F7D774;
+    --bubble: #efefef;
     --shadow: rgba(42, 31, 38, 0.12);
     --focus: #B23A48;
     --lock: #5B7A8C;
@@ -47,6 +48,7 @@
       --gold: #D9A94F;
       --gold-soft: #463823;
       --gold-btn: #6E5420;
+      --bubble: #3A2E35;
       --shadow: rgba(0, 0, 0, 0.45);
       --focus: #E58C96;
       --lock: #8FB2C7;
@@ -64,6 +66,7 @@
     --gold: #D9A94F;
     --gold-soft: #463823;
     --gold-btn: #6E5420;
+    --bubble: #3A2E35;
     --shadow: rgba(0, 0, 0, 0.45);
     --focus: #E58C96;
     --lock: #8FB2C7;
@@ -875,7 +878,7 @@
   .cm-head h3 { flex: 1; margin: 0; }
   .cm-x { border: 0; background: none; font-size: 1.5rem; line-height: 1; color: var(--muted); cursor: pointer; padding: 2px 6px; }
   .cm-sub { font-size: 0.74rem; color: var(--muted); line-height: 1.5; margin: 0 0 8px; }
-  .cm-thread { height: 38vh; overflow-y: auto; background: var(--paper); border-radius: 12px; padding: 2px 8px 10px; margin: 0 0 8px; }
+  .cm-thread { position: relative; height: 38vh; overflow-y: auto; background: var(--paper); border-radius: 12px; padding: 2px 8px 10px; margin: 0 0 8px; }
   .cm-bar { display: flex; gap: 6px; align-items: flex-end; }
   .cm-bar textarea.modal-input { flex: 1; resize: none; min-height: 42px; max-height: 110px; margin: 0; }
   .cm-bar .card-btn { flex: none; min-height: 42px; }
@@ -929,7 +932,7 @@
   .chat-lbl { font-size: 0.7rem; color: var(--muted); margin-bottom: 2px; }
   .chat-line { display: flex; align-items: flex-end; gap: 4px; max-width: 100%; }
   .chat-row.mine .chat-line { max-width: 80%; }
-  .chat-bubble { background: #efefef; color: #2A1F26; padding: 8px 12px; border-radius: 13px; white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.45; min-width: 0; }
+  .chat-bubble { background: var(--bubble); color: var(--ink); padding: 8px 12px; border-radius: 13px; white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; line-height: 1.45; min-width: 0; }
   .chat-bubble.mine { background: var(--accent); color: #fff; }
   .chat-bubble.pending { opacity: 0.55; }
   @media (hover: none) { .chat-bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
@@ -1103,7 +1106,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-28-487';
+  var APP_VERSION = '2026-10-29-488';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -2622,7 +2625,7 @@
     var ageStr = entry.birthYear ? (String(entry.birthYear).slice(2) + '년생') : '';
     var thumb = cardThumb(entry);
     var photo = thumb
-      ? '<div class="pf-photos" style="pointer-events:none;"><img src="' + thumb + '" alt="회원 사진" style="filter:blur(22px) saturate(0.55);transform:scale(1.12);" loading="lazy"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:1.7rem;">🔒</div></div>'
+      ? '<div class="pf-photos" style="pointer-events:none;"><img src="' + safeImgSrc(thumb) + '" alt="회원 사진" style="filter:blur(22px) saturate(0.55);transform:scale(1.12);" loading="lazy"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:1.7rem;">🔒</div></div>'
       : '<div class="pf-photo pf-photo--empty" style="background:' + avatarColor(entry.id) + ';">🔒</div>';
     var introBit = entry.intro ? escapeHtml(String(entry.intro).replace(/\s+/g, ' ').slice(0, 18)) + '…' : '';
     var idealBit = entry.idealType ? escapeHtml(String(entry.idealType).replace(/\s+/g, ' ').slice(0, 18)) + '…' : '';
@@ -2989,23 +2992,23 @@
       '<h3>🔒 개인정보 처리방침</h3>' +
       '<p class="modal-msg" style="font-size:0.8rem;color:var(--muted);">베니브릿지는 지인 기반 소개 서비스를 위해 아래와 같이 개인정보를 처리합니다. (시행일 ' + PRIVACY_EFFECTIVE + ')</p>' +
       sec('1. 수집 항목',
-        '· 필수: 닉네임, 실명, 휴대폰 번호, 성별, 출생연도, 키, 지역, 직장, 사진, 자기소개·이상형, PIN<br>' +
-        '· 선택: 알게 된 경로(추천인), 지인 필터용 연락처 — <b>번호 원본은 저장하지 않고</b> 비교용 값만 저장<br>' +
-        '· 자동: 접속 시각, 앱 안 활동 기록, 알림 수신용 기기 토큰<br>' +
+        '· 필수: 닉네임, 실명, 휴대폰 번호, 성별, 출생연도, 키, 지역, 직장, 사진, 자기소개·이상형, 알게 된 경로(추천인), PIN<br>' +
+        '· 선택: 지인 필터용 연락처 — <b>번호 원본은 저장하지 않고</b> 비교용 값만 저장<br>' +
+        '· 자동: 접속 시각, 앱 안 활동 기록, 알림 수신용 기기 토큰, <b>IP 주소·기기·브라우저 정보</b>(보안·부정 접속 방지)<br>' +
         '· PIN은 되돌릴 수 없는 형태(해시)로만 저장해요.') +
       sec('2. 이용 목적', '회원 확인·가입 승인, 소개(매칭) 서비스 제공, 요청·대화 등 기능 운영, 관리자 안내 연락, 부정 이용 방지') +
       sec('3. 공개 범위',
-        '· 프로필(닉네임·나이·지역·직장·소개 등)은 <b>승인된 회원</b>에게만 보여요. 비회원에게는 성별·나이대 등 일부만 가려서 보여요.<br>' +
-        '· 사진은 <b>서로 승인한 경우</b>에만 공개돼요.<br>' +
+        '· 프로필(닉네임·나이·지역·직장·소개 등)은 <b>승인된 회원</b>에게만 보여요. 비회원에게는 닉네임·직장·사진 없이 성별·출생연도·지역·소개 앞부분만 보여요(로그인 목록의 닉네임과는 연결되지 않아요).<br>' +
+        '· 사진은 <b>서로 승인한 경우</b>에만 공개돼요(주선자가 관리하는 프로필이면 담당 주선자 포함).<br>' +
         '· 실명·연락처는 <b>암호화</b>되어 관리자만 볼 수 있고, 다른 회원에게 제공하지 않아요.') +
       sec('4. 보유 및 파기',
-        '· 삭제 요청이 승인되면 지체 없이 파기해요.<br>' +
-        '· 회원끼리 주고받은 대화는 상대방 대화함에 남을 수 있어요. 대화는 두 사람만 볼 수 있고, 관리자는 <b>신고가 접수된 대화만</b> 확인해요.<br>' +
+        '· 삭제 요청이 승인되면 계정 정보(실명·번호·PIN·사진·프로필)는 7일 안에 파기해요. 다만 부정 재가입 방지를 위해 닉네임·성별·출생연도·지역·삭제 사유와 접속 기록(IP·기기)은 따로 보관해요.<br>' +
+        '· 회원끼리 주고받은 대화는 상대방 대화함에 남을 수 있어요. 대화는 두 사람만 볼 수 있고(주선자가 관리하는 프로필이면 담당 주선자 포함), 관리자는 <b>신고가 접수된 대화만</b> 확인해요.<br>' +
         '· 신고·분쟁 대응을 위해, 두 사람이 모두 대화를 지우거나 탈퇴한 뒤에도 서버에 <b>90일간 보관</b> 후 삭제해요 (신고 처리 중인 대화는 처리 완료 때까지 보관).<br>' +
         '· 보관(휴면)을 고르면 다시 활동할 수 있도록 보관하며, 언제든 삭제를 요청할 수 있어요.<br>' +
         '· 장애 복구용 백업은 최대 7일 뒤 자동으로 사라져요.') +
-      sec('5. 처리 위탁 및 저장 위치', 'Google(Firebase) — 데이터 저장·서버 기능·알림 발송. 저장 위치: 대한민국(서울 리전). 관리자 안내 문자는 관리자 휴대폰으로 직접 보내요.') +
-      sec('5-1. AI 기능과 국외 이전', '· 🤖 AI 도우미·✨ 소개글 다듬기를 <b>쓸 때만</b>, 입력한 글이 답을 만들기 위해 AI 업체로 전송돼요: Ollama(미국, 보관하지 않음), 장애 시 Anthropic(미국, 최대 30일 후 삭제). 베니브릿지는 이 글을 저장하지 않아요(관리자에게 전달을 누른 경우만 관리자 메시지로 남아요).<br>· 가입 심사·보안 점검에 AI 가 보조로 쓰이며, 최종 판단과 처리 책임은 관리자에게 있어요. 다른 회원의 정보는 AI 답변에 쓰지 않아요.<br>· AI 도우미의 소개팅 고민 상담에는 상대의 이름·연락처를 쓰지 말아 주세요(전화번호는 AI 업체로 보내기 전에 자동으로 가려요).') +
+      sec('5. 처리 위탁 및 저장 위치', 'Google(Firebase) — 데이터 저장·서버 기능·알림 발송. 저장 위치: 대한민국(서울 리전). 관리자 안내 문자는 관리자 휴대폰으로 직접 보내요.<br>· proxycheck.io(영국) — 로그인·가입 IP 가 VPN·해외 접속인지 확인(IP 주소만 보내요).') +
+      sec('5-1. AI 기능과 국외 이전', '· 🤖 AI 도우미·✨ 소개글 다듬기를 <b>쓸 때만</b>, 입력한 글이 답을 만들기 위해 AI 업체로 전송돼요: Ollama(미국, 보관하지 않음), 답을 못 만들거나 장애일 때 Anthropic(미국, 최대 30일 후 삭제). 베니브릿지는 이 글을 저장하지 않아요(관리자에게 전달을 누른 경우만 관리자 메시지로 남아요).<br>· 가입 심사·보안 점검에 AI 가 보조로 쓰이며, 최종 판단과 처리 책임은 관리자에게 있어요. 보안 경고 판단에는 접속 기기·통신사·도시 정보가 Anthropic(미국)으로 전송돼요. 다른 회원의 정보는 AI 답변에 쓰지 않아요.<br>· AI 도우미의 소개팅 고민 상담에는 상대의 이름·연락처를 쓰지 말아 주세요(전화번호는 AI 업체로 보내기 전에 자동으로 가려요).') +
       sec('6. 제3자 제공', '법령에 따른 요청이 있는 경우를 제외하고 제3자에게 제공하지 않아요.') +
       sec('7. 이용자의 권리', '내 정보 열람·정정(프로필 수정), 삭제·보관 요청, 처리 정지를 언제든 요청할 수 있어요. 앱의 💬 Q&A로 말씀해 주세요.') +
       sec('8. 이용 연령', '만 19세 이상만 이용할 수 있어요.') +
@@ -3018,6 +3021,16 @@
   }
 
   /* ---- utils ---- */
+  /* 사진 주소는 이미지 data URL·https 만, 따옴표 등은 이스케이프 (2026-10-29 보안 리뷰: 회원이 자기 photoThumb·photos 에
+     '" onerror=...' 같은 값을 넣으면 명단을 보는 모든 회원·관리자 화면에서 스크립트가 돌 수 있었음) */
+  function safeImgSrc(u) {
+    u = String(u == null ? '' : u);
+    return (/^data:image\/(?:jpe?g|png|webp|gif);base64,[A-Za-z0-9+\/=\s]+$/.test(u) || /^https:\/\/[^\s"'<>]+$/.test(u)) ? escapeHtml(u) : '';
+  }
+  /* 바깥(어두운 곳)을 눌러 창을 닫기 전에: 입력칸에 쓴 글이 있으면 안 닫음 (2026-10-29 시험 — 실수로 눌러 쓰던 글이 사라졌음) */
+  function overlayHasDraft(ov) {
+    try { return Array.prototype.some.call(ov.querySelectorAll('textarea, input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=file]):not([type=button])'), function (i) { return String(i.value || '').trim().length > 0; }); } catch (e) { return false; }
+  }
   function escapeHtml(str) {
     return String(str == null ? '' : str).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -3478,7 +3491,7 @@
         if (e.key === 'Enter') finish(val());
         if (e.key === 'Escape') finish(null);
       });
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay && !overlayHasDraft(overlay)) finish(null); });
     });
   }
 
@@ -3508,7 +3521,7 @@
       overlay.querySelector('#modal-ok').addEventListener('click', function () {
         finish({ p1: overlay.querySelector('#modal-pin1').value, p2: overlay.querySelector('#modal-pin2').value });
       });
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay && !overlayHasDraft(overlay)) finish(null); });
     });
   }
 
@@ -3891,7 +3904,7 @@
         if (!picked) { finish(null); return; }
         finish({ toId: picked.value, message: (overlay.querySelector('#mm-msg').value || '').trim() });
       });
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay && !overlayHasDraft(overlay)) finish(null); });
     });
   }
   function handleRequestMatchmaker() {
@@ -4313,7 +4326,7 @@
         if (e.key === 'Enter') finish({ id: currentId(), pin: pinInput.value.trim() });
         if (e.key === 'Escape') finish(null);
       });
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay && !overlayHasDraft(overlay)) finish(null); });
       /* 숨은 관리자 진입: 제목 "로그인"을 3번 연달아 터치 → 관리자 비밀번호 입력 */
       var _titleTaps = 0, _titleTimer = null;
       var titleEl = overlay.querySelector('#login-title');
@@ -4407,7 +4420,7 @@
         if (e.key === 'Enter') finish(input.value.trim());
         if (e.key === 'Escape') finish(null);
       });
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay && !overlayHasDraft(overlay)) finish(null); });
     });
   }
   /* 내 번호를 확보한다. 없으면 한 번 입력받아 저장(자기 PIN + 관리자 키 양쪽). */
@@ -5121,7 +5134,7 @@
       var mine = m.fromId === (r.members || [])[0];
       return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? 'flex-start' : 'flex-end') + ';margin:6px 0;">' +
         '<div style="font-size:0.66rem;font-weight:700;color:var(--muted);">' + escapeHtml(nickForEntry(currentState, m.fromId)) + (m.viaMm ? ' (🤝 주선자)' : '') + ' · ' + fmtDate(m.at) + '</div>' +
-        '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:#efefef;white-space:pre-wrap;word-break:break-word;">' + escapeHtml(m.text) + '</div></div>';
+        '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:var(--bubble);color:var(--ink);white-space:pre-wrap;word-break:break-word;">' + escapeHtml(m.text) + '</div></div>';
     }).join('');
     var ov = openModal('<h3>🚨 신고된 대화</h3>' +
       '<p class="modal-msg" style="font-size:0.8rem;">' + escapeHtml(names.join(' ↔ ')) + ' · 사유: ' + escapeHtml(r.reportReason || '') + '</p>' +
@@ -5166,7 +5179,7 @@
     var delBtn = withDel ? ' <button type="button" data-action="msg-del" data-id="' + escapeHtml(m.id) + '" title="관리자 목록에서 숨기기" style="border:none;background:none;color:var(--muted);cursor:pointer;font-size:0.82rem;padding:0;">&#10005;</button>' : '';
     return '<div style="display:flex;flex-direction:column;align-items:' + (mine ? 'flex-end' : 'flex-start') + ';margin:6px 0;">' +
       '<div style="font-size:0.66rem;font-weight:700;color:var(--muted);margin-bottom:2px;' + (mine ? 'text-align:right;' : '') + '">' + who + ' · ' + fmtDate(m.at) + delBtn + '</div>' +
-      '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:' + (mine ? 'var(--accent)' : '#efefef') + ';color:' + (mine ? '#fff' : 'var(--ink)') + ';white-space:pre-wrap;word-break:break-word;' + (af ? 'border-left:3px solid var(--gold);' : '') + '">' +
+      '<div style="max-width:80%;padding:7px 11px;border-radius:13px;background:' + (mine ? 'var(--accent)' : 'var(--bubble)') + ';color:' + (mine ? '#fff' : 'var(--ink)') + ';white-space:pre-wrap;word-break:break-word;' + (af ? 'border-left:3px solid var(--gold);' : '') + '">' +
         escapeHtml(af ? af.text : m.text) +
       '</div></div>';
   }
@@ -5285,7 +5298,7 @@
     chatModalGrow(overlay.querySelector('#mc-text'));
     function close() { closeModal(overlay); schedulePaint(); }   /* paint() 직접 호출은 작성 중인 신청서를 비움 → 보호(isEditingForm)가 있는 예약 그리기 */
     overlay.querySelector('#modal-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', function (e) { if (e.target === overlay || (e.target.closest && e.target.closest('.qa-quick button'))) close(); });   /* 바로가기는 창을 닫고 그 기능으로 */
+    overlay.addEventListener('click', function (e) { if ((e.target === overlay && !overlayHasDraft(overlay)) || (e.target.closest && e.target.closest('.qa-quick button'))) close(); });   /* 바로가기는 창을 닫고 그 기능으로 */
     var qaAi = overlay.querySelector('#qa-ai');
     if (qaAi) qaAi.addEventListener('click', function () { setTimeout(openAiHelper, 0); });
     overlay.querySelector('#mc-send').addEventListener('click', function () {
@@ -5300,7 +5313,7 @@
     });
     var da = overlay.querySelector('#mc-delall');
     if (da) da.addEventListener('click', function () {
-      modalConfirm('전체 삭제', '관리자와의 메시지 이력을 모두 지울까요?').then(function (ok) {
+      modalConfirm('내 화면에서 지우기', '관리자와의 대화 기록을 내 화면에서 지울까요? 관리자 쪽 기록은 그대로 남아요.').then(function (ok) {
         if (!ok) return;
         deleteMyThread().then(close);
       });
@@ -5573,7 +5586,7 @@
         if ((requireText && !v) || (minLen > 0 && v.length < minLen)) { var w = overlay.querySelector('#modal-msg-warn'); if (w) w.hidden = false; textEl.focus(); return; }
         finish(v);
       });
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay && !overlayHasDraft(overlay)) finish(null); });
     });
   }
   function reqNote(r) {
@@ -5613,7 +5626,7 @@
       searchInput.addEventListener('input', render);
       listEl.addEventListener('click', function (e) { var it = e.target.closest('[data-cid]'); if (it) finish(it.getAttribute('data-label')); });
       overlay.querySelector('#ref-cancel').addEventListener('click', function () { finish(null); });
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay && !overlayHasDraft(overlay)) finish(null); });
     });
   }
   function setReferrerField(val) {
@@ -5875,7 +5888,7 @@
       var countBadge = pCount > 1 ? '<span class="pf-photos-count">' + pCount + '장</span>' : '';
       /* 사진은 항상 흐리게(비공개) — 저장된 blurPhoto 값과 무관하게 원본은 사진 요청 승인자에게만 (구버전 데이터 보호) */
       photo = '<div class="pf-photos blurred" data-action="reveal-photo" data-id="' + escapeHtml(entry.id) + '">' +
-        '<img src="' + thumb + '" alt="' + escapeHtml(displayName) + ' 사진" loading="lazy">' +
+        '<img src="' + safeImgSrc(thumb) + '" alt="' + escapeHtml(displayName) + ' 사진" loading="lazy">' +
         countBadge + '</div>';
     } else {
       photo = '<div class="pf-photo pf-photo--empty" style="background:' + avatarColor(entry.id) + '">' + escapeHtml(initials(displayName)) + '</div>';
@@ -6165,7 +6178,7 @@
     var displayName = entry.nickname || entry.name || '';
     var thumb = cardThumb(entry);
     var photo = thumb
-      ? '<div class="compact-thumb blurred"><img src="' + thumb + '" alt="" loading="lazy"></div>'
+      ? '<div class="compact-thumb blurred"><img src="' + safeImgSrc(thumb) + '" alt="" loading="lazy"></div>'
       : '<div class="compact-thumb compact-thumb--empty" style="background:' + avatarColor(entry.id) + '">' + escapeHtml(initials(displayName)) + '</div>';
     var ageStr = entry.birthYear ? (String(entry.birthYear).slice(2) + '년생') : '-';
     return (
@@ -6944,7 +6957,7 @@
     var me = findMyEntry(currentState);
     if (!me) return modalNotice('로그인 필요', '먼저 로그인해주세요.');
     var nick = nickForEntry(currentState, otherId);
-    modalConfirm('🚫 ' + nick + '님 차단', '차단하면 서로 명단에서 보이지 않고, 사진·대화 신청과 채팅을 주고받을 수 없어요. 지금 연결된 사진·대화도 끊겨요. 상대에게는 알리지 않아요. (⚙️ 내 계정 → 차단한 회원에서 언제든 풀 수 있어요)', '차단', 'danger').then(function (ok) {
+    modalConfirm('🚫 ' + nick + '님 차단', '차단하면 서로 명단에서 보이지 않고, 사진·대화 신청과 채팅을 주고받을 수 없어요. 지금 연결된 사진·대화도 끊겨요. 상대에게 차단 알림은 가지 않아요. (⚙️ 내 계정 → 차단한 회원에서 언제든 풀 수 있어요)', '차단', 'danger').then(function (ok) {
       if (!ok) return;
       reqCall('reqBlock', { as: me.id, other: otherId }).then(function () {
         if (_openChatClose && _openChatWith === otherId) _openChatClose();
@@ -6982,7 +6995,7 @@
     }).join('');
     var ov = openModal('<h3>🚫 차단한 회원</h3>' +
       (rows || '<p class="modal-msg">차단한 회원이 없어요.</p>') +
-      '<p class="modal-msg" style="margin:10px 0 0;font-size:0.78rem;color:var(--muted);">차단한 회원과는 서로 명단에서 보이지 않고 신청·채팅을 주고받을 수 없어요. 상대는 차단 여부를 알 수 없어요. 회원 프로필이나 채팅 ⋯ 메뉴에서 차단할 수 있어요.</p>' +
+      '<p class="modal-msg" style="margin:10px 0 0;font-size:0.78rem;color:var(--muted);">차단한 회원과는 서로 명단에서 보이지 않고 신청·채팅을 주고받을 수 없어요. 상대에게 차단 알림은 가지 않아요. 회원 프로필이나 채팅 ⋯ 메뉴에서 차단할 수 있어요.</p>' +
       '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button></div>');
     ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
     ov.addEventListener('click', function (e) {
@@ -7086,7 +7099,7 @@
         '<button type="button" class="req-chip gold" id="ai-to-admin">👑 관리자에게 직접</button>' +
       '</div>' +
       '<div class="cm-thread" id="ai-h-log"></div>' +
-      '<div class="cm-bar"><textarea class="modal-input" id="ai-h-in" rows="1" maxlength="500" placeholder="앱 사용법·소개팅 고민 무엇이든"></textarea>' +
+      '<div class="cm-bar"><textarea class="modal-input" id="ai-h-in" rows="1" maxlength="500" placeholder="무엇이든 물어보세요"></textarea>' +
         '<button type="button" class="card-btn primary" id="ai-h-send">보내기</button></div>'
     );
     ov.classList.add('wide-modal');
@@ -7103,7 +7116,10 @@
       log.appendChild(d); log.scrollTop = log.scrollHeight;
       return b;
     }
-    function myTexts() { return hist.filter(function (h) { return h.r === 'me'; }).map(function (h) { return h.t; }).join(' / ').slice(0, 450); }
+    function myTexts() {   /* 최근 말이 잘리지 않게 뒤에서부터 3개까지, 길면 앞쪽을 버림 (2026-10-29) */
+      var t = hist.filter(function (h) { return h.r === 'me'; }).slice(-3).map(function (h) { return h.t; }).join(' / ');
+      return t.length > 450 ? '…' + t.slice(-449) : t;
+    }
     function buttonsRow(buttons) {
       if (!buttons || !buttons.length) return;
       var row = document.createElement('div');
@@ -7132,19 +7148,23 @@
         wait.textContent = rep;
         hist.push({ r: 'ai', t: rep.slice(0, 300) });
         buttonsRow(d.buttons);
+        /* 긴 답은 처음부터 보이게 — 답 머리로 스크롤 (2026-10-29 점검: 끝부분부터 보여 앞을 못 읽었음) */
+        try { var rowEl = wait.closest('.chat-row') || wait; log.scrollTop = Math.max(0, rowEl.offsetTop - 4);   /* .cm-thread 가 position:relative 라 offsetTop 이 대화칸 기준 */ } catch (e2) {}
       }).catch(function (e) {
         wait.textContent = (e && /resource-exhausted/.test(e.code || '')) ? e.message : '지금은 답하기 어려워요. 관리자에게 바로 전달할 수 있어요.';
         buttonsRow([{ act: 'forward', label: '📨 관리자에게 전달', tag: '문의' }]);
       }).then(function () { sendBtn.disabled = false; });
     }
-    bubble('안녕하세요! 앱 사용법이나 불편한 점을 편하게 물어보세요 😊', false);
+    bubble('안녕하세요! 앱 사용법, 불편한 점, 소개팅 고민(첫 메시지·만남 등) 무엇이든 편하게 물어보세요 😊', false);
     chatModalGrow(inp);
     sendBtn.addEventListener('click', function () { send(); });
-    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+    var aiTouch = false; try { aiTouch = matchMedia('(pointer: coarse)').matches; } catch (e0) {}
+    /* 폰은 Enter = 줄바꿈(보내기 버튼으로), 한글 조합 중(keyCode 229) Enter 는 안 보냄 — 회원 채팅과 같은 규칙 (2026-10-29) */
+    inp.addEventListener('keydown', function (e) { if (!aiTouch && e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); } });
     Array.prototype.forEach.call(ov.querySelectorAll('[data-q]'), function (c) { c.addEventListener('click', function () { send(c.getAttribute('data-q')); }); });
     ov.querySelector('#ai-to-admin').addEventListener('click', function () { closeModal(ov); openMemberMsgCenter(); });
     ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
-    ov.addEventListener('click', function (e) { if (e.target === ov && !hist.length) closeModal(ov); });   /* 대화를 시작했으면 바깥 눌러도 안 닫힘(대화가 사라지니까) */
+    ov.addEventListener('click', function (e) { if (e.target === ov && !hist.length && !overlayHasDraft(ov)) closeModal(ov); });   /* 대화를 시작했으면 바깥 눌러도 안 닫힘(대화가 사라지니까) */
   }
   function aiHelperAct(b, text, ov, btn) {
     var myId = currentUser && currentUser.id;
@@ -7158,9 +7178,15 @@
     }
     closeModal(ov);
     var me = findMyEntry(currentState);
-    if (b.act === 'pin') handleChangeMyPin();
-    else if (b.act === 'deactivate' && me) handleDeactivate(me.id);
-    else if (b.act === 'delete' && me) handleDelete(me.id);
+    if (b.act === 'pin') { handleChangeMyPin(); return; }
+    /* 주선자가 친구로 활동 중이거나 주선자 계정이면 💤·🗑 를 여기서 바로 하지 않음 — 친구 프로필이나 주선자 계정이 엉뚱하게 처리될 수 있음 (2026-10-29 점검) */
+    var asFriend = !!(actingAs && currentUser && actingAs !== currentUser.id && !(me && me.ownerSelf));
+    if (!me || asFriend || isMatchmakerEntry(me)) {
+      modalNotice('안내', asFriend ? "지금은 친구 프로필로 활동 중이에요. 친구 프로필은 '⚙️ 친구 계정'에서, 내 계정은 본인으로 바꾼 뒤 '⚙️ 내 계정'에서 해 주세요." : "주선자 계정은 메시지함 '⚙️ 주선자 계정'에서 해 주세요.");
+      return;
+    }
+    if (b.act === 'deactivate') handleDeactivate(me.id);
+    else if (b.act === 'delete') handleDelete(me.id);
   }
   /* ✨ 소개글 다듬기 — 회원 본인 글만 보내고, '적용'을 눌러야 입력칸에 들어감(저장은 회원이 직접) */
   function aiIntroCoach(textarea) {
@@ -10045,7 +10071,7 @@
       overlay.querySelector('#modal-ok').addEventListener('click', function () {
         finish({ p1: overlay.querySelector('#np1').value.trim(), p2: overlay.querySelector('#np2').value.trim() });
       });
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay && !overlayHasDraft(overlay)) finish(null); });
     });
   }
 
@@ -11436,7 +11462,7 @@
         noteOverlay.querySelector('#modal-ok').addEventListener('click', function () { submit(false); });
         var revBtn = noteOverlay.querySelector('#modal-ok-reveal');
         if (revBtn) revBtn.addEventListener('click', function () { submit(true); });
-        noteOverlay.addEventListener('click', function (e) { if (e.target === noteOverlay) finish(null); });
+        noteOverlay.addEventListener('click', function (e) { if (e.target === noteOverlay && !overlayHasDraft(noteOverlay)) finish(null); });
       }).then(function (result) {
         if (!result) return;
         /* 대화 신청은 번호를 공유하지 않음 — 수락되면 앱 내 채팅으로만 대화.
@@ -11898,7 +11924,7 @@
       reqCall('reqUnapprove', { as: me.id, id: id }).then(function () {
         return refreshNow();
       }).then(function () {
-        modalNotice('승인 취소됨', fromName + '님의 요청이 다시 대기 상태가 됐어요. 상대는 더 이상 ' + (isPhoto ? '사진을' : '번호를') + ' 볼 수 없어요.');
+        modalNotice('승인 취소됨', fromName + '님의 요청이 다시 대기 상태가 됐어요. 상대는 더 이상 ' + (isPhoto ? '사진을 볼' : '채팅을 할') + ' 수 없어요.');
       }).catch(function (err) { modalNotice('오류', '취소에 실패했어요: ' + (err.message || err)); });
     });
   }
@@ -12049,7 +12075,7 @@
       function finish(v) { closeModal(overlay); resolve(v); }
       overlay.querySelector('#modal-cancel').addEventListener('click', function () { finish(null); });
       overlay.querySelector('#modal-ok').addEventListener('click', function () { finish(overlay.querySelector('#reapply-note').value.trim()); });
-      overlay.addEventListener('click', function (e) { if (e.target === overlay) finish(null); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay && !overlayHasDraft(overlay)) finish(null); });
     }).then(function (note) {
       if (note === null || note === undefined) return;
       /* 대기 상태로 초기화 (이전 보류/거절/답장 흔적 제거) — 서버가 */
@@ -12178,7 +12204,7 @@
     overlay.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     overlay.addEventListener('dragstart', function (e) { e.preventDefault(); });
     function render() {
-      var html = '<img class="gallery-img" src="' + photos[idx] + '" alt="사진 ' + (idx + 1) + '" draggable="false">';
+      var html = '<img class="gallery-img" src="' + safeImgSrc(photos[idx]) + '" alt="사진 ' + (idx + 1) + '" draggable="false">';
       if (wmBg) html += '<div class="gallery-wm" style="background-image:' + wmBg.replace(/"/g, '&quot;') + '"></div>';
       if (photos.length > 1) {
         html += '<div class="gallery-counter">' + (idx + 1) + ' / ' + photos.length + '</div>';
@@ -12219,7 +12245,7 @@
     var ov = document.createElement('div');
     ov.className = 'gallery-overlay';
     var th = cardThumb(entry);
-    ov.innerHTML = (th ? '<img class="gallery-img" src="' + th + '" alt="" style="filter:blur(14px);opacity:.6;">' : '') +
+    ov.innerHTML = (th ? '<img class="gallery-img" src="' + safeImgSrc(th) + '" alt="" style="filter:blur(14px);opacity:.6;">' : '') +
       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:0.95rem;text-shadow:0 1px 4px rgba(0,0,0,.6);">사진 불러오는 중…</div>' +
       '<button class="gallery-close" id="gal-close">&times;</button>';
     var cancelled = false;
@@ -12338,7 +12364,7 @@
       var el = document.getElementById('detail-photos');
       if (!el) return;
       if (!photos.length) { el.style.display = 'none'; return; }
-      el.innerHTML = photos.map(function (p, i) { return '<img src="' + p + '" data-gidx="' + i + '" title="눌러서 크게 보기" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;">'; }).join('');
+      el.innerHTML = photos.map(function (p, i) { return '<img src="' + safeImgSrc(p) + '" data-gidx="' + i + '" title="눌러서 크게 보기" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;">'; }).join('');
       el.addEventListener('click', function (ev) {
         var img = ev.target.closest('img[data-gidx]');
         if (img) openGallery(photos, parseInt(img.getAttribute('data-gidx'), 10) || 0);
@@ -12996,7 +13022,7 @@
     if (e.target.closest('#ai-helper-open')) { openAiHelper(); return; }
     if (e.target.closest('#ai-intro-coach')) { var ta = document.getElementById('f-intro'); if (ta) aiIntroCoach(ta); return; }
     if (e.target.closest('#member-msg-delall')) {
-      modalConfirm('전체 삭제', '관리자와의 메시지 이력을 모두 지울까요?').then(function (ok) {
+      modalConfirm('내 화면에서 지우기', '관리자와의 대화 기록을 내 화면에서 지울까요? 관리자 쪽 기록은 그대로 남아요.').then(function (ok) {
         if (ok) deleteMyThread();
       });
       return;
@@ -13390,7 +13416,7 @@
     var area = document.getElementById('photo-upload-area');
     if (!area) return;
     area.innerHTML = photoDataUrls.map(function (url, i) {
-      return '<div class="photo-thumb"><img src="' + url + '" alt="photo ' + (i + 1) + '"><button type="button" class="photo-thumb-remove" data-remove-photo="' + i + '">&times;</button></div>';
+      return '<div class="photo-thumb"><img src="' + safeImgSrc(url) + '" alt="photo ' + (i + 1) + '"><button type="button" class="photo-thumb-remove" data-remove-photo="' + i + '">&times;</button></div>';
     }).join('') || '<span style="color:var(--muted);font-size:0.82rem;">사진 없음</span>';
   }
 
@@ -13539,6 +13565,9 @@
       if (currentUser && currentUser.id) {
         var meAny = (state.entries || []).concat(state.pendingEntries || []).find(function (e) { return e.id === currentUser.id; });
         formRole = (meAny && meAny.isMatchmaker) ? 'matchmaker' : 'self';
+        /* 로그인 유지로 다시 연 회원이 빈 '본인을 소개해 주세요' 신청서부터 보지 않게 (10-28 베타 시험) — 명단/메시지함으로 */
+        var meApproved = (state.entries || []).some(function (e) { return e.id === currentUser.id; });
+        if (meAny && activeTab === 'form' && !editingEntryId) activeTab = (meAny.isMatchmaker || !meApproved) ? 'mine' : 'list';
       }
 
       var adminPromise = Promise.resolve();
@@ -13782,7 +13811,7 @@
           '&#128214; <b>사용 설명서</b><br>' +
           '<ul style="padding-left:18px;margin:6px 0;list-style:none;">' +
             '<li style="' + li + '"><b>① 신청서 작성</b> <span style="color:var(--muted);">(관리자 승인 후 등록)</span>' +
-              '<div style="color:var(--muted);font-size:0.76rem;margin-top:2px;">※ 전화번호는 카카오톡 알림 및 지인과 서로 마주치지 않기 위해 받고 있어요. <b>보안 탭</b> 참고</div></li>' +
+              '<div style="color:var(--muted);font-size:0.76rem;margin-top:2px;">※ 전화번호는 관리자 안내 연락과 지인 필터(지인과 서로 안 보이기)에만 써요. <b>보안 탭</b> 참고</div></li>' +
             '<li style="' + li + '"><b>② 명단 보기</b><br>' +
               '&nbsp;&nbsp;<b>&#128247; 사진 요청</b>(수락 시 서로 공개)<br>' +
               '&nbsp;&nbsp;<b>&#128172; 대화 요청</b>(수락 시 인앱 채팅)</li>' +
@@ -13801,7 +13830,7 @@
         '</div>' +
         '<div style="' + box + 'margin-bottom:0;">' +
           '&#128276; <b>알림</b><br>' +
-          '<span style="color:var(--muted);">카카오톡 알림을 준비 중이에요. 현재는 상단 <b>&#128276; 알림</b>을 눌러 <b>가이드에 따라 설정</b>해 주세요.</span>' +
+          '<span style="color:var(--muted);">상단 <b>&#128276; 알림</b>을 눌러 <b>가이드에 따라 푸시 알림</b>을 켜 주세요.</span>' +
         '</div>' +
       '</div>';
     var secPanel =
@@ -13809,10 +13838,10 @@
         '<ul style="padding-left:20px;margin:6px 0;">' +
           '<li><b>개인 PIN</b> → 강력한 해시(PBKDF2), 유출돼도 원문 복원 불가, 관리자도 열람 불가 <span style="color:var(--muted);">(해킹 방지)</span></li>' +
           '<li><b>실명·전화번호</b> → 암호화 저장, 다른 회원엔 비공개, 관리자만 열람 가능 <span style="color:var(--muted);">(연락 목적)</span></li>' +
-          '<li><b>회원 간 채팅</b> → 관리자에게 표시 안 됨 <span style="color:var(--muted);">(서버 보관, 추후 안전·분쟁 대응 목적)</span></li>' +
-          '<li><b>사진</b>은 당사자가 직접 <b>수락</b>해야만 공개돼요 (수락 시 서로 공개). 전화번호는 서로 공개하지 않고, 대화가 연결되면 <b>앱 안 채팅</b>으로 대화해요.</li>' +
-          '<li><b>데이터베이스 잠금</b> — 인증된 접속만 허용하고, 외부에서 데이터를 통째로 보거나 지울 수 없도록 규칙으로 막았어요.</li>' +
-          '<li><b>수정·삭제는 로그인한 본인</b>(또는 관리자)만 할 수 있어요.</li>' +
+          '<li><b>회원 간 채팅</b> → 두 사람(주선자가 관리하는 프로필이면 담당 주선자 포함)만 봐요. 관리자는 <b>신고된 대화만</b> 열람 <span style="color:var(--muted);">(서버 보관, 안전·분쟁 대응 목적)</span></li>' +
+          '<li><b>사진</b>은 사진 요청이 <b>수락</b>되면 서로 공개돼요 (본인이 먼저 공개를 고를 수도 있어요). 전화번호는 서로 공개하지 않고, 대화가 연결되면 <b>앱 안 채팅</b>으로 대화해요.</li>' +
+          '<li><b>데이터베이스 잠금</b> — 로그인한 회원·관리자만 앱 데이터에 접근할 수 있고, 실명·번호·PIN 은 따로 잠가 둬요.</li>' +
+          '<li><b>남의 정보를 바꾸려는 시도</b>는 서버가 감지해 되돌리고 관리자에게 알려요.</li>' +
         '</ul>' +
         '<p style="color:var(--muted);font-size:0.82rem;margin-top:10px;">궁금하거나 불안한 점이 있으면 언제든 상단 &#128172; Q&amp;A 로 물어봐 주세요!</p>' +
       '</div></div>';
