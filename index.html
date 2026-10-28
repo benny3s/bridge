@@ -1057,7 +1057,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-28-480';
+  var APP_VERSION = '2026-10-28-481';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -10810,7 +10810,8 @@
         if (pp.birthYear && !(Number(tomb.birthYear) >= 1950)) { tomb.birthYear = pp.birthYear; filled = true; }
         if (filled) tomb.restoredNote = '탈퇴 전 회원이 프로필을 지움 → 지우기 전 값으로 기록';
       })();
-      var admTomb = { nickname: tomb.nickname, gender: tomb.gender, birthYear: tomb.birthYear, region: tomb.region, reason: tomb.reason };
+      var admTomb = { nickname: tomb.nickname, gender: tomb.gender, birthYear: tomb.birthYear, region: tomb.region, reason: tomb.reason,
+        entryId: id };   /* 삭제된 계정 기기가 다시 로그인하면 서버가 누구였는지 알아봄 (v481) */
       if (tomb.restoredNote) admTomb.restoredNote = tomb.restoredNote;
       var pubTomb = { id: tomb.id, serial: tomb.serial, uid: tomb.uid, gender: tomb.gender, joinedAt: tomb.joinedAt,
         connectedN: tomb.connectedN, countable: tomb.countable, deletedAt: tomb.deletedAt };

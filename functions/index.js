@@ -116,6 +116,28 @@ async function pinSourceFor(entry, state) {
   return Object.assign({ id: entry.id, pinPending: !rec.pinAuth && !rec.pinHash && !!entry.pinFrom }, rec);
 }
 const ENTRY_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
+/* 없는 계정 번호가 삭제된 회원 것인지: adminOnly/deleted_profiles 의 entryId(v481~) → 없으면 금고의 삭제 표시 시각과
+   삭제 기록 시각을 맞춰 봄(금고는 7일 보관). sameNet = 그 계정이 예전에 앱을 열던 회선과 같은지 */
+async function deletedAccountOf(entryId, ip, state) {
+  const dp = (await db.doc('adminOnly/deleted_profiles').get()).data() || {};
+  let tombId = Object.keys(dp).find((k) => dp[k] && dp[k].entryId === entryId) || null;
+  if (!tombId) {
+    const v = (await db.doc('adminOnly/' + entryId).get()).data() || {};
+    const t = Date.parse(v.deletedAt || '');
+    if (t) {
+      const near = (state.deletedLog || []).find((x) => x && Math.abs(Date.parse(x.deletedAt || 0) - t) < 120000);
+      if (near) tombId = near.id;
+    }
+  }
+  if (!tombId) return null;
+  const tomb = (state.deletedLog || []).find((x) => x && x.id === tombId) || {};
+  const net = ipNet(ip);
+  let sameNet = false;
+  const q = await db.collection('accessSeen').where('uid', '==', entryId).limit(50).get().catch(() => null);
+  if (q) q.forEach((x) => { if (ipNet(x.data().ip) === net) sameNet = true; });
+  const intel = await ipIntel(ip).catch(() => null);
+  return { tombId, nickname: (dp[tombId] || {}).nickname || '', serial: tomb.serial || '', sameNet, vpn: !!(intel && intel.dcvpn) };
+}
 /* PIN이 필요한 서버 기능(번호 저장·지인 필터) 공통 본인 확인: 서버 로그인 토큰이 그 계정이면 통과,
    아니면 PIN 확인(로그인과 같은 실패 횟수 잠금 적용 — 예전엔 잠금 없이 PIN을 무제한 시도할 수 있었음) */
 async function callerOwns(context, state, entry, pin) {
@@ -199,6 +221,17 @@ exports.memberLogin = functions
       await db.collection('loginAudit').add(Object.assign({ status: 'notfound' }, auditMeta)).catch(() => {});
       await ipFailRecord(ip, 'member', entryId).catch(() => {});
       const o = Object.assign({}, audO, { status: 'notfound', uid: '' });
+      /* 삭제된 계정의 기기가 예전 회선에서 자동 로그인 → 알림 없이 기록만 (2026-10-28 초코 폰 08:35 헛경고) */
+      const gone = await deletedAccountOf(entryId, ip, state).catch(() => null);
+      if (gone && gone.sameNet && !gone.vpn) {
+        const at = new Date().toISOString();
+        await db.collection('securityAlerts').add({ at, resolved: true, resolvedAt: at, resolvedBy: 'AI', type: 'suspicious', kind: 'notfound',
+          target: entryId, nickname: gone.nickname || '', ip, ua: String(auditMeta.ua || '').slice(0, 300), origin: String(auditMeta.origin || '').slice(0, 200),
+          device: deviceOf(auditMeta.ua), reasons: ['삭제된 계정'], intel: null,
+          triage: { state: 'benign', by: 'rule', pushed: false, at,
+            reason: '삭제된 ' + (gone.nickname || '회원') + (gone.serial ? '(' + gone.serial + '번)' : '') + ' 계정의 기기가 예전에 쓰던 회선에서 자동 로그인 시도' } }).catch(() => {});
+        throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
+      }
       await suspiciousAlert(o, await suspicionOf(o)).catch(() => {});
       throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
     }
@@ -2300,13 +2333,14 @@ async function suspiciousAlert(o, s, extra) {
 }
 
 /* ── 보안 경고 AI 판단 (서버에서 Claude API — PC 꺼져도 동작) ──
-   규칙 → Claude Haiku 5.5 → 애매하면 Claude Opus 5.5. AI 에는 닉네임·IP 원문을 보내지 않고 정리한 특징(통신사·도시·기기·전 기록과 같은 회선인지)만 보냄.
+   규칙 → Claude Opus 5.5 (10-28 전엔 Haiku 먼저). AI 에는 닉네임·IP 원문을 보내지 않고 정리한 특징(통신사·도시·기기·전 기록과 같은 회선인지)만 보냄.
    어느 단계든 실패·시간 초과면 그냥 푸시(알림을 놓치지 않는 쪽). 10분 넘게 'pending' 인 건 remindPending 이 푸시 */
 const TRIAGE_LOW_RE = /^(처음 보는 기기|\d+일 만의 접속)/;
 const TRIAGE_SYS = [
   '너는 작은 지인 소개팅 웹앱(회원 약 150명, 4자리 PIN 로그인)의 보안 경고를 분류하는 보조야.',
   '2026-10-26 외부 공격자가 흔한 PIN 을 대입해 계정 4개를 탈취했고, 그 뒤 Mac OS X·Chrome 154 브라우저와 상용 VPN·가정용 SK브로드밴드 회선으로 재시도했어.',
-  '지금 볼 경고는 PIN 이 맞았거나 이미 로그인된 회원이 앱을 연 기록인데 "처음 보는 기기" 또는 "오래만의 접속" 이라서 걸린 거야.',
+  '경고 종류는 kind 에 있어. 대부분은 PIN 이 맞았거나 이미 로그인된 회원이 앱을 연 기록인데 "처음 보는 기기" 또는 "오래만의 접속" 이라서 걸린 거고,',
+  '"없는 계정 번호" 는 deletedAccount 가 있으면 삭제된 회원 기기가 저장된 로그인으로 다시 시도한 것(usedThisLineBefore=true 면 그 회원이 쓰던 회선), 없으면 지어낸 번호라 수상해.',
   '회원 본인이 새 폰·PC·브라우저를 쓰거나 집·회사·이동통신망을 바꾸는 일은 흔해. 같은 회선(같은 IP 또는 같은 IPv6 /64), 같은 통신사·도시, 같은 기기 종류(아이폰↔아이폰 다른 브라우저 등)면 본인일 가능성이 높아.',
   '공격 특징(Mac Chrome 154, 데이터센터 VPN, 처음 보는 통신사·나라, 탈취 이력 계정)과 겹치거나 평소 기록과 동떨어지면 수상해.',
   '판단: benign = 본인으로 보여 알림 필요 없음 / suspicious = 관리자가 바로 알아야 함 / unsure = 근거가 부족해 판단 어려움.',
@@ -2384,7 +2418,9 @@ async function triageFacts(d) {
   return {
     sameNet, sessionBeforeAttack,
     facts: {
-      kind: d.kind === 'access' ? '이미 로그인된 회원이 앱을 엶' : 'PIN 로그인 성공',
+      kind: TRIAGE_KIND[d.kind] || d.kind,   /* 전엔 access 외엔 전부 'PIN 로그인 성공' 이라 '없는 계정' 시도도 성공으로 보냈음 */
+      deletedAccount: d.kind === 'notfound' ? await deletedAccountOf(d.target, d.ip, (await db.doc('app/state').get()).data() || {})
+        .then((g) => g ? { nickname: g.nickname ? '있음' : '', serial: g.serial, usedThisLineBefore: g.sameNet } : null).catch(() => null) : undefined,
       sessionStartedAt: d.authAt || '',
       sessionBeforeAttack,
       pinLoginsRecent: pinLogins.slice(0, 5).map((v) => ({ at: v.at, sameLineAsNow: ipNet(v.ip) === net, device: deviceOf(v.ua) })),
@@ -2400,6 +2436,10 @@ async function triageFacts(d) {
   };
 }
 const ATTACK_START_MS = Date.parse('2026-10-26T07:28:00Z');
+const TRIAGE_KIND = {
+  access: '이미 로그인된 회원이 앱을 엶', ok: 'PIN 로그인 성공', fail: 'PIN 틀림', weak: '흔한 PIN 이 맞음(로그인은 막힘)',
+  blocked: '차단·잠김 상태에서 다시 시도', notfound: '없는 계정 번호로 로그인 시도(삭제된 계정이거나 지어낸 번호)'
+};
 /* User-Agent 에서 브라우저 이름·주 버전만 (예: 'Chrome 154') — 원문은 AI 에 보내지 않음 */
 function uaVersion(ua) {
   const m = String(ua || '').match(/(Whale|SamsungBrowser|Edg|CriOS|Chrome|Firefox|Version)\/(\d+)/);
@@ -2432,16 +2472,10 @@ async function runTriage(ref, d) {
   const key = (process.env.ANTHROPIC_API_KEY || '').trim();
   if (!key) throw new Error('no ANTHROPIC_API_KEY');
   const prompt = '다음 경고를 판단해 줘.\n' + JSON.stringify(r.facts, null, 1);
-  let v = null;
-  try {
-    const h = await callClaudeJson(key, 'claude-haiku-5-5', TRIAGE_SYS, prompt, TRIAGE_SCHEMA, { effort: 'low', timeout: 25000 });
-    if (!h.refused && h.out && h.out.verdict !== 'unsure') v = { state: h.out.verdict, by: h.model, reason: String(h.out.reason || '').slice(0, 200) };
-  } catch (e) { console.error('triage haiku', e.message); }
-  if (!v) {
-    const o = await callClaudeJson(key, 'claude-opus-5-5', TRIAGE_SYS, prompt, TRIAGE_SCHEMA, { effort: 'medium', timeout: 70000, maxTokens: 6000, fallbacks: true });
-    v = (o.refused || !o.out) ? { state: 'unsure', by: o.model, reason: 'AI 가 판단을 거절함' }
-      : { state: o.out.verdict, by: o.model, reason: String(o.out.reason || '').slice(0, 200) };
-  }
+  /* 2026-10-28 Benny: Haiku 먼저 → 애매할 때만 Opus 였는데, AI 까지 오는 경고는 주 몇 건이라 처음부터 Opus (건당 수십 원) */
+  const o = await callClaudeJson(key, 'claude-opus-5-5', TRIAGE_SYS, prompt, TRIAGE_SCHEMA, { effort: 'medium', timeout: 70000, maxTokens: 6000, fallbacks: true });
+  const v = (o.refused || !o.out) ? { state: 'unsure', by: o.model, reason: 'AI 가 판단을 거절함' }
+    : { state: o.out.verdict, by: o.model, reason: String(o.out.reason || '').slice(0, 200) };
   if (urgent) {
     await ref.set({ triage: Object.assign({}, d.triage, { state: 'noted', ai: v.state, by: v.by, reason: v.reason, at: new Date().toISOString() }) }, { merge: true });
   } else if (v.state === 'benign') {
