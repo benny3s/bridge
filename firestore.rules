@@ -78,13 +78,16 @@ service cloud.firestore {
 
     // 푸시 토큰 — 본인 것만, 관리자는 전체(알림 설정 확인용)
     match /pushTokens/{entryId} {
-      allow read, delete: if isAdmin() || isSelf(entryId);
+      allow read: if isAdmin() || isSelf(entryId);
+      // 관리자 알림 목록('admin')은 서버만 씀 (10-29 기기에 묶기 — 앱은 adminDevice pushOn/pushOff, 옛 목록은 서버가 비움)
+      allow delete: if entryId != 'admin' && (isAdmin() || isSelf(entryId));
       // 쓰기: 관리자, 또는 로그인한 회원·승인대기 본인만 + 앱이 쓰는 필드만·토큰 10개까지 (2026-10-27)
-      // '이번만 허용' 관리자(ao)는 관리자 알림 기기를 못 넣음 — 12시간 뒤에도 관리자 알림을 받게 되므로
-      allow create, update: if (isAdmin() && request.auth.token.get('ao', 0) == 0)
+      // '이번만 허용' 관리자(ao)는 남의 알림 문서도 못 씀
+      allow create, update: if entryId != 'admin'
+                    && ((isAdmin() && request.auth.token.get('ao', 0) == 0)
                     || (isSelf(entryId) && (request.auth.token.m == 1 || request.auth.token.p == 1)
                         && request.resource.data.keys().hasOnly(['tokens', 'nickname', 'updatedAt'])
-                        && request.resource.data.get('tokens', []).size() <= 10);
+                        && request.resource.data.get('tokens', []).size() <= 10));
     }
 
     // 관리자 전용: 회원별 실명·번호·알게 된 경로(관리자 키로 암호화된 값) — 관리자만

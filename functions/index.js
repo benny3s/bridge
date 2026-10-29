@@ -190,6 +190,10 @@ exports.memberLogin = functions
     const pin = String((data && data.pin) || '');
     if (!entryId || !pin || pin.length > 64) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.');
     if (!ENTRY_ID_RE.test(entryId)) throw new HttpsError('invalid-argument', '닉네임과 PIN을 확인해주세요.'); /* 계정 ID 형식 검사 (문서 경로로 쓰이므로) */
+    /* App Check (10-29): 운영은 감시만 — 로그인 기록에 확인 여부(ac)와 앱이 잰 토큰 준비 시간(acMs, 모르면 -1)을 남겨 강제 전에 비율·속도를 봄. 베타만 강제 */
+    const acOk = !!(context && context.app);
+    const acRaw = Number(data && data.acMs);
+    const acMs = Number.isFinite(acRaw) && acRaw >= 0 ? Math.min(60000, Math.round(acRaw)) : -1;
     const ip = clientIp(context);
     const reqH = ((context && context.rawRequest) && context.rawRequest.headers) || {};
     const auditMeta = {
@@ -199,8 +203,13 @@ exports.memberLogin = functions
       appengineIp: String(reqH['x-appengine-user-ip'] || ''),
       xff: String(reqH['x-forwarded-for'] || ''),
       ua: String(reqH['user-agent'] || '').slice(0, 300),
-      origin: String(reqH['origin'] || reqH['referer'] || '').slice(0, 200)
+      origin: String(reqH['origin'] || reqH['referer'] || '').slice(0, 200),
+      ac: acOk ? 1 : 0, acMs
     };
+    if (!acOk && isBetaProject()) {   /* 앱은 이 표시(details.appcheck)를 보면 보안 확인이 끝날 때까지 기다렸다 한 번 다시 보냄 — 실패로 세지 않음 */
+      await db.collection('loginAudit').add(Object.assign({ status: 'appcheck-refused' }, auditMeta)).catch(() => {});
+      throw new HttpsError('failed-precondition', '보안 확인이 아직 안 끝났어요. 잠시 뒤 다시 눌러 주세요.', { appcheck: 1 });
+    }
     const gk = memberGuardKey(entryId, ip);
     let [, guard, stSnap] = [null, null, null];
     try {
@@ -336,6 +345,7 @@ const ADMIN_SMS_PER_HOLD = 3;
 /* '이번만 허용'(2026-10-29 Benny): 믿을 기기에 넣지 않고 이 로그인만 12시간 — 토큰 claim ao 로 끝 시각, 서버(claimsOf)·규칙(isAdmin)이 지나면 관리자 아님 */
 const ADMIN_ONCE_MS = 12 * 3600000;
 const adminDevId = (v) => { const s = String(v || ''); return /^[A-Za-z0-9_-]{16,64}$/.test(s) ? s : ''; };
+const FCM_TOKEN_RE = /^[A-Za-z0-9_:-]{100,4096}$/;   /* 웹 푸시(FCM) 토큰 모양 */
 const sha256hex = (s) => nodeCrypto.createHash('sha256').update(String(s)).digest('hex');
 async function adminDeviceTrusted(id) {
   if (!id) return null;
@@ -495,8 +505,8 @@ exports.adminLogin = functions
     return { pending: true, holdId, pollKey, smsTargets: phones.map((p) => p.label + ' ' + maskPhone(p.phone)) };
   });
 
-/* 관리자 기기 관리 (관리자 토큰 필요): enroll(지금 로그인된 기기 등록) · list · approve/deny · rename · revoke · setPhones
-   approve/deny/revoke/setPhones 는 부른 기기가 믿을 기기여야 함 */
+/* 관리자 기기 관리 (관리자 토큰 필요): enroll(믿을 기기 마지막 접속) · list · approve/deny · rename · revoke · setPhones · cutSessions · pushOn/pushOff/pushClearLegacy(관리자 알림)
+   approve/deny/revoke/setPhones/cutSessions/pushOn/pushClearLegacy 는 부른 기기가 믿을 기기여야 함 */
 exports.adminDevice = functions
   .region('asia-northeast3')
   .runWith({ maxInstances: 3, secrets: ['NUM_ENC_KEY'], timeoutSeconds: 30, memory: '256MB' })
@@ -528,14 +538,15 @@ exports.adminDevice = functions
       return { ok: true, trusted: false };
     }
     if (op === 'list') {
-      const [dv, hs, ph, ok] = await Promise.all([db.collection('adminDevices').get(), db.collection('adminHolds').where('status', '==', 'pending').get(), adminPhones().catch(() => []),
-        db.collection('adminHolds').where('status', '==', 'approved').limit(100).get()]);
-      const devices = dv.docs.map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', firstAt: x.firstAt || '', lastAt: x.lastAt || '', status: x.status || '', via: x.via || '', me: d.id === me }; });
+      const [dv, hs, ph, ok, legacy] = await Promise.all([db.collection('adminDevices').get(), db.collection('adminHolds').where('status', '==', 'pending').get(), adminPhones().catch(() => []),
+        db.collection('adminHolds').where('status', '==', 'approved').limit(100).get(), tokensFor('admin')]);
+      const devices = dv.docs.map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', firstAt: x.firstAt || '', lastAt: x.lastAt || '', status: x.status || '', via: x.via || '', me: d.id === me,
+        push: !!(x.status === 'trusted' && x.push && x.push.token), pushAt: (x.push && x.push.at) || '' }; });
       const holds = hs.docs.filter((d) => d.data().expiresAt > Date.now()).map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', at: x.at, intel: x.intel || null, smsTo: x.smsTo || '' }; });
       /* 지금 살아 있는 '이번만 허용' 로그인 (끝 시각 전, 끊기 안 함) */
       const onces = ok.docs.filter((d) => { const x = d.data(); return x.once && x.onceUntil > Date.now() && !x.onceCut; })
         .map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', at: x.decidedAt || x.at, until: x.onceUntil, via: x.via || '' }; });
-      return { devices, holds, onces, phones: ph.map((p) => ({ label: p.label, masked: maskPhone(p.phone) })), meTrusted: !!meTrusted };
+      return { devices, holds, onces, phones: ph.map((p) => ({ label: p.label, masked: maskPhone(p.phone) })), meTrusted: !!meTrusted, legacyPush: legacy.length };
     }
     if (op === 'approve' || op === 'deny') {
       needTrusted();
@@ -575,10 +586,44 @@ exports.adminDevice = functions
       needTrusted();
       const id = adminDevId(data.targetId);
       if (!id) throw new HttpsError('invalid-argument', '잘못된 요청이에요.');
-      await db.collection('adminDevices').doc(id).set({ status: 'revoked', revokedAt: new Date().toISOString(), revokedBy: me }, { merge: true });
+      const now = new Date().toISOString();
+      await db.collection('adminDevices').doc(id).set({ status: 'revoked', revokedAt: now, revokedBy: me, push: admin.firestore.FieldValue.delete() }, { merge: true });
       await admin.auth().revokeRefreshTokens('admin');   /* 그 기기의 관리자 로그인도 끊김 (모든 관리자 기기가 한 번 다시 로그인 — 믿을 기기는 비번만) */
-      await adminAudit({ status: 'revoked', target: id, by: me });
+      /* 기기 구분 없는 옛 알림 목록엔 그 기기 것이 섞여 있을 수 있음 → 통째로 비움. 믿을 기기는 앱을 열면 저절로 다시 묶임(pushOn) */
+      const legacy = await tokensFor('admin');
+      if (legacy.length) await db.collection('pushTokens').doc('admin').set({ tokens: [], clearedAt: now, clearedBy: me }, { merge: true });
+      await adminAudit({ status: 'revoked', target: id, by: me, legacyCleared: legacy.length });
+      return { ok: true, legacyCleared: legacy.length };
+    }
+    /* 관리자 알림을 이 기기에 묶기 (10-29 Benny "기기 묶기로") — 예전엔 pushTokens/admin 한 목록이라 기기를 해제해도 그 기기로 알림이 계속 갔음.
+       믿을 기기만 켤 수 있고('이번만'·등록 안 된 기기는 못 켬), 해제하면 같이 지워짐. 앱이 열릴 때마다 불러 토큰이 바뀌어도 따라감 */
+    if (op === 'pushOn') {
+      needTrusted();
+      const token = String(data.token || '');
+      if (!FCM_TOKEN_RE.test(token)) throw new HttpsError('invalid-argument', '알림 정보가 올바르지 않아요.');
+      const same = !!(meTrusted.push && meTrusted.push.token === token);
+      if (!same) await db.collection('adminDevices').doc(me).set({ push: { token, at: new Date().toISOString() } }, { merge: true });
+      await db.collection('pushTokens').doc('admin').set({ tokens: admin.firestore.FieldValue.arrayRemove(token) }, { merge: true }).catch(() => {});
+      if (!same) await adminAudit({ status: 'push-on', deviceId: me, ip: meta.ip, device: meta.device });
       return { ok: true };
+    }
+    /* 이 기기 관리자 알림 끄기 — 자기 기기 것만 지움(믿을 기기 아니어도: 끄는 건 막을 이유 없음) */
+    if (op === 'pushOff') {
+      if (!me) throw new HttpsError('invalid-argument', '기기 정보가 없어요.');
+      const cur = (await db.collection('adminDevices').doc(me).get()).data();
+      if (cur && cur.push) await db.collection('adminDevices').doc(me).set({ push: admin.firestore.FieldValue.delete() }, { merge: true });
+      const token = String(data.token || '');
+      if (FCM_TOKEN_RE.test(token)) await db.collection('pushTokens').doc('admin').set({ tokens: admin.firestore.FieldValue.arrayRemove(token) }, { merge: true }).catch(() => {});
+      if (cur && cur.push) await adminAudit({ status: 'push-off', deviceId: me, ip: meta.ip, device: meta.device });
+      return { ok: true };
+    }
+    /* 옛 알림 목록 비우기 (기기 구분 없음 — 누구 건지 모름) */
+    if (op === 'pushClearLegacy') {
+      needTrusted();
+      const legacy = await tokensFor('admin');
+      if (legacy.length) await db.collection('pushTokens').doc('admin').set({ tokens: [], clearedAt: new Date().toISOString(), clearedBy: me }, { merge: true });
+      await adminAudit({ status: 'push-clear-legacy', by: me, count: legacy.length });
+      return { ok: true, cleared: legacy.length };
     }
     if (op === 'setPhones') {
       needTrusted();
@@ -867,7 +912,8 @@ async function sendToTokens(tokens, title, body, cleanupIds, nav) {
         } catch (e) {}
       }
     }
-  } catch (e) { console.error('push send failed', e); }
+    return bad;
+  } catch (e) { console.error('push send failed', e); return []; }
 }
 function navData(nav) {
   const o = {};
@@ -901,10 +947,18 @@ async function notifyRecipient(entries, id, title, body, nav) {
     await sendTo(id, title, body, nav);
   }
 }
-/* 관리자에게: pushTokens/admin 에 등록된 기기들 (관리자 페이지의 알림 토글로 기기별 관리) */
+/* 관리자에게: 믿을 기기에 묶인 알림(adminDevices/{기기}.push) + 아직 안 옮겨진 옛 목록(pushTokens/admin, 기기 구분 없음).
+   못 쓰게 된 묶음은 그 기기에서 지움 */
 async function sendToAdmin(title, body, nav) {
-  const tokens = await tokensFor('admin');
-  await sendToTokens(tokens, title, body, ['admin'], nav);
+  const [legacy, dv] = await Promise.all([tokensFor('admin'),
+    db.collection('adminDevices').where('status', '==', 'trusted').get().catch(() => ({ docs: [] }))]);
+  const bound = {};
+  dv.docs.forEach((d) => { const p = d.data().push; if (p && p.token) bound[p.token] = d.id; });
+  const tokens = Array.from(new Set(Object.keys(bound).concat(legacy)));
+  const bad = (await sendToTokens(tokens, title, body, ['admin'], nav)) || [];
+  for (const t of bad) {
+    if (bound[t]) await db.collection('adminDevices').doc(bound[t]).set({ push: admin.firestore.FieldValue.delete() }, { merge: true }).catch(() => {});
+  }
 }
 
 exports.onStateChange = functions

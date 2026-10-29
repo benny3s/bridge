@@ -1097,7 +1097,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-497';
+  var APP_VERSION = '2026-10-29-498';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1402,21 +1402,33 @@
   /* v474: 로그인(서버 함수) 직전엔 기다리지 않고 바로 불러와 토큰을 붙임 — 나중에 로그인 함수에 App Check 를 강제할 준비.
      ensureAppCheck() 는 최대 2.5초만 기다리고(느린 폰에서 로그인이 막히지 않게) 그냥 진행 */
   var _appCheckP = null;
+  /* 10-29: 보안 확인 토큰이 준비되기까지 걸린 시간(ms) — memberLogin 이 로그인 기록에 남김(운영 강제 전 폰별 속도 보기), 베타 🧪 패널에 표시 */
+  var _acInfo = { t0: 0, ms: -1, ok: null, loginMs: -1, retried: 0 };
   function ensureAppCheck() {
     if (!_appCheckP) _appCheckP = new Promise(function (resolve) {
+      _acInfo.t0 = Date.now();
+      function done(ok) { if (_acInfo.ms < 0) { _acInfo.ms = Date.now() - _acInfo.t0; _acInfo.ok = ok; } resolve(ok); }
       var s = document.createElement('script');
       s.src = 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check-compat.js';
       s.async = true;
       s.onload = function () {
         try {
           firebase.appCheck().activate(new firebase.appCheck.ReCaptchaEnterpriseProvider(RECAPTCHA_SITE_KEY), true);
-          firebase.appCheck().getToken().then(function () { resolve(true); }, function () { resolve(false); });
-        } catch (e) { try { console.warn('appCheck', e); } catch (e2) {} resolve(false); }
+          firebase.appCheck().getToken().then(function () { done(true); }, function () { done(false); });
+        } catch (e) { try { console.warn('appCheck', e); } catch (e2) {} done(false); }
       };
-      s.onerror = function () { resolve(false); };
+      s.onerror = function () { done(false); };
       document.head.appendChild(s);
     });
     return Promise.race([_appCheckP, new Promise(function (r) { setTimeout(function () { r(false); }, 2500); })]);
+  }
+  /* 서버가 '보안 확인이 아직'(details.appcheck)이라고 하면: 토큰이 준비될 때까지(최대 ms) 기다림. 처음 시도가 실패했으면 한 번 더 받아 봄 */
+  function waitAppCheck(ms) {
+    var p = (_appCheckP || Promise.resolve(false)).then(function (ok) {
+      if (ok) return true;
+      try { return firebase.appCheck().getToken().then(function () { return true; }, function () { return false; }); } catch (e) { return false; }
+    });
+    return Promise.race([p, new Promise(function (r) { setTimeout(function () { r(false); }, ms); })]);
   }
   (function loadAppCheck() {
     function later() { setTimeout(ensureAppCheck, 1500); }
@@ -2348,10 +2360,19 @@
      '토큰 있는 회원/관리자'만 데이터 접근을 허용하는 기반. 손님은 익명 토큰. */
   function authUid() { var u = firebase.auth().currentUser; return (u && !u.isAnonymous) ? u.uid : ''; }
   function serverSignIn(fnName, payload) {
-    var direct = ensureAppCheck().then(function () {
+    var t0 = Date.now();
+    function call() {
+      payload.acMs = _acInfo.ms;
       return fns ? fns.httpsCallable(fnName)(payload).catch(function (e) { if (isSwMsgError(e)) return callFn(fnName, payload); throw e; }) : callFn(fnName, payload);
+    }
+    var direct = ensureAppCheck().then(call).catch(function (e) {
+      /* 서버가 App Check 를 강제하는데 토큰이 아직 → 준비될 때까지 기다렸다 한 번만 다시 (실패로 안 셈) */
+      if (!(e && e.details && e.details.appcheck)) throw e;
+      _acInfo.retried++;
+      return waitAppCheck(15000).then(call);
     });
     return direct.then(function (r) {
+      _acInfo.loginMs = Date.now() - t0;
       var t = r && r.data && r.data.token;
       if (!t) throw new Error('토큰을 받지 못했어요.');
       return firebase.auth().signInWithCustomToken(t);
@@ -12819,6 +12840,7 @@
           var off = v.status !== 'trusted';
           return '<div style="border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;' + (off ? 'opacity:.55;' : '') + '">' +
             (off ? '⛔ ' : '✅ ') + '<b>' + escapeHtml(v.name || v.device || '기기') + '</b>' + (v.me ? ' <span class="sub">(지금 이 기기)</span>' : '') +
+            (off ? '' : ' <span class="sub" style="white-space:nowrap;">' + (v.push ? '🔔 알림 받음' : '🔕 알림 안 받음') + '</span>') +
             '<br><span class="sub">' + escapeHtml(v.device || '') + ' · 마지막 ' + (v.lastAt ? fmtDate(v.lastAt) : '-') + ' · ' + escapeHtml(v.ip || '') + ' · ' + escapeHtml(viaText(v.via)) + '</span>' +
             (off ? '' : '<div style="margin-top:6px;display:flex;gap:6px;"><button type="button" class="card-btn" data-rn="' + escapeHtml(v.id) + '" style="flex:none;">이름 바꾸기</button>' +
               (v.me ? '' : '<button type="button" class="card-btn danger" data-rv="' + escapeHtml(v.id) + '" style="flex:none;">해제</button>') + '</div>') +
@@ -12839,7 +12861,9 @@
           (holds ? '<h4 style="margin:4px 0 6px;">새 기기 승인 대기</h4>' + holds : '') +
           (onces ? '<h4 style="margin:8px 0 6px;">이번만 허용 (12시간)</h4>' + onces : '') +
           '<h4 style="margin:8px 0 6px;">관리자 기기</h4>' + (devs || '<p class="sub">없어요</p>') +
-          '<p class="sub" style="margin:2px 0 0;">해제·끊기를 하면 그 기기의 관리자 로그인이 늦어도 1시간 안에 끊기고, 다른 관리자 기기도 한 번 다시 로그인해야 해요(비밀번호만).</p>' +
+          (d.legacyPush ? '<div style="border:1px dashed var(--line);border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;">📦 옛 방식 관리자 알림 <b>' + d.legacyPush + '</b>개 <span class="sub">— 어느 기기 건지 몰라요. 알림을 켜 둔 관리자 기기는 앱을 열면 저절로 위 기기 목록(🔔)으로 옮겨져요.</span>' +
+            (d.meTrusted ? '<div style="margin-top:6px;"><button type="button" class="card-btn" id="ad-push-clear" style="flex:none;">옛 방식 비우기</button></div>' : '') + '</div>' : '') +
+          '<p class="sub" style="margin:2px 0 0;">해제하면 그 기기로 가던 관리자 알림도 바로 끊겨요. 해제·끊기를 하면 그 기기의 관리자 로그인이 늦어도 1시간 안에 끊기고, 다른 관리자 기기도 한 번 다시 로그인해야 해요(비밀번호만).</p>' +
           (d.meTrusted ? '<button type="button" class="card-btn danger" id="ad-cut-all" style="flex:none;margin-top:6px;">모든 관리자 세션 끊기</button>' : '') + phHtml + '</div>';
         [].forEach.call(box.querySelectorAll('[data-ap]'), function (b) { b.addEventListener('click', function () {
           var ex = { holdId: b.getAttribute('data-id') };
@@ -12861,11 +12885,22 @@
           });
         }); });
         [].forEach.call(box.querySelectorAll('[data-rv]'), function (b) { b.addEventListener('click', function () {
-          modalConfirm('기기 해제', '이 기기를 관리자 기기에서 뺄까요? 다시 쓰려면 새로 승인받아야 해요.', '해제', 'danger').then(function (yes) {
+          modalConfirm('기기 해제', '이 기기를 관리자 기기에서 뺄까요? 그 기기로 가던 관리자 알림도 끊겨요. 다시 쓰려면 새로 승인받아야 해요.', '해제', 'danger').then(function (yes) {
             if (!yes) return;
-            adminCall('revoke', { targetId: b.getAttribute('data-rv') }).then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+            adminCall('revoke', { targetId: b.getAttribute('data-rv') }).then(function (r) {
+              var n = (r && r.data && r.data.legacyCleared) || 0;
+              if (n) modalNotice('해제했어요', '어느 기기 건지 모르는 옛 방식 관리자 알림 ' + n + '개도 같이 비웠어요. 다른 관리자 기기는 앱을 한 번 열면 알림이 저절로 다시 켜져요.');
+              draw();
+            }).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
           });
         }); });
+        var pc = box.querySelector('#ad-push-clear');
+        if (pc) pc.addEventListener('click', function () {
+          modalConfirm('옛 방식 알림 비우기', '어느 기기 건지 모르는 옛 관리자 알림 ' + d.legacyPush + '개를 지울까요? 알림을 켜 둔 관리자 기기는 앱을 한 번 열면 저절로 다시 받아요.', '비우기', 'danger').then(function (yes) {
+            if (!yes) return;
+            adminCall('pushClearLegacy').then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+          });
+        });
         var sv = box.querySelector('#ad-ph-save');
         if (sv) sv.addEventListener('click', function () {
           var list = [0, 1].map(function (i) { return { label: (box.querySelector('[data-pl="' + i + '"]').value || '').trim(), phone: (box.querySelector('[data-pn="' + i + '"]').value || '').trim() }; })
@@ -14123,11 +14158,9 @@
     }).then(function (token) {
       if (!token) return;
       var jobs = [];
+      /* 관리자 알림은 서버가 이 기기에 묶음(10-29) — 믿을 기기만 받아 줌, 해제하면 같이 끊김 */
       if (adminNotifOn() && !_adminOnceUntil) {
-        jobs.push(pushTokensRef.doc('admin').set({
-          tokens: firebase.firestore.FieldValue.arrayUnion(token),
-          updatedAt: new Date().toISOString()
-        }, { merge: true }));
+        jobs.push(authClaims().then(function (c) { if (c.admin === 1 && !c.ao) return adminCall('pushOn', { token: token }); }).catch(function () {}));
       }
       if (notifOn()) {
         /* 알림 토큰은 항상 로그인 본인(주선자) 기기에 저장 — sub로 활동 중이어도 currentUser 기준 */
@@ -14346,10 +14379,7 @@
   function enableAdminNotif() {
     if (_adminOnceUntil) return modalNotice('안내', '이번만 허용된 기기에선 관리자 알림을 켤 수 없어요. 계속 쓸 기기라면 관리자 기기로 허용받아 주세요.');
     ensureFcmToken().then(function (token) {
-      return pushTokensRef.doc('admin').set({
-        tokens: firebase.firestore.FieldValue.arrayUnion(token),
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
+      return adminCall('pushOn', { token: token });   /* 서버가 믿을 기기인지 확인하고 이 기기에 묶음 */
     }).then(function () {
       try { localStorage.setItem('adminNotifOn', '1'); } catch (e) {}
       paint(currentState);
@@ -14360,14 +14390,14 @@
   }
   function disableAdminNotif() {
     var token = ''; try { token = localStorage.getItem('notifToken') || ''; } catch (e) {}
-    var p = token
-      ? pushTokensRef.doc('admin').set({ tokens: firebase.firestore.FieldValue.arrayRemove(token) }, { merge: true })
-      : Promise.resolve();
-    p.catch(function () {}).then(function () {
+    /* 서버에서 못 끄면 화면도 켜진 채로 둠 — 꺼진 줄 알았는데 알림이 계속 오는 일이 없게 */
+    adminCall('pushOff', { token: token }).then(function () {
       try { localStorage.removeItem('adminNotifOn'); } catch (e) {}
       maybeReleaseToken(); /* 회원 알림도 꺼져 있을 때만 토큰 폐기 */
       paint(currentState);
       modalNotice('관리자 알림 꺼짐', '이 기기로는 새 신청서 알림이 오지 않아요.');
+    }).catch(function (err) {
+      modalNotice('오류', '관리자 알림을 끄지 못했어요: ' + ((err && err.message) || err) + ' (관리자로 다시 로그인한 뒤 눌러 주세요)');
     });
   }
   /* 앱이 열려 있을 때 오는 메시지 — messaging은 동적 로드라, 로드 완료 시 loadMessagingSdk()가 이 함수를 호출 */
