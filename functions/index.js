@@ -346,11 +346,30 @@ const ADMIN_SMS_PER_HOLD = 3;
 const ADMIN_ONCE_MS = 12 * 3600000;
 const adminDevId = (v) => { const s = String(v || ''); return /^[A-Za-z0-9_-]{16,64}$/.test(s) ? s : ''; };
 const FCM_TOKEN_RE = /^[A-Za-z0-9_:-]{100,4096}$/;   /* 웹 푸시(FCM) 토큰 모양 */
+/* 관리자 알림이 묶인 믿을 기기 수 (except = 빼고 셀 기기 id) */
+async function boundAdminDevices(except) {
+  const dv = await db.collection('adminDevices').where('status', '==', 'trusted').get();
+  return dv.docs.filter((d) => d.id !== except && d.data().push && d.data().push.token).length;
+}
 const sha256hex = (s) => nodeCrypto.createHash('sha256').update(String(s)).digest('hex');
-async function adminDeviceTrusted(id) {
+/* 기기 열쇠 (10-29 리뷰): 기기 id 는 관리자 기기 목록·보안 경고에 보여 '아는 사람은 다 아는 이름'이 됨 → 이번만 허용 기기가 남의 id 를 대고
+   믿을 기기로 들어올 수 있었음. 믿을 기기 확인 = id + 믿을 기기가 될 때 그 기기에만 준 열쇠(서버엔 해시만).
+   예전에 믿을 기기가 된 기기(열쇠 없음)는 새 앱이 열릴 때 enroll(wantKey)로 한 번 받음 — 이번만 토큰은 못 받음, 11-30 까지만 */
+const LEGACY_KEY_UNTIL = Date.parse('2026-11-30T00:00:00+09:00');
+function devKeyOk(doc, key) {
+  if (!doc || !doc.keyHash || !key) return false;
+  const a = Buffer.from(sha256hex(String(key))), b = Buffer.from(String(doc.keyHash));
+  return a.length === b.length && nodeCrypto.timingSafeEqual(a, b);
+}
+async function issueDeviceKey(id) {
+  const key = nodeCrypto.randomBytes(24).toString('base64url');
+  await db.collection('adminDevices').doc(id).set({ keyHash: sha256hex(key), keyAt: new Date().toISOString() }, { merge: true });
+  return key;
+}
+async function adminDeviceTrusted(id, key) {
   if (!id) return null;
   const d = (await db.collection('adminDevices').doc(id).get()).data();
-  return (d && d.status === 'trusted') ? d : null;
+  return (d && d.status === 'trusted' && devKeyOk(d, key)) ? d : null;
 }
 async function adminAudit(o) { await db.collection('adminAudit').add(Object.assign({ at: new Date().toISOString() }, o)).catch(() => {}); }
 async function trustAdminDevice(id, meta, via) {
@@ -359,6 +378,7 @@ async function trustAdminDevice(id, meta, via) {
   const cur = (await ref.get()).data() || {};
   await ref.set(Object.assign({ status: 'trusted', name: cur.name || meta.name || meta.device || '기기', device: meta.device || cur.device || '',
     ip: meta.ip || '', lastAt: now, via: cur.via || via }, cur.firstAt ? {} : { firstAt: now }), { merge: true });
+  return issueDeviceKey(id);   /* 새 열쇠 — 부른 쪽이 그 기기에만 돌려줌 */
 }
 function adminMeta(context, data) {
   const h = (context.rawRequest && context.rawRequest.headers) || {};
@@ -413,6 +433,11 @@ async function adminHoldPoll(data, deviceId, meta) {
     d.status = 'approved'; d.via = 'sms:' + (d.smsTo || '');
   }
   if (d.status === 'approved' && d.once) {
+    /* 옛 화면(이번만을 모름)은 비밀번호를 저장하고 12시간 뒤에도 안 나감 → 토큰 주지 않음 (승인할 때도 막지만 한 번 더) */
+    if (!d.onceOk) {
+      await ref.set({ consumed: true }, { merge: true });
+      throw new HttpsError('failed-precondition', '이 화면이 옛 버전이라 이번만 허용으로 들어갈 수 없어요. 새로고침한 뒤 다시 로그인해 주세요.');
+    }
     const until = Date.now() + ADMIN_ONCE_MS;
     await ref.set({ consumed: true, onceUntil: until }, { merge: true });
     await adminAudit({ status: 'approved-once-login', holdId, deviceId, via: d.via || 'approve', ip: meta.ip, until });
@@ -422,11 +447,11 @@ async function adminHoldPoll(data, deviceId, meta) {
   }
   if (d.status === 'approved') {
     await ref.set({ consumed: true }, { merge: true });
-    await trustAdminDevice(deviceId, Object.assign({}, meta, { name: d.name, device: d.device }), d.via || 'approve');
+    const deviceKey = await trustAdminDevice(deviceId, Object.assign({}, meta, { name: d.name, device: d.device }), d.via || 'approve');
     await adminAudit({ status: 'approved-login', holdId, deviceId, via: d.via || 'approve', ip: meta.ip });
     await securityAlert({ type: 'admin-device', kind: 'trusted', target: deviceId, nickname: d.name || d.device || '', ip: meta.ip, device: d.device || '', via: d.via || 'approve' },
       '🔐 관리자 새 기기 등록됨', (d.name || d.device || '기기') + ' — ' + (String(d.via || '').indexOf('sms') === 0 ? '문자 인증(' + String(d.via).slice(4) + ')' : '기기 승인') + '으로 통과. 본인이 아니면 관리자탭 📱 관리자 기기에서 해제').catch(() => {});
-    return { token: await admin.auth().createCustomToken('admin', { admin: 1 }) };
+    return { token: await admin.auth().createCustomToken('admin', { admin: 1 }), deviceKey };
   }
   return { pending: true, smsSent: d.smsTo || '' };
 }
@@ -457,7 +482,10 @@ exports.adminLogin = functions
     const pw = String(data.password || '');
     if (!pw || pw.length > 128) throw new HttpsError('invalid-argument', '비밀번호를 확인해주세요.');
     const ip = meta.ip;
-    const trusted = await adminDeviceTrusted(deviceId);
+    const devDoc = deviceId ? (await db.collection('adminDevices').doc(deviceId).get()).data() : null;
+    const trusted = (devDoc && devDoc.status === 'trusted' && devKeyOk(devDoc, data.deviceKey)) ? devDoc : null;
+    /* 믿을 기기 id 인데 열쇠가 없거나 다름 = 앱 업데이트 전 기기·저장소가 지워진 기기·남의 id 를 댄 시도 → 새 기기처럼 승인받기 */
+    const keyMiss = !trusted && devDoc && devDoc.status === 'trusted' ? (devDoc.keyHash ? '열쇠 다름' : '열쇠 없는 예전 기기') : '';
     const gk = trusted ? guardKey('adm_', ip + '_' + deviceId) : guardKey('adm_', ip);
     const [, guard, keySnap] = await Promise.all([trusted ? Promise.resolve() : ipBlockedCheck(ip), loginGuardCheck(gk), db.collection('adminKey').doc('main').get()]);
     const ok = adminPasswordOk(pw, keySnap.data());
@@ -484,11 +512,11 @@ exports.adminLogin = functions
     /* 등록된 기기가 하나도 없을 때(처음 배포 직후)만: 이 기기를 첫 기기로 등록 */
     const any = await db.collection('adminDevices').where('status', '==', 'trusted').limit(1).get();
     if (any.empty) {
-      await trustAdminDevice(deviceId, meta, 'first');
+      const deviceKey = await trustAdminDevice(deviceId, meta, 'first');
       await adminAudit({ status: 'first-device', deviceId, ip, device: meta.device });
       await securityAlert({ type: 'admin-device', kind: 'trusted', target: deviceId, nickname: meta.name || meta.device, ip, device: meta.device, via: 'first' },
         '🔐 첫 관리자 기기 등록', (meta.name || meta.device) + ' · ' + ip + ' — 본인이 아니면 바로 관리자탭에서 해제').catch(() => {});
-      return { token: await admin.auth().createCustomToken('admin', { admin: 1 }) };
+      return { token: await admin.auth().createCustomToken('admin', { admin: 1 }), deviceKey };
     }
     /* 처음 보는 기기 → 보류 + 믿을 기기에 승인 알림 */
     const holdId = 'ah_' + nodeCrypto.randomBytes(12).toString('hex');
@@ -496,10 +524,12 @@ exports.adminLogin = functions
     const intel = await ipIntel(ip).catch(() => null);
     await db.collection('adminHolds').doc(holdId).set({ deviceId, status: 'pending', at: new Date().toISOString(), expiresAt: Date.now() + ADMIN_HOLD_MS,
       pollKeyHash: sha256hex(pollKey), ip, device: meta.device, name: meta.name || meta.device, ua: meta.ua, origin: meta.origin,
-      intel: intel ? { provider: intel.provider || '', city: intel.city || '', country: intel.country || '', vpn: !!intel.dcvpn } : null });
-    await adminAudit({ status: 'pending', holdId, deviceId, ip, device: meta.device, ua: meta.ua, origin: meta.origin });
+      onceOk: data.onceOk === 1 || data.onceOk === true,   /* 이번만 허용을 아는 새 화면인지 (옛 화면은 이번만으로 승인 못 함) */
+      keyMiss, intel: intel ? { provider: intel.provider || '', city: intel.city || '', country: intel.country || '', vpn: !!intel.dcvpn } : null });
+    await adminAudit({ status: 'pending', holdId, deviceId, ip, device: meta.device, ua: meta.ua, origin: meta.origin, keyMiss });
     await securityAlert({ type: 'admin-device', kind: 'pending', target: holdId, nickname: meta.name || meta.device, ip, device: meta.device },
-      '🛂 새 기기 관리자 로그인 — 허용/거부', (meta.name || meta.device) + ' · ' + ip + (intel && intel.city ? ' (' + intel.city + (intel.dcvpn ? ', VPN' : '') + ')' : '') + ' — 눌러서 허용 또는 거부').catch(() => {});
+      '🛂 새 기기 관리자 로그인 — 허용/거부', (meta.name || meta.device) + ' · ' + ip + (intel && intel.city ? ' (' + intel.city + (intel.dcvpn ? ', VPN' : '') + ')' : '') +
+      (keyMiss ? ' · 등록된 기기 id 인데 ' + keyMiss + ' — 앱 업데이트 전 기기면 허용, 모르면 거부' : '') + ' — 눌러서 허용 또는 거부').catch(() => {});
     await sendToAdmin('🛂 새 기기 관리자 로그인 승인 요청', '눌러서 허용/거부 · ' + (meta.name || meta.device) + ' · ' + ip, { route: 'adminApprove', focusId: holdId }).catch(() => {});
     const phones = await adminPhones().catch(() => []);
     return { pending: true, holdId, pollKey, smsTargets: phones.map((p) => p.label + ' ' + maskPhone(p.phone)) };
@@ -516,32 +546,44 @@ exports.adminDevice = functions
     const op = String(data.op || 'list');
     const meta = adminMeta(context, data);
     const me = adminDevId(data.deviceId);
-    const meTrusted = await adminDeviceTrusted(me);
+    const once = Number(claimsOf(context).ao) || 0;
+    const meDoc = me ? (await db.collection('adminDevices').doc(me).get()).data() : null;
+    /* 믿을 기기 = 이번만 토큰 아님 + 믿을 기기 문서 + 그 기기 열쇠 (id 만으로는 안 됨) */
+    const meTrusted = (!once && meDoc && meDoc.status === 'trusted' && devKeyOk(meDoc, data.deviceKey)) ? meDoc : null;
     const needTrusted = () => { if (!meTrusted) throw new HttpsError('permission-denied', '등록된 관리자 기기에서만 할 수 있어요.'); };
     /* enroll: 예전(10-27)엔 관리자 토큰만 있으면 그 기기를 믿을 기기로 스스로 등록했음 → '이번만 허용' 기기나 훔친 세션이 영구 등록될 수 있어 닫음(10-29).
-       믿을 기기 등록은 이제 adminLogin 의 첫 기기·승인·문자 인증으로만. 여기선 믿을 기기면 마지막 접속만 갱신 */
+       믿을 기기 등록은 adminLogin 의 첫 기기·승인·문자 인증으로만. 여기선 믿을 기기면 마지막 접속만 갱신,
+       열쇠 없는 예전 믿을 기기는 새 앱(wantKey)일 때 열쇠를 한 번 줌 */
     if (op === 'enroll') {
       if (!me) throw new HttpsError('invalid-argument', '기기 정보가 없어요.');
-      const cur = (await db.collection('adminDevices').doc(me).get()).data();
+      const cur = meDoc;
       if (cur && cur.status === 'revoked') throw new HttpsError('permission-denied', '해제된 기기예요. 다시 승인받아 주세요.');
-      if (cur && cur.status === 'trusted') {
+      if (meTrusted) {
         await db.collection('adminDevices').doc(me).set({ lastAt: new Date().toISOString(), ip: meta.ip }, { merge: true });
         return { ok: true, trusted: true };
       }
-      const once = Number(claimsOf(context).ao) || 0;
       if (once) return { ok: true, trusted: false, onceUntil: once };
-      /* 믿을 기기도 '이번만'도 아닌데 관리자 토큰이 있음 = 기기 정보(저장소)가 지워졌거나 남의 세션 → 알림만, 등록은 안 함 */
-      await adminAudit({ status: 'enroll-refused', deviceId: me, ip: meta.ip, device: meta.device });
+      if (cur && cur.status === 'trusted' && !cur.keyHash) {
+        if (!data.wantKey || Date.now() > LEGACY_KEY_UNTIL) return { ok: true, trusted: false, legacy: true };   /* 옛 화면 — 열쇠를 저장 못 하니 주지 않음 */
+        const deviceKey = await issueDeviceKey(me);
+        await db.collection('adminDevices').doc(me).set({ lastAt: new Date().toISOString(), ip: meta.ip }, { merge: true });
+        await adminAudit({ status: 'key-legacy', deviceId: me, ip: meta.ip, device: meta.device });
+        return { ok: true, trusted: true, deviceKey };
+      }
+      /* 믿을 기기도 '이번만'도 아닌데 관리자 토큰이 있음 = 기기 정보(저장소)가 지워졌거나, 남의 기기 id 를 댔거나, 남의 세션 → 알림만, 등록은 안 함 */
+      const why = cur && cur.status === 'trusted' ? '등록된 기기 id 인데 열쇠가 맞지 않음' : '등록 안 된 기기';
+      await adminAudit({ status: 'enroll-refused', deviceId: me, ip: meta.ip, device: meta.device, why });
       const gate = await alertAllowed(guardKey('admenr_', me)).catch(() => ({ ok: true }));
       if (gate.ok) await securityAlert({ type: 'admin-device', kind: 'unregistered', target: me, nickname: meta.name || meta.device, ip: meta.ip, device: meta.device, via: 'session' },
-        '⚠️ 등록 안 된 기기에 관리자 로그인', (meta.name || meta.device) + ' · ' + meta.ip + ' — 베니 님 기기면 로그아웃 후 다시 로그인해 승인받기, 모르는 기기면 관리자 기기에서 [모든 관리자 세션 끊기]').catch(() => {});
+        '⚠️ ' + why + '에 관리자 로그인', (meta.name || meta.device) + ' · ' + meta.ip + ' — 베니 님 기기면 로그아웃 후 다시 로그인해 승인받기, 모르는 기기면 관리자 기기에서 [모든 관리자 세션 끊기]').catch(() => {});
       return { ok: true, trusted: false };
     }
     if (op === 'list') {
+      /* 이번만 로그인은 끝 시각(onceUntil)이 지금보다 뒤인 것만 — 승인 기록 전체에서 100개만 고르면 살아 있는 게 빠질 수 있었음 */
       const [dv, hs, ph, ok, legacy] = await Promise.all([db.collection('adminDevices').get(), db.collection('adminHolds').where('status', '==', 'pending').get(), adminPhones().catch(() => []),
-        db.collection('adminHolds').where('status', '==', 'approved').limit(100).get(), tokensFor('admin')]);
+        db.collection('adminHolds').where('onceUntil', '>', Date.now()).get(), tokensFor('admin')]);
       const devices = dv.docs.map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', firstAt: x.firstAt || '', lastAt: x.lastAt || '', status: x.status || '', via: x.via || '', me: d.id === me,
-        push: !!(x.status === 'trusted' && x.push && x.push.token), pushAt: (x.push && x.push.at) || '' }; });
+        push: !!(x.status === 'trusted' && x.push && x.push.token), pushAt: (x.push && x.push.at) || '', keyed: !!x.keyHash }; });
       const holds = hs.docs.filter((d) => d.data().expiresAt > Date.now()).map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', at: x.at, intel: x.intel || null, smsTo: x.smsTo || '' }; });
       /* 지금 살아 있는 '이번만 허용' 로그인 (끝 시각 전, 끊기 안 함) */
       const onces = ok.docs.filter((d) => { const x = d.data(); return x.once && x.onceUntil > Date.now() && !x.onceCut; })
@@ -558,6 +600,8 @@ exports.adminDevice = functions
       if (h.status !== 'pending') return { ok: true, status: h.status };
       if (h.expiresAt < Date.now()) { await ref.set({ status: 'expired' }, { merge: true }); throw new HttpsError('deadline-exceeded', '10분이 지난 요청이에요.'); }
       const once = op === 'approve' && data.once === true;
+      /* 옛 화면에서 온 보류를 '이번만'으로 허용하면 그 화면은 비밀번호를 저장하고 12시간 뒤에도 안 나감 → 막음 (그냥 허용하면 믿을 기기가 됨) */
+      if (once && !h.onceOk) throw new HttpsError('failed-precondition', '그 기기 화면이 옛 버전이라 이번만 허용을 못 써요. 그 기기에서 새로고침한 뒤 다시 로그인하게 해 주세요.');
       await ref.set(Object.assign({ status: op === 'approve' ? 'approved' : 'denied', via: 'approve:' + (meTrusted.name || me), decidedAt: new Date().toISOString() }, once ? { once: true } : {}), { merge: true });
       if (op === 'deny') await addWatchIp(h.ip);
       await adminAudit({ status: op === 'approve' ? (once ? 'approved-once' : 'approved') : 'denied', holdId: id, by: me, ip: h.ip });
@@ -589,11 +633,14 @@ exports.adminDevice = functions
       const now = new Date().toISOString();
       await db.collection('adminDevices').doc(id).set({ status: 'revoked', revokedAt: now, revokedBy: me, push: admin.firestore.FieldValue.delete() }, { merge: true });
       await admin.auth().revokeRefreshTokens('admin');   /* 그 기기의 관리자 로그인도 끊김 (모든 관리자 기기가 한 번 다시 로그인 — 믿을 기기는 비번만) */
-      /* 기기 구분 없는 옛 알림 목록엔 그 기기 것이 섞여 있을 수 있음 → 통째로 비움. 믿을 기기는 앱을 열면 저절로 다시 묶임(pushOn) */
+      /* 기기 구분 없는 옛 알림 목록엔 그 기기 것이 섞여 있을 수 있음 → 통째로 비움. 믿을 기기는 앱을 열면 저절로 다시 묶임(pushOn).
+         단 알림이 묶인 다른 믿을 기기가 하나도 없으면 비우지 않음 — 비우면 보안·승인 알림까지 아무 데도 안 감 */
       const legacy = await tokensFor('admin');
-      if (legacy.length) await db.collection('pushTokens').doc('admin').set({ tokens: [], clearedAt: now, clearedBy: me }, { merge: true });
-      await adminAudit({ status: 'revoked', target: id, by: me, legacyCleared: legacy.length });
-      return { ok: true, legacyCleared: legacy.length };
+      const bound = await boundAdminDevices(id);
+      const legacyCleared = legacy.length && bound ? legacy.length : 0;
+      if (legacyCleared) await db.collection('pushTokens').doc('admin').set({ tokens: [], clearedAt: now, clearedBy: me }, { merge: true });
+      await adminAudit({ status: 'revoked', target: id, by: me, legacyCleared });
+      return { ok: true, legacyCleared, legacyKept: legacy.length - legacyCleared };
     }
     /* 관리자 알림을 이 기기에 묶기 (10-29 Benny "기기 묶기로") — 예전엔 pushTokens/admin 한 목록이라 기기를 해제해도 그 기기로 알림이 계속 갔음.
        믿을 기기만 켤 수 있고('이번만'·등록 안 된 기기는 못 켬), 해제하면 같이 지워짐. 앱이 열릴 때마다 불러 토큰이 바뀌어도 따라감 */
@@ -607,19 +654,21 @@ exports.adminDevice = functions
       if (!same) await adminAudit({ status: 'push-on', deviceId: me, ip: meta.ip, device: meta.device });
       return { ok: true };
     }
-    /* 이 기기 관리자 알림 끄기 — 자기 기기 것만 지움(믿을 기기 아니어도: 끄는 건 막을 이유 없음) */
+    /* 이 기기 관리자 알림 끄기 — 기기 묶음은 그 기기(열쇠)만 지울 수 있음(남의 기기 id 를 대고 베니 폰 알림을 끄지 못하게).
+       옛 목록에서 자기 토큰을 빼는 건 누구나(토큰 값을 알아야 함) */
     if (op === 'pushOff') {
       if (!me) throw new HttpsError('invalid-argument', '기기 정보가 없어요.');
-      const cur = (await db.collection('adminDevices').doc(me).get()).data();
-      if (cur && cur.push) await db.collection('adminDevices').doc(me).set({ push: admin.firestore.FieldValue.delete() }, { merge: true });
+      const unbind = !!(meTrusted && meTrusted.push);
+      if (unbind) await db.collection('adminDevices').doc(me).set({ push: admin.firestore.FieldValue.delete() }, { merge: true });
       const token = String(data.token || '');
       if (FCM_TOKEN_RE.test(token)) await db.collection('pushTokens').doc('admin').set({ tokens: admin.firestore.FieldValue.arrayRemove(token) }, { merge: true }).catch(() => {});
-      if (cur && cur.push) await adminAudit({ status: 'push-off', deviceId: me, ip: meta.ip, device: meta.device });
+      if (unbind) await adminAudit({ status: 'push-off', deviceId: me, ip: meta.ip, device: meta.device });
       return { ok: true };
     }
-    /* 옛 알림 목록 비우기 (기기 구분 없음 — 누구 건지 모름) */
+    /* 옛 알림 목록 비우기 (기기 구분 없음 — 누구 건지 모름). 알림이 묶인 믿을 기기가 하나도 없으면 거절 */
     if (op === 'pushClearLegacy') {
       needTrusted();
+      if (!(await boundAdminDevices(''))) throw new HttpsError('failed-precondition', '알림이 기기에 옮겨진 관리자 기기가 아직 없어요. 지금 비우면 관리자 알림이 아무 데도 안 가요 — 쓰는 기기에서 앱을 한 번 열어 🔔가 보인 뒤 비워 주세요.');
       const legacy = await tokensFor('admin');
       if (legacy.length) await db.collection('pushTokens').doc('admin').set({ tokens: [], clearedAt: new Date().toISOString(), clearedBy: me }, { merge: true });
       await adminAudit({ status: 'push-clear-legacy', by: me, count: legacy.length });
