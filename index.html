@@ -1097,7 +1097,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-492';
+  var APP_VERSION = '2026-10-29-494';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -12818,7 +12818,8 @@
       if (!ok) return;
       var a = new Uint32Array(1); crypto.getRandomValues(a);
       var temp = String(100000 + (a[0] % 900000));
-      var text = '[베니브릿지] ' + entry.nickname + '님, 보안 조치로 PIN이 초기화됐어요. 임시 PIN은 ' + temp + ' 입니다.\n로그인하면 새 PIN을 정하게 돼요.\nhttps://benny3s.github.io/bridge/';
+      /* 그냥 PIN 변경을 요청한 회원에게도 이 버튼으로 다시 보내므로 '보안 조치' 문구는 빼고 중립으로 (10-29 Benny) */
+      var text = '[베니브릿지] ' + entry.nickname + '님, 임시 PIN은 ' + temp + ' 입니다.\n로그인하면 새 PIN을 정하게 돼요.\nhttps://benny3s.github.io/bridge/';
       adminApplyPin(entry, temp, true).then(function () {
         appendLog('admin', '관리자', '임시 PIN 재발급 · ' + entry.nickname);
         return refreshNow();
