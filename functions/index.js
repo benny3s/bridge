@@ -3627,7 +3627,8 @@ function callAnthropicHaiku(apiKey, sysPrompt, userPrompt, maxTokens, temperatur
 
 exports.aiConcierge = functions
   .region('asia-northeast3')
-  .runWith({ maxInstances: 5, timeoutSeconds: 30, memory: '512MB' })
+  /* NUM_ENC_KEY: pc_sync_pull 이 번호 형식을 확인하려면 필요 — 빠져 있어 10-27 부터 모든 신청자가 '형식오류'로 보류됨(10-29 승완 님) */
+  .runWith({ maxInstances: 5, secrets: ['NUM_ENC_KEY'], timeoutSeconds: 30, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (data && (data.ping || data.op === 'ping')) return { ok: true, pong: 1 };
     const apiKey = (process.env.GROQ_API_KEY || '').trim();
@@ -3694,8 +3695,12 @@ exports.aiConcierge = functions
           const sc = (await db.doc('sendContacts/' + p.id).get()).data();
           /* 번호 원문은 PC 로 내보내지 않음 (2026-10-27 보안 검토: 승인 사유·텔레그램·state.logs 로 번호가 새던 경로) —
              서버에서 형식만 확인해 PC 가 이미 아는 표시값으로 보냄 */
-          if (sc && sc.enc) phoneStr = phoneCheckLabel(decPhone(sc.enc));
-          else if (sc && sc.ph) phoneStr = '010-암호화보관확인';
+          /* 못 풀면(서버 키 없음 등) '형식오류'로 보내지 않음 — 그러면 멀쩡한 번호도 신청자에게 '번호를 정확히' 보류가 감.
+             저장할 때 savePhone 이 이미 normPhone 으로 형식을 거름 */
+          const plainPh = sc && sc.enc ? decPhone(sc.enc) : '';
+          if (plainPh) phoneStr = phoneCheckLabel(plainPh);
+          else if (sc && sc.enc) console.error('pc_sync_pull: 번호 복호화 실패 ' + p.id);
+          if (!phoneStr && sc && sc.ph) phoneStr = '010-암호화보관확인';
         } catch (e) {}
         if (!phoneStr) {
           try {
