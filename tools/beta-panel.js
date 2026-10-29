@@ -187,6 +187,14 @@
       }).then(function () { hide(); activeTab = 'admin'; paint(currentState); draw(); })
         .catch(function (e) { hide(); modalNotice('실패', (e && e.message) || String(e)); });
     }
+    /* 이 기기를 베타 믿을 관리자 기기로(열쇠 받기) — 실기기 시험용. 베타 서버(betaSeed trustDevice)만 받아 줌 */
+    function trustThisDevice() {
+      var hide = showBusy('이 기기를 베타 관리자 기기로 등록 중…');
+      callFn('betaSeed', { op: 'trustDevice', password: BETA_ADMIN_PW, deviceId: adminDeviceId(), deviceName: adminDeviceName() }).then(function (r) {
+        saveAdminDeviceKey(r && r.data && r.data.deviceKey); hide();
+        modalNotice('등록됨', '이 기기는 이제 베타 관리자 기기예요. [관리자로]를 누르면 바로 들어가고, 다른 기기의 새 기기 승인(허용·이번만·거부)을 할 수 있어요.');
+      }).catch(function (e) { hide(); modalNotice('실패', (e && e.message) || String(e)); });
+    }
     function asMember(id) {
       var hide = showBusy('시험 회원으로 들어가는 중…');
       clearAdminPin(); adminPrivateKey = null; isAdminUnlocked = false;
@@ -236,6 +244,7 @@
         '<div style="margin-bottom:6px;padding:5px 6px;background:#f3f0ff;border-radius:8px;color:#333;"><div id="bp-ac">' + acHtml() + '</div>' +
           '<button type="button" id="bp-ac-reload" style="margin-top:3px;">새로고침해서 다시 재기</button></div>' +
         '<div style="display:flex;gap:4px;margin-bottom:6px;"><button type="button" id="bp-admin" style="flex:1;">관리자로</button><button type="button" id="bp-guest" style="flex:1;">손님으로</button></div>' +
+        '<button type="button" id="bp-trust" style="width:100%;margin-bottom:6px;">📱 이 기기를 베타 관리자 기기로</button>' +
         '<div style="display:flex;gap:4px;margin-bottom:6px;"><select id="bp-mem" style="flex:1;min-width:0;">' +
           (_known.length ? _known.map(function (k) { return '<option value="' + escapeHtml(k.id) + '">' + escapeHtml(k.nick) + (k.tag ? ' (' + k.tag + ')' : '') + '</option>'; }).join('') : '<option value="">(관리자로 한 번 들어가면 목록이 생겨요)</option>') +
         '</select><button type="button" id="bp-mem-go">회원으로</button></div>' +
@@ -249,6 +258,7 @@
       else if (id === 'bp-close') { open = false; draw(); }
       else if (id === 'bp-admin') asAdmin();
       else if (id === 'bp-guest') toGuest();
+      else if (id === 'bp-trust') trustThisDevice();
       else if (id === 'bp-ac-reload') { try { sessionStorage.setItem('betaPanelOpen', '1'); } catch (x) {} location.reload(); }
       else if (id === 'bp-mem-go') { var v = box.querySelector('#bp-mem').value; if (v) asMember(v); }
       else if (id === 'bp-seed-tpl') modalConfirm('운영 모양으로 심기', '베타 데이터를 모두 지우고, 운영과 같은 모양(인원·관계·시각)의 가짜 데이터로 바꿔요. 계속할까요?').then(function (ok) { if (ok) seedFromTemplate(); });

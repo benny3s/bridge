@@ -3552,6 +3552,15 @@ exports.betaSeed = functions
   .runWith({ maxInstances: 1, timeoutSeconds: 120, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (!isBetaProject()) throw new HttpsError('permission-denied', '베타 서버 전용 기능이에요.');
+    /* 베타 전용: 🧪 패널 '이 기기를 베타 관리자 기기로' — 베타 관리자 비번(가짜 데이터용)이 맞으면 이 기기를 믿을 기기로+열쇠 (실기기 시험 때 승인해 줄 기기가 없어서, 10-29) */
+    if (data && data.op === 'trustDevice') {
+      const id = adminDevId(data.deviceId);
+      if (!id) throw new HttpsError('invalid-argument', '기기 정보가 없어요.');
+      if (!adminPasswordOk(String(data.password || ''), (await db.collection('adminKey').doc('main').get()).data())) throw new HttpsError('permission-denied', '베타 관리자 비밀번호가 아니에요.');
+      const deviceKey = await trustAdminDevice(id, adminMeta(context, data), 'beta-test');
+      await adminAudit({ status: 'beta-trust', deviceId: id });
+      return { ok: true, deviceKey };
+    }
     const cur = await db.doc('app/state').get();
     const isAdm = adminOk(context);
     if (cur.exists && !isAdm) throw new HttpsError('permission-denied', '이미 데이터가 있어요. 베타 관리자로 로그인한 뒤 다시 심어주세요.');
