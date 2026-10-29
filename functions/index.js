@@ -27,7 +27,11 @@ function decPhone(blob) {
     const d = nodeCrypto.createDecipheriv('aes-256-gcm', numKey(), Buffer.from(parts[0], 'hex'));
     d.setAuthTag(Buffer.from(parts[1], 'hex'));
     return Buffer.concat([d.update(Buffer.from(parts[2], 'hex')), d.final()]).toString('utf8');
-  } catch (e) { return ''; }
+  } catch (e) {
+    /* 키가 없어 못 푼 것은 조용히 넘기지 않음 (10-29 aiConcierge 에 secrets 빠져 모든 번호가 '형식오류'로 보였음) */
+    if ((process.env.NUM_ENC_KEY || '').length < 64) console.error('decPhone: NUM_ENC_KEY 없음 — 이 함수 runWith secrets 확인');
+    return '';
+  }
 }
 /* 매칭용 번호 해시 (원본 대신 비교용). 서버 전용 키로 HMAC → 클라이언트로 새어도 역추적 불가 */
 function hmacPhone(normalized) {
@@ -3755,7 +3759,9 @@ exports.aiConcierge = functions
       return {
         ok: true,
         pending_tickets: pending,
-        coadmin_targets: { pending_items: pendingItems, edit_items: editItems }
+        coadmin_targets: { pending_items: pendingItems, edit_items: editItems },
+        /* 검사 장치 상태 — PC 가 이게 false 면 번호를 이유로 신청자를 보류하지 않고 관리자에게 알림 (10-29) */
+        health: { numKey: (process.env.NUM_ENC_KEY || '').length >= 64 }
       };
     }
 
@@ -3764,11 +3770,13 @@ exports.aiConcierge = functions
       if (!pcSyncKeyOk(data)) throw new HttpsError('permission-denied', '동기화 키 불일치');
       const pendRes = Array.isArray(data && data.pending_results) ? data.pending_results : [];
       const editRes = Array.isArray(data && data.edit_results) ? data.edit_results : [];
-      const approveMap = {}, holdMap = {}, confirmMap = {}, flagMap = {};
+      const approveMap = {}, holdMap = {}, confirmMap = {}, flagMap = {}, escalateMap = {};
       pendRes.forEach((r) => {
         if (r && r.id) {
           if (r.action === 'APPROVE') approveMap[r.id] = r;
           else if (r.action === 'HOLD') holdMap[r.id] = r;
+          /* 신청자가 고칠 일이 아닌데(검사 장치 이상·판단 불가) 막힌 건 → 신청자에겐 아무것도 안 보내고 관리자 확인 대기 (10-29 승완 님) */
+          else if (r.action === 'ESCALATE') escalateMap[r.id] = r;
         }
       });
       editRes.forEach((r) => {
@@ -3784,6 +3792,10 @@ exports.aiConcierge = functions
       for (const id of Object.keys(approveMap)) {
         const why = await signupRisk(id).catch(() => ['신청 기록 확인 실패']);
         if (why.length) { riskMap[id] = why; delete approveMap[id]; }
+      }
+      for (const id of Object.keys(escalateMap)) {
+        if (approveMap[id] || holdMap[id]) continue;
+        riskMap[id] = [clip(scrubPhones(escalateMap[id].escalate_reason || escalateMap[id].reason || '자동 심사로 판단할 수 없음'), 120)];
       }
       const stateRef = db.doc('app/state');
       const approvedEntries = [];
@@ -3837,7 +3849,7 @@ exports.aiConcierge = functions
             nextPend.push(rcState);
             riskEntries.push(rc);
             logs.push(Object.assign(logItem('admin', 'AI 부관리자', '승인 보류 — 관리자 확인 필요 · ' + (rc.nickname || '')),
-              { eid: rc.id, why: '외부 접속 신호가 있어 관리자 확인이 필요해요' }));
+              { eid: rc.id, why: escalateMap[p.id] ? '자동 심사로 판단 못 함 — 관리자 확인 필요' : '외부 접속 신호가 있어 관리자 확인이 필요해요' }));
           } else if (holdMap[p.id]) {
             const heldCopy = Object.assign({}, p, {
               heldReason: scrubPhones(holdMap[p.id].hold_reason) || '프로필 사진 및 소개글 보완이 필요해요.',
@@ -3909,7 +3921,7 @@ exports.aiConcierge = functions
         await sendToAdmin('⚠️ 프로필 변경 확인 필요', editRiskList.slice(0, 3).map((x) => (x.nickname || '?') + ': ' + x.why.join('·')).join(' / '), { route: 'admin' }).catch(() => {});
       }
       for (const r of riskEntries) {
-        await sendToAdmin('🛂 AI 승인 보류 · ' + (r.nickname || ''), '외부 공격 신호: ' + r.aiRisk.join(', ') + ' — 관리자탭 승인 대기에서 직접 확인', { route: 'admin' }).catch(() => {});
+        await sendToAdmin('🛂 AI 승인 보류 · ' + (r.nickname || ''), (escalateMap[r.id] ? '판단 못 함: ' : '외부 공격 신호: ') + r.aiRisk.join(', ') + ' — 관리자탭 승인 대기에서 직접 확인', { route: 'admin' }).catch(() => {});
       }
       return { ok: true, approved: approvedEntries.length, held: heldEntries.length, riskHeld: riskEntries.map((r) => ({ id: r.id, nickname: r.nickname || '', why: r.aiRisk })) };
     }
