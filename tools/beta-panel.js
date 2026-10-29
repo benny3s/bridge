@@ -191,7 +191,7 @@
     function trustThisDevice() {
       var hide = showBusy('이 기기를 베타 관리자 기기로 등록 중…');
       callFn('betaSeed', { op: 'trustDevice', password: BETA_ADMIN_PW, deviceId: adminDeviceId(), deviceName: adminDeviceName() }).then(function (r) {
-        saveAdminDeviceKey(r && r.data && r.data.deviceKey); hide();
+        saveAdminDeviceId(r && r.data && r.data.deviceId); saveAdminDeviceKey(r && r.data && r.data.deviceKey); hide();
         modalNotice('등록됨', '이 기기는 이제 베타 관리자 기기예요. [관리자로]를 누르면 바로 들어가고, 다른 기기의 새 기기 승인(허용·이번만·거부)을 할 수 있어요.');
       }).catch(function (e) { hide(); modalNotice('실패', (e && e.message) || String(e)); });
     }
