@@ -1126,7 +1126,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-496';
+  var APP_VERSION = '2026-10-29-497';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -9333,10 +9333,94 @@
     /* AI 가 '본인으로 보임' 판정한 건(알림 안 보냄)은 확인 필요 수에서 빼고 흐리게 */
     var secQuiet = function (a) { return !!(a.triage && a.triage.state === 'benign'); };
     var secOpen = _secAlerts.filter(function (a) { return !a.resolved && !secQuiet(a); });
+    /* 2026-10-29 Benny "보안경고 탭 너무 길어서 보기 힘들어" → 확인할 것만 짧은 카드(같은 사람·같은 일은 ×n 으로 묶음), 나머지는 '지난 경고'에 날짜별 한 줄,
+       자세한 내용(사유·IP·기기·AI 이유)은 눌러서 펼침, 설명 글도 접음 */
+    var SEC_ICON = { tamper: '🚨', quarantine: '⛔', 'admin-device': '🔐', 'login-lock': '🔒', 'admin-lock': '🚨', 'ip-block': '🛡', suspicious: '👁', 'vpn-hold': '🛂' };
+    var ADEV_KIND = { pending: '새 기기 로그인 대기', trusted: '믿을 기기로 등록됨', once: '이번만 허용', unregistered: '등록 안 된 기기에 관리자 로그인' };
+    function secWho(a) {
+      if (a.type === 'tamper') return a.writerNick || a.writer || '';
+      if (a.type === 'admin-device') return a.nickname || a.device || '기기';
+      if (a.type === 'login-lock' || a.type === 'admin-lock') return a.target || '';
+      return a.nickname || a.target || '';
+    }
+    function secWhat(a) {
+      if (a.type === 'suspicious') return SUS_KIND[a.kind] || a.kind || '';
+      if (a.type === 'admin-device') return ADEV_KIND[a.kind] || a.kind || '';
+      if (a.type === 'tamper') return '다른 회원 데이터 ' + (a.issues || []).length + '건 바꿈';
+      if (a.type === 'quarantine') return '계정 자동 차단';
+      if (a.type === 'ip-block') return '1시간에 ' + (a.fails || 0) + '번 실패 → IP 1시간 차단';
+      if (a.type === 'vpn-hold') return 'VPN 로그인 보류';
+      if (a.type === 'login-lock') return '회원 로그인 잠김';
+      if (a.type === 'admin-lock') return '관리자 로그인 잠김';
+      return SEC_TYPE[a.type] || a.type || '';
+    }
+    function secAiTag(t) {
+      if (!t || !t.state || t.state === 'skip') return '';
+      var v = t.state === 'noted' ? t.ai : t.state;
+      var m = { benign: ['본인 같음', '#137333'], suspicious: ['수상', '#c5221f'], unsure: ['애매', '#8a6d00'], pending: ['판단 중', '#8a6d00'], note: ['판단 중', '#8a6d00'] }[v];
+      return m ? ' <span style="color:' + m[1] + ';font-weight:600;white-space:nowrap;">🤖' + m[0] + '</span>' : '';
+    }
+    /* 펼치면 보이는 자세한 내용 */
+    function secDetail(a) {
+      var b = '';
+      var ipLine = function () { return '<span class="sub">' + escapeHtml(a.ip || '') + (a.intel && (a.intel.city || a.intel.provider) ? ' (' + escapeHtml([a.intel.city, a.intel.provider].filter(Boolean).join(' · ')) + (a.intel.vpn ? ', VPN' : '') + ')' : '') + (a.device ? ' · ' + escapeHtml(a.device) : '') + '</span>'; };
+      if (a.type === 'tamper') b = escapeHtml(a.summary || '');
+      else if (a.type === 'quarantine') b = '7일 안에 다른 회원 데이터를 ' + (a.strikes || 2) + '번 바꾸려 해 앱 접속·로그인을 막음' + ((state.secBlock || []).indexOf(a.target) >= 0 ? '' : ' <span style="color:#137333;">(지금은 풀림)</span>');
+      else if (a.type === 'admin-device') b = ipLine() + (a.via ? ' <span class="sub">· ' + escapeHtml(a.via) + '</span>' : '');
+      else if (a.type === 'vpn-hold') b = ((a.reasons || []).length ? escapeHtml(a.reasons.join(' / ')) + '<br>' : '') + ipLine() + '<br><button type="button" class="card-btn" data-action="sec-holds" style="flex:none;margin-top:4px;">🛂 허용·거부 하러 가기</button>';
+      else if (a.type === 'suspicious') b = ((a.reasons || []).length ? escapeHtml(a.reasons.join(' / ')) + '<br>' : '') + ipLine();
+      else if (a.type === 'login-lock' || a.type === 'admin-lock') b = (a.fails || 0) + '번 틀림';
+      b += secAiLine(a.triage);
+      if (a.restoredAt) b += ' <span style="color:#137333;">(되돌림 ' + fmtDate(a.restoredAt) + ')</span>';
+      return b.replace(/^<br>/, '');
+    }
+    var secKey = function (a) { return a.type + '|' + secWho(a) + '|' + secWhat(a); };
+    var secCanRestore = function (a) { return !a.resolved && a.type === 'tamper' && !a.restoredAt && (a.issues || []).some(function (i) { return i && i.coll; }); };
+    /* 확인 필요: 같은 사람·같은 일은 한 카드로 (되돌릴 수 있는 이상 변경은 따로) */
+    var secOpenGroups = [], secOg = {};
+    secOpen.forEach(function (a) {
+      var k = secCanRestore(a) ? 'r:' + a._id : secKey(a);
+      if (!secOg[k]) { secOg[k] = []; secOpenGroups.push(secOg[k]); }
+      secOg[k].push(a);
+    });
+    var secOpenHtml = secOpenGroups.map(function (g) {
+      var a = g[0];
+      var reasons = (a.reasons || []).join(' · ');
+      var btns = '';
+      if (secCanRestore(a)) btns += '<button type="button" class="card-btn danger" data-action="sec-restore" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">되돌리기</button> ';
+      btns += '<button type="button" class="card-btn" data-action="sec-ack-many" data-ids="' + escapeHtml(g.map(function (x) { return x._id; }).join(',')) + '" style="flex:none;padding:3px 10px;">확인함' + (g.length > 1 ? ' (' + g.length + '건)' : '') + '</button>';
+      return '<div style="border:1px solid #f1b0ab;background:#fdecea;border-radius:10px;padding:7px 10px;margin-bottom:6px;font-size:0.84rem;">' +
+        '<div>' + (SEC_ICON[a.type] || '•') + ' ' + (secWho(a) ? '<b>' + escapeHtml(secWho(a)) + '</b> · ' : '') + escapeHtml(secWhat(a)) + (g.length > 1 ? ' <b>×' + g.length + '</b>' : '') + secAiTag(a.triage) + ' <span class="sub" style="white-space:nowrap;">' + relTimeShort(a.at) + '</span></div>' +
+        (reasons ? '<div class="sub" style="margin-top:2px;">' + escapeHtml(reasons) + '</div>' : '') +
+        '<details data-fk="so:' + escapeHtml(a._id) + '" style="margin:3px 0 5px;"><summary class="sub" style="cursor:pointer;">자세히</summary>' +
+          g.slice(0, 5).map(function (x) { return '<div style="font-size:0.8rem;margin:4px 0 0;"><span class="sub">' + fmtDate(x.at) + '</span> ' + secDetail(x) + '</div>'; }).join('') +
+          (g.length > 5 ? '<div class="sub">… 외 ' + (g.length - 5) + '건</div>' : '') + '</details>' +
+        btns + '</div>';
+    }).join('');
+    var secAckAll = secOpen.filter(function (a) { return !secCanRestore(a); });
+    /* 지난 경고: 확인함·AI 가 본인으로 본 것 — 날짜별 한 줄, 같은 일이 이어지면 ×n */
+    var secPast = _secAlerts.filter(function (a) { return a.resolved || secQuiet(a); });
+    var secDayOf = function (iso) { var d = new Date(iso); return isNaN(d) ? '' : (d.getMonth() + 1) + '/' + d.getDate(); };
+    var secToday = secDayOf(new Date().toISOString()), secYday = secDayOf(new Date(Date.now() - 86400000).toISOString());
+    var secPastRows = [], secLastDay = '', secPrev = null;
+    secPast.forEach(function (a) {
+      var dy = secDayOf(a.at);
+      if (secPrev && secPrev.day === dy && secPrev.key === secKey(a)) { secPrev.items.push(a); return; }
+      secPrev = { day: dy, key: secKey(a), items: [a] }; secPastRows.push(secPrev);
+    });
+    var secPastHtml = secPastRows.map(function (r) {
+      var a = r.items[0], hd = '';
+      if (r.day !== secLastDay) { secLastDay = r.day; hd = '<div class="sub" style="font-weight:700;margin:8px 0 2px;">' + escapeHtml(r.day) + (r.day === secToday ? ' (오늘)' : r.day === secYday ? ' (어제)' : '') + '</div>'; }
+      var t = new Date(a.at), hm = isNaN(t) ? '' : ('0' + t.getHours()).slice(-2) + ':' + ('0' + t.getMinutes()).slice(-2);
+      return hd + '<details data-fk="sp:' + escapeHtml(a._id) + '" style="border-bottom:1px solid var(--line);">' +
+        '<summary style="cursor:pointer;list-style:none;padding:5px 2px;font-size:0.82rem;display:flex;gap:6px;align-items:baseline;">' +
+          '<span class="sub" style="flex:none;width:40px;">' + hm + '</span>' +
+          '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (SEC_ICON[a.type] || '•') + ' ' + (secWho(a) ? escapeHtml(secWho(a)) + ' · ' : '') + escapeHtml(secWhat(a)) + (r.items.length > 1 ? ' ×' + r.items.length : '') + '</span>' +
+          secAiTag(a.triage) + '</summary>' +
+        '<div style="font-size:0.8rem;padding:2px 0 6px 46px;">' + r.items.slice(0, 5).map(function (x) { return (r.items.length > 1 ? '<span class="sub">' + fmtDate(x.at) + '</span> ' : '') + secDetail(x); }).join('<br>') + '</div></details>';
+    }).join('');
+    var secNQuiet = secPast.filter(function (a) { return !a.resolved; }).length;
     var securitySection = adminFold('🛡 보안 경고' + (secOpen.length ? ' <span class="blink-soft" style="background:#c5221f;color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">확인 필요 ' + secOpen.length + '</span>' : ''), null,
-      '<p class="sub">회원 계정으로 <b>다른 회원 데이터가 바뀌면</b>(개발자 도구 조작 의심) 바뀌기 전 내용과 함께 기록돼요. [되돌리기]로 원래대로 돌릴 수 있어요. 로그인 잠금·IP 차단도 여기 표시돼요. (7일 이내면 전체 시점 복구도 가능)</p>' +
-      '<p class="sub">👁 수상한 접속 = VPN·공격 이력 IP·처음 보는 기기·오래 안 쓰던 계정·쉬운 PIN 대입 등. 모든 로그인 시도와 앱 접속(IP·기기·사이트)은 서버에 남아요.</p>' +
-      '<p class="sub">🤖 \'새 기기·오래만의 접속\'뿐인 경고는 AI(Claude)가 먼저 봐요 — 본인으로 보이면 알림 없이 기록만(흐리게), 수상하거나 애매하면 알림. 나머지 경고는 바로 알림 + AI 의견만 덧붙여요.</p>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px;">' +
         '<button type="button" class="card-btn" data-action="sec-log" style="flex:none;">🔐 로그인·접속 기록</button>' +
         '<button type="button" class="card-btn" data-action="sec-holds" style="flex:none;">🛂 VPN 로그인 검토</button>' +
@@ -9350,32 +9434,15 @@
           return '<div style="display:flex;align-items:center;gap:8px;margin:3px 0;"><span style="flex:1;font-size:0.86rem;">' + escapeHtml(nickForEntry(state, id) || id) + '</span>' +
             '<button type="button" class="card-btn" data-action="sec-unblock" data-id="' + escapeHtml(id) + '" style="flex:none;padding:3px 10px;">차단 풀기</button></div>';
         }).join('') + '</div>' : '') +
-      (_secAlerts.length ? _secAlerts.map(function (a) {
-        var head = '<b>' + escapeHtml(SEC_TYPE[a.type] || a.type) + '</b> · ' + fmtDate(a.at);
-        var body = '';
-        if (a.type === 'tamper') body = escapeHtml(a.writerNick || a.writer || '') + '님 계정으로 ' + (a.issues || []).length + '건 — ' + escapeHtml(a.summary || '');
-        else if (a.type === 'quarantine') body = '<b>' + escapeHtml(a.nickname || a.target || '') + '</b> · 7일 안에 다른 회원 데이터를 ' + (a.strikes || 2) + '번 바꾸려 해 앱 접속·로그인을 막음' +
-          ((state.secBlock || []).indexOf(a.target) >= 0 ? '' : ' <span style="color:#137333;">(지금은 풀림)</span>');
-        else if (a.type === 'admin-device') body = '<b>' + escapeHtml(a.nickname || a.device || '기기') + '</b> · ' + (a.kind === 'pending' ? '새 기기 로그인 대기' : '믿을 기기로 등록됨') +
-          (a.ip ? '<br><span class="sub">' + escapeHtml(a.ip) + (a.via ? ' · ' + escapeHtml(a.via) : '') + '</span>' : '');
-        else if (a.type === 'ip-block') body = '한 곳에서 1시간에 ' + (a.fails || 0) + '번 실패 → 1시간 차단';
-        else if (a.type === 'vpn-hold') body = '<b>' + escapeHtml(a.nickname || '') + '</b> · PIN은 맞았지만 VPN이라 보류' +
-          '<br><span class="sub">' + escapeHtml(a.ip || '') + ' (' + escapeHtml([a.intel && a.intel.provider, a.intel && a.intel.country].filter(Boolean).join(' · ')) + ') · ' + escapeHtml(a.device || '') + '</span>' +
-          ((a.reasons || []).length ? '<br>' + escapeHtml(a.reasons.join(' / ')) : '') +
-          '<br><button type="button" class="card-btn" data-action="sec-holds" style="flex:none;margin-top:4px;">🛂 허용·거부 하러 가기</button>';
-        else if (a.type === 'suspicious') body ='<b>' + escapeHtml(a.nickname || a.target || '') + '</b> · ' + escapeHtml(SUS_KIND[a.kind] || a.kind || '') +
-          '<br>' + escapeHtml((a.reasons || []).join(' / ')) +
-          '<br><span class="sub">' + escapeHtml(a.ip || '') + (a.intel && (a.intel.city || a.intel.provider) ? ' (' + escapeHtml([a.intel.city, a.intel.provider].filter(Boolean).join(' · ')) + ')' : '') + ' · ' + escapeHtml(a.device || '') + '</span>';
-        else body = escapeHtml(a.target || '') + ' · ' + (a.fails || 0) + '번 틀림';
-        body += secAiLine(a.triage);
-        var btns = '';
-        if (!a.resolved && a.type === 'tamper' && !a.restoredAt && (a.issues || []).some(function (i) { return i && i.coll; })) btns += '<button type="button" class="card-btn danger" data-action="sec-restore" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">되돌리기</button> ';
-        if (!a.resolved && !secQuiet(a)) btns += '<button type="button" class="card-btn" data-action="sec-ack" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">확인함</button>';
-        if (a.restoredAt) body += ' <span style="color:#137333;">(되돌림 ' + fmtDate(a.restoredAt) + ')</span>';
-        var calm = a.resolved || secQuiet(a);
-        return '<div style="border:1px solid ' + (calm ? 'var(--line)' : '#f1b0ab') + ';background:' + (calm ? 'transparent' : '#fdecea') + ';border-radius:10px;padding:8px 11px;margin-bottom:6px;' + (calm ? 'opacity:.6;' : '') + '">' +
-          '<div style="font-size:0.86rem;">' + head + '</div><div style="font-size:0.84rem;margin:3px 0 5px;">' + body + '</div>' + btns + '</div>';
-      }).join('') : '<p class="sub">경고가 없어요 🙆</p>'), !!secOpen.length, 'security');
+      (secOpenGroups.length ? secOpenHtml + (secAckAll.length > 1 ? '<button type="button" class="card-btn" data-action="sec-ack-many" data-ids="' + escapeHtml(secAckAll.map(function (x) { return x._id; }).join(',')) + '" style="flex:none;margin:0 0 8px;">모두 확인함 (' + secAckAll.length + '건)</button>' : '')
+        : '<p style="margin:0 0 8px;font-size:0.88rem;color:#137333;">✅ 확인할 경고가 없어요</p>') +
+      (secPast.length ? '<details class="req-fold" data-fk="sec-past"><summary><span style="flex:1;min-width:0;white-space:normal;">📂 지난 경고 <b>' + secPast.length + '</b>건' + (secNQuiet ? ' <span class="sub">· 🤖본인 같음 ' + secNQuiet + '</span>' : '') + '</span></summary>' +
+        '<div class="req-fold-body" style="padding-top:0;">' + secPastHtml + '</div></details>' : '') +
+      '<details data-fk="sec-help" style="margin-top:6px;"><summary class="sub" style="cursor:pointer;">ℹ️ 보안 경고 설명</summary>' +
+        '<p class="sub">회원 계정으로 <b>다른 회원 데이터가 바뀌면</b>(개발자 도구 조작 의심) 바뀌기 전 내용과 함께 기록돼요. [되돌리기]로 원래대로 돌릴 수 있어요. 로그인 잠금·IP 차단도 여기 표시돼요. (7일 이내면 전체 시점 복구도 가능)</p>' +
+        '<p class="sub">👁 수상한 접속 = VPN·공격 이력 IP·처음 보는 기기·오래 안 쓰던 계정·쉬운 PIN 대입 등. 모든 로그인 시도와 앱 접속(IP·기기·사이트)은 서버에 남아요.</p>' +
+        '<p class="sub">🤖 \'새 기기·오래만의 접속\'뿐인 경고는 AI(Claude)가 먼저 봐요 — 본인으로 보이면 알림 없이 기록만(지난 경고로), 수상하거나 애매하면 알림. 나머지 경고는 바로 알림 + AI 의견만 덧붙여요.</p>' +
+      '</details>', !!secOpen.length, 'security');
     var secHtml = {
       security: securitySection,
       reports: reportsSection,
@@ -13356,6 +13423,7 @@
       else if (action === 'sec-holds') { if (isAdminUnlocked) openLoginHolds(); }
       else if (action === 'sec-admindev') { if (isAdminUnlocked) openAdminDevices(); }
       else if (action === 'sec-pinaudit') { if (isAdminUnlocked) runPinAudit(); }
+      else if (action === 'sec-ack-many') { if (isAdminUnlocked) { var _now = new Date().toISOString(); Promise.all(String(actionBtn.getAttribute('data-ids') || '').split(',').filter(Boolean).map(function (x) { return db.collection('securityAlerts').doc(x).update({ resolved: true, resolvedAt: _now }); })).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); }); } }
       else if (action === 'sec-ack') { if (isAdminUnlocked) db.collection('securityAlerts').doc(id).update({ resolved: true, resolvedAt: new Date().toISOString() }).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); }); }
       else if (action === 'sec-restore') { if (isAdminUnlocked) restoreTamper(id); }
       else if (action === 'sec-unblock') { if (isAdminUnlocked) releaseSecBlock(id); }
