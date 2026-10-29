@@ -56,6 +56,16 @@
 - **메시지함**(v435~): 탭 💬 대화(맨 위 '👑 베니브릿지 관리자' 방 = 관리자 메시지, `adminRoomHtml`, 안 읽음은 기기 localStorage와 서버 `mineSeenAt` 중 늦은 것 기준) · 📥 받은 · 📤 보낸(상태 칩 `reqFilter`, 🙈 숨김 보기·숨김 취소) · 🔗 내 연결(☆ 즐겨찾기 기기 저장). 계정 관련은 '⚙️ 내 계정'(`openAccountSheet`, 주선자 홈은 `data-mm="1"`, 친구로 활동 중은 친구 계정 — 주선자 본인 프로필은 친구가 아님).
 - 배포: 규칙 `firebase deploy --only firestore:rules --project benny-bridge-beta`(Windows MCP), 함수 `--project benny-bridge-beta`. 베타 비밀값(NUM_ENC_KEY 등)은 베타 전용 새 값(SOLAPI는 가짜). **운영에 배포할 땐 `--project benny-meeting`(기본값) 확인.**
 
+## 관리자 기기 · 열쇠 · 이번만 허용 (2026-10-29~30, 브랜치 feat/admin-once)
+- 믿을 관리자 기기 = `adminDevices/{id}` 의 `status:'trusted'` + **기기 열쇠**(`keyHash`, 서버엔 해시만, 앱은 localStorage `bennyAdminDeviceKey` — 포털·레이더와 같이 씀).
+  id 만으로는 안 믿음(목록·경고에 보임). 이번만 토큰(claim `ao`)은 열쇠가 있어도 안 믿음. 이미 열쇠 가진 id 로 다시 승인받으면 서버가 **새 id**를 줌(`deviceId`, 앱이 저장).
+- 열쇠 받는 길: 첫 기기 · 보류 승인 · 문자 인증 · **첫 열쇠(전체에서 한 번, `security/adminKeys.bootstrapped`, keyOk/wantKey 화면만)** · 베타 🧪 trustDevice. 그 밖의 예전 기기는 📱 관리자 기기 [이 기기 열쇠 받기](다시 로그인 → 승인).
+- 관리자 알림 = `adminDevices/{id}.push`(adminDevice pushOn/pushOff, 믿을 기기만) + 옛 `pushTokens/admin`(서버만 씀, 묶인 기기가 있을 때만 비움).
+- 규칙: `isFullAdmin`(ao 없음)만 adminKey 쓰기·adminAuth 바꾸기·app/state 만들기/지우기. `isSelf` 는 'admin' 제외.
+- **운영 배포 순서(지킬 것)**: ① 포털 `admin-login.js` push(옛 서버와도 맞음) ② 규칙(Windows MCP) ③ 함수 **전체** `--only functions`(일부만 배포하면 이번만 토큰이 끝나도 옛 함수가 관리자로 봄 — 22개 다 새로 됐는지 확인)
+  ④ Music Lab 재시작(`Start-ScheduledTask "MusicLab Server"`, 첫 관리자 로그인 때 베니 폰 [허용] 한 번) ⑤ master 병합(화면) ⑥ **베니 폰에서 앱 먼저 열기**(첫 열쇠) ⑦ 다른 기기는 [이 기기 열쇠 받기] ⑧ 쓰는 기기에 🔔 보이면 [옛 방식 비우기].
+- 시험: `node tools/test-admin/keytest.js`(45) · `pushtest.js`(32) · `admintest.js`(18) — 가짜 DB 로 `functions/index.js` 를 그대로 불러 돌림(관리자 기기·알림·App Check 고치면 돌릴 것).
+
 ## 환경별 주의 (로컬 데스크톱 vs 클라우드/샌드박스)
 이 프로젝트의 풀 워크플로(배포·라이브확인·QA·라이브 데이터)는 **로컬 데스크톱 세션**을 전제로 한다. 클라우드/샌드박스(원격) 세션은 제약이 있으니 주의:
 - **브라우저 도구(`mcp__Claude_Browser__*`)** 는 데스크톱 앱 세션에만 있음. 없는 환경에선 **QA·data-ops·라이브 Firestore 조작이 불가**(컨테이너에 Chromium+Playwright가 있으면 대체 경로를 별도로 만들 수 있음).
