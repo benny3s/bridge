@@ -509,6 +509,19 @@ exports.adminLogin = functions
       await adminAudit({ status: 'old-client', ip, device: meta.device, ua: meta.ua, origin: meta.origin });
       throw new HttpsError('failed-precondition', '관리자 로그인 방식이 바뀌었어요. 페이지를 새로고침한 뒤 다시 로그인해 주세요.');
     }
+    /* 열쇠 배포 직후 잠김 막기: 열쇠 가진 믿을 기기가 아직 하나도 없으면(승인해 줄 기기가 없음) 열쇠 없는 예전 믿을 기기는 비번만으로 열쇠를 받음.
+       열쇠 가진 기기가 하나라도 생기면 닫힘 — 그 뒤 예전 기기는 그 기기의 승인으로 (이번만 토큰은 배포 전엔 없음) */
+    if (keyMiss === '열쇠 없는 예전 기기' && Date.now() < LEGACY_KEY_UNTIL) {
+      const tr = await db.collection('adminDevices').where('status', '==', 'trusted').get();
+      if (!tr.docs.some((d) => d.data().keyHash)) {
+        const deviceKey = await issueDeviceKey(deviceId);
+        await db.collection('adminDevices').doc(deviceId).set({ lastAt: new Date().toISOString(), ip }, { merge: true });
+        await adminAudit({ status: 'key-bootstrap', deviceId, ip, device: meta.device });
+        await securityAlert({ type: 'admin-device', kind: 'trusted', target: deviceId, nickname: devDoc.name || meta.device, ip, device: meta.device, via: 'key-bootstrap' },
+          '🔑 관리자 기기 첫 열쇠', (devDoc.name || meta.device) + ' · ' + ip + ' — 예전에 믿을 기기였던 기기가 처음 열쇠를 받음. 본인이 아니면 관리자 기기에서 해제').catch(() => {});
+        return { token: await admin.auth().createCustomToken('admin', { admin: 1 }), deviceKey };
+      }
+    }
     /* 등록된 기기가 하나도 없을 때(처음 배포 직후)만: 이 기기를 첫 기기로 등록 */
     const any = await db.collection('adminDevices').where('status', '==', 'trusted').limit(1).get();
     if (any.empty) {
