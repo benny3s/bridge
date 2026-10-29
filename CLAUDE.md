@@ -30,6 +30,7 @@
    node -e 'const fs=require("fs"),vm=require("vm");const h=fs.readFileSync("index.html","utf8");const re=/<script(?![^>]*\bsrc=)(?![^>]*type="application\/json")[^>]*>([\s\S]*?)<\/script>/gi;let m,i=0,bad=0;while((m=re.exec(h))){i++;try{new vm.Script(m[1]);}catch(e){bad++;console.log("BLOCK "+i+" ERR: "+e.message);}}console.log("scanned "+i+" block(s), "+bad+" error(s)");'
    ```
    (functions 변경 시 `node --check functions/index.js`)
+   (functions 배포는 firebase.json predeploy 가 `node tools/check-secrets.js` 로 함수마다 쓰는 Secret(NUM_ENC_KEY·SOLAPI 등 — 직접이든 decPhone·encPhone 같은 도우미를 거쳐서든)이 `runWith({ secrets })` 에 있는지 확인하고 빠지면 멈춤. 2026-10-29 aiConcierge 에 NUM_ENC_KEY 가 빠져 decPhone 이 조용히 빈 값을 돌려주고 모든 신청자가 번호 '형식오류'로 보류됨. **검사 장치가 실패하면 그걸 사용자 탓으로 판정하지 말 것** — 못 풀면·못 읽으면 관리자 확인으로(AI 부관리자 ESCALATE))
 3. **커밋 + 푸시**. 커밋 메시지는 한국어로 무엇을 왜 바꿨는지 + 끝에 버전.
    - **브랜치 정책**: 로컬 데스크톱 세션은 **`master` 직푸시**(GitHub Pages가 master에서 배포). **단, 샌드박스/클라우드 세션이 "특정 브랜치에만 푸시" 같은 제한을 두면 그 세션 지침이 우선** — 그때는 세션 브랜치에 푸시하고 사용자가 master로 병합. 어느 쪽인지 애매하면 사용자에게 확인.
 4. **라이브 확인** — Pages 반영에 1~2분. 새 버전 뜰 때까지 폴링:
