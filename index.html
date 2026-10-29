@@ -1097,7 +1097,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-495';
+  var APP_VERSION = '2026-10-29-496';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1978,6 +1978,11 @@
     try { sess = JSON.parse(localStorage.getItem('meetUser') || sessionStorage.getItem('meetUser') || 'null'); } catch (e) {}
     var savedAdmin = getAdminPin();
     return authClaims().then(function (c) {
+      if (c.admin === 1 && c.ao) {   /* '이번만 허용' 세션: 끝났으면 나가고, 아니면 끝 시각 예약 */
+        _adminOnceUntil = Number(c.ao) || 0;
+        if (Date.now() >= _adminOnceUntil) { _adminOnceUntil = 0; clearAdminPin(); return dropToGuestAuth(); }
+        armAdminOnce(); return;
+      }
       if (c.admin === 1) enrollAdminDevice();
       if (savedAdmin) {
         if (c.admin === 1) return;
@@ -2386,6 +2391,7 @@
     return (os + ' ' + br).trim();
   }
   function adminServerLogin(pw) {
+    _adminOnceUntil = 0; clearTimeout(_adminOnceTimer);
     var dev = adminDeviceId();
     var payload = { password: pw, deviceId: dev, deviceName: adminDeviceName() };
     var direct = fns ? fns.httpsCallable('adminLogin')(payload).catch(function (e) { if (isSwMsgError(e)) return callFn('adminLogin', payload); throw e; }) : callFn('adminLogin', payload);
@@ -2394,7 +2400,31 @@
       if (d.token) return d.token;
       if (d.pending) return adminWaitApproval(d, dev);
       throw new Error('토큰을 받지 못했어요.');
-    }).then(function (t) { return firebase.auth().signInWithCustomToken(t); });
+    }).then(function (t) { return firebase.auth().signInWithCustomToken(t); }).then(function (cred) {
+      if (_adminOnceUntil) {
+        armAdminOnce();
+        var t = new Date(_adminOnceUntil);
+        modalNotice('🔓 이번만 허용', t.getHours() + ':' + ('0' + t.getMinutes()).slice(-2) + '까지 관리자로 쓸 수 있어요. 이 기기엔 비밀번호를 저장하지 않고, 시간이 지나면 자동으로 나가져요.');
+      }
+      return cred;
+    });
+  }
+  /* '이번만 허용'(v496) 관리자 로그인: 비밀번호 저장 안 함, 끝 시각에 관리자에서 나감 (서버·규칙도 그 시각부터 관리자로 안 봄) */
+  var _adminOnceUntil = 0, _adminOnceTimer = null;
+  function armAdminOnce() {
+    clearAdminPin();
+    clearTimeout(_adminOnceTimer);
+    var left = _adminOnceUntil - Date.now();
+    if (left <= 0) return adminOnceEnd();
+    _adminOnceTimer = setTimeout(adminOnceEnd, Math.min(left, 2147000000));
+  }
+  function adminOnceEnd() {
+    if (!_adminOnceUntil) return;
+    _adminOnceUntil = 0;
+    clearTimeout(_adminOnceTimer);
+    if (isAdminUnlocked) handleAdminToggle();
+    else dropToGuestAuth().then(syncServerAuth);
+    modalNotice('관리자 시간 끝', '이번만 허용된 12시간이 지나 관리자에서 나왔어요. 다시 쓰려면 로그인 후 승인받아 주세요.');
   }
   /* 처음 보는 기기: 베니 폰·PC 알림에서 허용 또는 문자 인증을 기다림 → 토큰 */
   function adminWaitApproval(d, dev) {
@@ -2413,7 +2443,7 @@
       function ask(extra) {
         return callFn('adminLogin', Object.assign({ holdId: d.holdId, pollKey: d.pollKey, deviceId: dev }, extra || {})).then(function (r) {
           var x = (r && r.data) || {};
-          if (x.token) { finish(null, x.token); return x; }
+          if (x.token) { _adminOnceUntil = x.once ? (Number(x.until) || 0) : 0; finish(null, x.token); return x; }
           return x;
         });
       }
@@ -4230,7 +4260,7 @@
   }
   /* 관리자 잠금 해제 유지: 이 기기(개인 기기)에 저장해 앱을 닫아도 관리자 모드 유지.
      (예전엔 sessionStorage라 앱을 닫을 때마다 관리자 로그인이 풀렸음) */
-  function saveAdminPin(pin) { try { localStorage.setItem('adminPin', pin); } catch (e) {} }
+  function saveAdminPin(pin) { if (_adminOnceUntil) return; try { localStorage.setItem('adminPin', pin); } catch (e) {} }   /* '이번만 허용' 기기엔 저장 안 함 */
   function getAdminPin() { try { return localStorage.getItem('adminPin') || sessionStorage.getItem('adminPin'); } catch (e) { return null; } }
   function clearAdminPin() { try { localStorage.removeItem('adminPin'); sessionStorage.removeItem('adminPin'); } catch (e) {} }
 
@@ -10025,7 +10055,8 @@
     modalPin('관리자 인증', '비밀번호를 입력하세요.', { password: true }).then(function (pin) {
       if (!pin) return;
       var hideBusy = showBusy('관리자 확인 중…');
-      adminServerLogin(pin).then(function () {
+      /* '이번만 허용' 세션이 아직 살아 있으면 다시 승인받지 않음 (비밀번호는 아래 unlockAdminKey 가 확인) */
+      (_adminOnceUntil > Date.now() ? Promise.resolve() : adminServerLogin(pin)).then(function () {
         return switchDataForAuth();
       }, function (e) {
         throw new Error(isAuthRejection(e) ? authErrMsg(e) : '서버 연결이 불안정해요. 잠시 후 다시 시도해주세요.');
@@ -12685,13 +12716,16 @@
       var ov = openModal('<h3>🛂 새 기기 관리자 로그인</h3>' +
         '<p class="modal-msg" style="text-align:left;"><b>' + escapeHtml(h.name || h.device || '') + '</b><br>' + escapeHtml(h.ip || '') +
         (it.city || it.provider ? ' (' + escapeHtml([it.city, it.provider].filter(Boolean).join(' · ')) + (it.vpn ? ', VPN' : '') + ')' : '') + '<br>' + fmtDate(h.at) +
-        '<br><br>지금 베니 님이 직접 로그인하는 중이면 <b>허용</b>, 모르는 시도면 <b>거부</b>를 눌러 주세요.</p>' +
-        '<div class="modal-actions"><button type="button" class="card-btn danger" id="ap-deny">거부</button><button type="button" class="card-btn approve" id="ap-ok">허용</button></div>');
-      function act(op) {
-        adminCall(op, { holdId: holdId }).then(function () { closeModal(ov); modalNotice('완료', op === 'approve' ? '허용했어요. 그 기기에서 바로 들어가요.' : '거부했어요. 그 IP는 감시 목록에 넣었어요.'); })
-          .catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+        '<br><br>모르는 시도면 <b>거부</b>. 베니 님이 직접 로그인하는 중이면 — 계속 쓸 기기는 <b>허용</b>, 회사·남의 PC처럼 잠깐 쓰는 기기는 <b>이번만</b>(12시간 뒤 자동으로 끊기고 기기 등록 안 함).</p>' +
+        '<div class="modal-actions"><button type="button" class="card-btn danger" id="ap-deny">거부</button><button type="button" class="card-btn" id="ap-once">이번만</button><button type="button" class="card-btn approve" id="ap-ok">허용</button></div>');
+      function act(op, once) {
+        adminCall(op, once ? { holdId: holdId, once: true } : { holdId: holdId }).then(function () {
+          closeModal(ov);
+          modalNotice('완료', op === 'deny' ? '거부했어요. 그 IP는 감시 목록에 넣었어요.' : once ? '이번만 허용했어요. 그 기기는 12시간 동안만 들어가요.' : '허용했어요. 그 기기에서 바로 들어가고, 관리자 기기로 등록돼요.');
+        }).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
       }
       ov.querySelector('#ap-ok').addEventListener('click', function () { act('approve'); });
+      ov.querySelector('#ap-once').addEventListener('click', function () { act('approve', true); });
       ov.querySelector('#ap-deny').addEventListener('click', function () { act('deny'); });
     }).catch(function (e) { modalNotice('새 기기 확인', (e && e.message) || String(e)); });
   }
@@ -12707,7 +12741,12 @@
         var d = (r && r.data) || {};
         var holds = (d.holds || []).map(function (h) {
           return '<div style="border:1px solid #f1b0ab;background:#fdecea;border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;">⏳ <b>' + escapeHtml(h.name || h.device || '') + '</b> · ' + escapeHtml(h.ip || '') + ' · ' + fmtDate(h.at) +
-            '<div style="margin-top:6px;display:flex;gap:6px;"><button type="button" class="card-btn approve" data-ap="approve" data-id="' + escapeHtml(h.id) + '" style="flex:none;">허용</button><button type="button" class="card-btn danger" data-ap="deny" data-id="' + escapeHtml(h.id) + '" style="flex:none;">거부</button></div></div>';
+            '<div style="margin-top:6px;display:flex;gap:6px;"><button type="button" class="card-btn approve" data-ap="approve" data-id="' + escapeHtml(h.id) + '" style="flex:none;">허용</button><button type="button" class="card-btn" data-ap="approve" data-once="1" data-id="' + escapeHtml(h.id) + '" style="flex:none;">이번만</button><button type="button" class="card-btn danger" data-ap="deny" data-id="' + escapeHtml(h.id) + '" style="flex:none;">거부</button></div></div>';
+        }).join('');
+        var onces = (d.onces || []).map(function (o) {
+          return '<div style="border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;">🔓 <b>' + escapeHtml(o.name || o.device || '') + '</b> · ' + escapeHtml(o.ip || '') +
+            '<br><span class="sub">' + fmtDate(o.at) + ' 허용 · ' + fmtDate(new Date(o.until).toISOString()) + '까지 · ' + escapeHtml(viaText(o.via)) + '</span>' +
+            '<div style="margin-top:6px;"><button type="button" class="card-btn danger" data-cut="' + escapeHtml(o.id) + '" style="flex:none;">끊기</button></div></div>';
         }).join('');
         var devs = (d.devices || []).sort(function (a, b) { return (a.status === 'trusted' ? 0 : 1) - (b.status === 'trusted' ? 0 : 1) || String(b.lastAt).localeCompare(String(a.lastAt)); }).map(function (v) {
           var off = v.status !== 'trusted';
@@ -12731,11 +12770,23 @@
         box.innerHTML = '<div style="max-height:62vh;overflow:auto;">' +
           (d.meTrusted ? '' : '<p style="color:#c5221f;font-size:0.84rem;">이 기기는 아직 관리자 기기가 아니라 보기만 돼요.</p>') +
           (holds ? '<h4 style="margin:4px 0 6px;">새 기기 승인 대기</h4>' + holds : '') +
+          (onces ? '<h4 style="margin:8px 0 6px;">이번만 허용 (12시간)</h4>' + onces : '') +
           '<h4 style="margin:8px 0 6px;">관리자 기기</h4>' + (devs || '<p class="sub">없어요</p>') +
-          '<p class="sub" style="margin:2px 0 0;">해제하면 그 기기의 관리자 로그인이 끊기고, 다른 관리자 기기도 한 번 다시 로그인해야 해요(비밀번호만).</p>' + phHtml + '</div>';
+          '<p class="sub" style="margin:2px 0 0;">해제·끊기를 하면 그 기기의 관리자 로그인이 늦어도 1시간 안에 끊기고, 다른 관리자 기기도 한 번 다시 로그인해야 해요(비밀번호만).</p>' +
+          (d.meTrusted ? '<button type="button" class="card-btn danger" id="ad-cut-all" style="flex:none;margin-top:6px;">모든 관리자 세션 끊기</button>' : '') + phHtml + '</div>';
         [].forEach.call(box.querySelectorAll('[data-ap]'), function (b) { b.addEventListener('click', function () {
-          adminCall(b.getAttribute('data-ap'), { holdId: b.getAttribute('data-id') }).then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+          var ex = { holdId: b.getAttribute('data-id') };
+          if (b.getAttribute('data-once')) ex.once = true;
+          adminCall(b.getAttribute('data-ap'), ex).then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
         }); });
+        function cut(holdId) {
+          modalConfirm('관리자 세션 끊기', (holdId ? '이 이번만 허용 로그인을 끊을까요?' : '모든 관리자 로그인을 끊을까요?') + ' 관리자 로그인은 한 계정이라 이 기기를 포함한 등록된 기기도 한 번 다시 로그인해요(비밀번호만).', '끊기', 'danger').then(function (yes) {
+            if (!yes) return;
+            adminCall('cutSessions', holdId ? { holdId: holdId } : {}).then(function () { modalNotice('끊음', '늦어도 1시간 안에 끊겨요.'); draw(); }).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+          });
+        }
+        [].forEach.call(box.querySelectorAll('[data-cut]'), function (b) { b.addEventListener('click', function () { cut(b.getAttribute('data-cut')); }); });
+        var ca = box.querySelector('#ad-cut-all'); if (ca) ca.addEventListener('click', function () { cut(''); });
         [].forEach.call(box.querySelectorAll('[data-rn]'), function (b) { b.addEventListener('click', function () {
           modalMessage('기기 이름', '알아보기 쉬운 이름으로 바꿔요.', '저장', 'primary', '예: 베니 폰, 집 PC', true).then(function (name) {
             if (!name) return;
@@ -14004,7 +14055,7 @@
     }).then(function (token) {
       if (!token) return;
       var jobs = [];
-      if (adminNotifOn()) {
+      if (adminNotifOn() && !_adminOnceUntil) {
         jobs.push(pushTokensRef.doc('admin').set({
           tokens: firebase.firestore.FieldValue.arrayUnion(token),
           updatedAt: new Date().toISOString()
@@ -14225,6 +14276,7 @@
     });
   }
   function enableAdminNotif() {
+    if (_adminOnceUntil) return modalNotice('안내', '이번만 허용된 기기에선 관리자 알림을 켤 수 없어요. 계속 쓸 기기라면 관리자 기기로 허용받아 주세요.');
     ensureFcmToken().then(function (token) {
       return pushTokensRef.doc('admin').set({
         tokens: firebase.firestore.FieldValue.arrayUnion(token),

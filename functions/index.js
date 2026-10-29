@@ -333,6 +333,8 @@ exports.memberLogin = functions
    - 모든 시도는 adminAudit, 새 기기·틀림·허용/거부·문자는 관리자 알림 */
 const ADMIN_HOLD_MS = 10 * 60000;
 const ADMIN_SMS_PER_HOLD = 3;
+/* '이번만 허용'(2026-10-29 Benny): 믿을 기기에 넣지 않고 이 로그인만 12시간 — 토큰 claim ao 로 끝 시각, 서버(claimsOf)·규칙(isAdmin)이 지나면 관리자 아님 */
+const ADMIN_ONCE_MS = 12 * 3600000;
 const adminDevId = (v) => { const s = String(v || ''); return /^[A-Za-z0-9_-]{16,64}$/.test(s) ? s : ''; };
 const sha256hex = (s) => nodeCrypto.createHash('sha256').update(String(s)).digest('hex');
 async function adminDeviceTrusted(id) {
@@ -399,6 +401,14 @@ async function adminHoldPoll(data, deviceId, meta) {
     }
     await ref.set({ status: 'approved', via: 'sms:' + (d.smsTo || ''), decidedAt: new Date().toISOString() }, { merge: true });
     d.status = 'approved'; d.via = 'sms:' + (d.smsTo || '');
+  }
+  if (d.status === 'approved' && d.once) {
+    const until = Date.now() + ADMIN_ONCE_MS;
+    await ref.set({ consumed: true, onceUntil: until }, { merge: true });
+    await adminAudit({ status: 'approved-once-login', holdId, deviceId, via: d.via || 'approve', ip: meta.ip, until });
+    await securityAlert({ type: 'admin-device', kind: 'once', target: deviceId, nickname: d.name || d.device || '', ip: meta.ip, device: d.device || '', via: d.via || 'approve' },
+      '🔓 관리자 이번만 허용', (d.name || d.device || '기기') + ' — 12시간 뒤 자동으로 끊겨요(믿을 기기엔 안 넣음). 본인이 아니면 관리자탭 📱 관리자 기기에서 [끊기]').catch(() => {});
+    return { token: await admin.auth().createCustomToken('admin', { admin: 1, ao: until }), once: true, until };
   }
   if (d.status === 'approved') {
     await ref.set({ consumed: true }, { merge: true });
@@ -498,23 +508,34 @@ exports.adminDevice = functions
     const me = adminDevId(data.deviceId);
     const meTrusted = await adminDeviceTrusted(me);
     const needTrusted = () => { if (!meTrusted) throw new HttpsError('permission-denied', '등록된 관리자 기기에서만 할 수 있어요.'); };
+    /* enroll: 예전(10-27)엔 관리자 토큰만 있으면 그 기기를 믿을 기기로 스스로 등록했음 → '이번만 허용' 기기나 훔친 세션이 영구 등록될 수 있어 닫음(10-29).
+       믿을 기기 등록은 이제 adminLogin 의 첫 기기·승인·문자 인증으로만. 여기선 믿을 기기면 마지막 접속만 갱신 */
     if (op === 'enroll') {
       if (!me) throw new HttpsError('invalid-argument', '기기 정보가 없어요.');
       const cur = (await db.collection('adminDevices').doc(me).get()).data();
       if (cur && cur.status === 'revoked') throw new HttpsError('permission-denied', '해제된 기기예요. 다시 승인받아 주세요.');
-      if (!cur || cur.status !== 'trusted') {
-        await trustAdminDevice(me, meta, 'session');
-        await adminAudit({ status: 'enroll', deviceId: me, ip: meta.ip, device: meta.device });
-        await securityAlert({ type: 'admin-device', kind: 'trusted', target: me, nickname: meta.name || meta.device, ip: meta.ip, device: meta.device, via: 'session' },
-          '🔐 관리자 기기 등록(로그인돼 있던 기기)', (meta.name || meta.device) + ' · ' + meta.ip).catch(() => {});
-      } else await db.collection('adminDevices').doc(me).set({ lastAt: new Date().toISOString(), ip: meta.ip }, { merge: true });
-      return { ok: true, trusted: true };
+      if (cur && cur.status === 'trusted') {
+        await db.collection('adminDevices').doc(me).set({ lastAt: new Date().toISOString(), ip: meta.ip }, { merge: true });
+        return { ok: true, trusted: true };
+      }
+      const once = Number(claimsOf(context).ao) || 0;
+      if (once) return { ok: true, trusted: false, onceUntil: once };
+      /* 믿을 기기도 '이번만'도 아닌데 관리자 토큰이 있음 = 기기 정보(저장소)가 지워졌거나 남의 세션 → 알림만, 등록은 안 함 */
+      await adminAudit({ status: 'enroll-refused', deviceId: me, ip: meta.ip, device: meta.device });
+      const gate = await alertAllowed(guardKey('admenr_', me)).catch(() => ({ ok: true }));
+      if (gate.ok) await securityAlert({ type: 'admin-device', kind: 'unregistered', target: me, nickname: meta.name || meta.device, ip: meta.ip, device: meta.device, via: 'session' },
+        '⚠️ 등록 안 된 기기에 관리자 로그인', (meta.name || meta.device) + ' · ' + meta.ip + ' — 베니 님 기기면 로그아웃 후 다시 로그인해 승인받기, 모르는 기기면 관리자 기기에서 [모든 관리자 세션 끊기]').catch(() => {});
+      return { ok: true, trusted: false };
     }
     if (op === 'list') {
-      const [dv, hs, ph] = await Promise.all([db.collection('adminDevices').get(), db.collection('adminHolds').where('status', '==', 'pending').get(), adminPhones().catch(() => [])]);
+      const [dv, hs, ph, ok] = await Promise.all([db.collection('adminDevices').get(), db.collection('adminHolds').where('status', '==', 'pending').get(), adminPhones().catch(() => []),
+        db.collection('adminHolds').where('status', '==', 'approved').limit(100).get()]);
       const devices = dv.docs.map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', firstAt: x.firstAt || '', lastAt: x.lastAt || '', status: x.status || '', via: x.via || '', me: d.id === me }; });
       const holds = hs.docs.filter((d) => d.data().expiresAt > Date.now()).map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', at: x.at, intel: x.intel || null, smsTo: x.smsTo || '' }; });
-      return { devices, holds, phones: ph.map((p) => ({ label: p.label, masked: maskPhone(p.phone) })), meTrusted: !!meTrusted };
+      /* 지금 살아 있는 '이번만 허용' 로그인 (끝 시각 전, 끊기 안 함) */
+      const onces = ok.docs.filter((d) => { const x = d.data(); return x.once && x.onceUntil > Date.now() && !x.onceCut; })
+        .map((d) => { const x = d.data(); return { id: d.id, name: x.name || '', device: x.device || '', ip: x.ip || '', at: x.decidedAt || x.at, until: x.onceUntil, via: x.via || '' }; });
+      return { devices, holds, onces, phones: ph.map((p) => ({ label: p.label, masked: maskPhone(p.phone) })), meTrusted: !!meTrusted };
     }
     if (op === 'approve' || op === 'deny') {
       needTrusted();
@@ -525,10 +546,24 @@ exports.adminDevice = functions
       if (!h) throw new HttpsError('not-found', '요청을 찾을 수 없어요.');
       if (h.status !== 'pending') return { ok: true, status: h.status };
       if (h.expiresAt < Date.now()) { await ref.set({ status: 'expired' }, { merge: true }); throw new HttpsError('deadline-exceeded', '10분이 지난 요청이에요.'); }
-      await ref.set({ status: op === 'approve' ? 'approved' : 'denied', via: 'approve:' + (meTrusted.name || me), decidedAt: new Date().toISOString() }, { merge: true });
+      const once = op === 'approve' && data.once === true;
+      await ref.set(Object.assign({ status: op === 'approve' ? 'approved' : 'denied', via: 'approve:' + (meTrusted.name || me), decidedAt: new Date().toISOString() }, once ? { once: true } : {}), { merge: true });
       if (op === 'deny') await addWatchIp(h.ip);
-      await adminAudit({ status: op === 'approve' ? 'approved' : 'denied', holdId: id, by: me, ip: h.ip });
-      return { ok: true, status: op === 'approve' ? 'approved' : 'denied' };
+      await adminAudit({ status: op === 'approve' ? (once ? 'approved-once' : 'approved') : 'denied', holdId: id, by: me, ip: h.ip });
+      return { ok: true, status: op === 'approve' ? 'approved' : 'denied', once };
+    }
+    /* '이번만 허용' 로그인 끊기 · 모든 관리자 세션 끊기 — 관리자 토큰은 한 계정('admin')이라 한 기기만 골라 못 끊음:
+       모든 관리자 세션의 갱신을 막고(늦어도 1시간 안에 끊김) 믿을 기기는 저장된 비밀번호로 다시 들어옴 */
+    if (op === 'cutSessions') {
+      needTrusted();
+      const id = String(data.holdId || '');
+      if (id) {
+        if (!/^ah_[a-f0-9]{16,40}$/.test(id)) throw new HttpsError('invalid-argument', '잘못된 요청이에요.');
+        await db.collection('adminHolds').doc(id).set({ onceCut: true, cutBy: me, cutAt: new Date().toISOString() }, { merge: true });
+      }
+      await admin.auth().revokeRefreshTokens('admin');
+      await adminAudit({ status: 'cut-sessions', holdId: id || '', by: me });
+      return { ok: true };
     }
     if (op === 'rename') {
       needTrusted();
@@ -1265,7 +1300,13 @@ async function stashSecrets(id, obj) {
   }
   if (Object.keys(priv).length) await db.collection('adminOnly').doc(id).set(Object.assign({ at }, priv), { merge: true });
 }
-function claimsOf(context) { return (context.auth && context.auth.token) || {}; }
+/* '이번만 허용' 관리자 토큰(ao = 끝나는 시각 ms)은 시간이 지나면 관리자 아님 — 관리자 확인은 claimsOf().admin 이나 adminOk() 로만 */
+function claimsOf(context) {
+  const t = (context.auth && context.auth.token) || {};
+  if (t.admin === 1 && t.ao && Date.now() > Number(t.ao)) { const c = Object.assign({}, t); delete c.admin; return c; }
+  return t;
+}
+const adminOk = (context) => claimsOf(context).admin === 1;
 
 exports.applicantAction = functions
   .region('asia-northeast3')
@@ -2419,7 +2460,7 @@ exports.adminRestoreMaskedChats = functions
   .region('asia-northeast3')
   .runWith({ maxInstances: 1, timeoutSeconds: 300, memory: '512MB' })
   .https.onCall(async (data, context) => {
-    if (!(context.auth && context.auth.token && context.auth.token.admin === 1)) throw new HttpsError('permission-denied', '관리자만 할 수 있어요.');
+    if (!adminOk(context)) throw new HttpsError('permission-denied', '관리자만 할 수 있어요.');
     const dryRun = !!(data && data.dryRun);
     const readTime = admin.firestore.Timestamp.fromDate(new Date(RESTORE_READ_TIME));
     const qs = await db.collection('chats').get();
@@ -3409,7 +3450,7 @@ exports.betaSeed = functions
   .https.onCall(async (data, context) => {
     if (!isBetaProject()) throw new HttpsError('permission-denied', '베타 서버 전용 기능이에요.');
     const cur = await db.doc('app/state').get();
-    const isAdm = !!(context.auth && context.auth.token && context.auth.token.admin === 1);
+    const isAdm = adminOk(context);
     if (cur.exists && !isAdm) throw new HttpsError('permission-denied', '이미 데이터가 있어요. 베타 관리자로 로그인한 뒤 다시 심어주세요.');
     const st = data && data.state;
     if (!st || !Array.isArray(st.entries) || !st.adminAuth) throw new HttpsError('invalid-argument', '시드 데이터가 올바르지 않아요.');
@@ -3444,7 +3485,7 @@ exports.chatStats = functions
   .region('asia-northeast3')
   .runWith({ maxInstances: 2, timeoutSeconds: 60, memory: '512MB' })
   .https.onCall(async (data, context) => {
-    if (!(context.auth && context.auth.token && context.auth.token.admin === 1)) throw new HttpsError('permission-denied', '관리자만 볼 수 있어요.');
+    if (!adminOk(context)) throw new HttpsError('permission-denied', '관리자만 볼 수 있어요.');
     const now = Date.now(), D = 86400000;
     const qs = await db.collection('chats').get();
     const st = (await db.doc('app/state').get()).data() || {};
@@ -3929,7 +3970,7 @@ exports.aiConcierge = functions
     if (!context.auth) throw new HttpsError('unauthenticated', '연결 확인 후 다시 시도해 주세요.');
     if (!apiKey && !ollamaKey && !anthropicKey) throw new HttpsError('failed-precondition', 'AI 컨시어지 키가 준비되지 않았어요.');
 
-    const isAdmin = !!(context.auth.token && context.auth.token.admin === 1);
+    const isAdmin = adminOk(context);
     /* 익명 손님 토큰으로는 AI 를 못 쓰게 (2026-10-27 보안 검토: 누구나 주인 키로 아무 글이나 생성할 수 있었음) */
     const tok = context.auth.token || {};
     if (!isAdmin && tok.m !== 1 && tok.p !== 1) throw new HttpsError('permission-denied', '로그인한 회원만 쓸 수 있어요.');

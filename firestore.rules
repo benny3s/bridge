@@ -6,7 +6,8 @@ service cloud.firestore {
     // 손님은 익명 토큰(claims 없음), 승인 대기는 {p:1}, 승인 회원은 {m:1}, 관리자는 {admin:1}.
     function notRevoked() { return !(request.auth.uid in ['9cc9116d-7bc6-481c-a280-81c6ef2a82ff','24d69624-2988-45e1-911e-ce9df19c0613','a061a706-0554-449c-bec8-6bd699e5b7dc','161e4ad5-1eee-412a-a762-8d7511240980'] && request.auth.token.auth_time < 1793003100); } // auth_time(처음 로그인 시각) 기준 — iat 는 1시간마다 새로 받으면 바뀌어 차단이 풀림
     function signedIn() { return request.auth != null && notRevoked(); }
-    function isAdmin() { return signedIn() && request.auth.token.admin == 1; }
+    // '이번만 허용' 관리자(10-29): 토큰 ao = 끝 시각(ms), 지나면 관리자 아님 (서버 claimsOf 와 같음)
+    function isAdmin() { return signedIn() && request.auth.token.admin == 1 && (request.auth.token.get('ao', 0) == 0 || request.time.toMillis() < request.auth.token.ao); }
     function isMember() { return signedIn() && request.auth.token.m == 1; }
     function isSelf(id) { return signedIn() && request.auth.uid == id; }
 
@@ -79,7 +80,8 @@ service cloud.firestore {
     match /pushTokens/{entryId} {
       allow read, delete: if isAdmin() || isSelf(entryId);
       // 쓰기: 관리자, 또는 로그인한 회원·승인대기 본인만 + 앱이 쓰는 필드만·토큰 10개까지 (2026-10-27)
-      allow create, update: if isAdmin()
+      // '이번만 허용' 관리자(ao)는 관리자 알림 기기를 못 넣음 — 12시간 뒤에도 관리자 알림을 받게 되므로
+      allow create, update: if (isAdmin() && request.auth.token.get('ao', 0) == 0)
                     || (isSelf(entryId) && (request.auth.token.m == 1 || request.auth.token.p == 1)
                         && request.resource.data.keys().hasOnly(['tokens', 'nickname', 'updatedAt'])
                         && request.resource.data.get('tokens', []).size() <= 10);
