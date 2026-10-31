@@ -1126,7 +1126,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-499';
+  var APP_VERSION = '2026-10-31-501';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1340,6 +1340,8 @@
   /* 테스트 계정끼리는 서로 보이게 → 테스트 계정으로 로그인 시 명단에서 다른 테스트 계정도 보여 요청 가능 */
   function meIsTest() { var me = currentUser && findMyEntry(currentState); return !!(me && me.testAccount && !me.deactivated); }
   function showTestInList() { return meIsTest(); }
+  /* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 로그인·메시지함·관리자 문의는 되고 명단·요청·채팅 보내기만 멈춤 (2026-10-31). 관리자 보관·탈퇴 보관은 해당 없음 */
+  function restingSelf(e) { return !!(e && e.deactivated && e.deactivatedVia === 'deactivate-request'); }
   /* 명단 노출 판정: 보관 계정은 항상 숨김 · 테스트는 테스트 로그인끼리만 · 나머지 일반 */
   function listMemberVisible(e) {
     if (e.isMatchmaker) return false;
@@ -4302,7 +4304,7 @@
       if (!u || !u.id) return;
       /* 보관(비활성) 계정이면 저장된 세션을 폐기하고 로그인 해제 (보관 후에도 세션 잔류로 앱을 쓰던 문제 방지) */
       var meNow = ((state && state.entries) || []).find(function (e) { return e.id === u.id; });
-      if (meNow && meNow.deactivated) { try { localStorage.removeItem('meetUser'); sessionStorage.removeItem('meetUser'); } catch (e2) {} currentUser = null; return; }
+      if (meNow && meNow.deactivated && !restingSelf(meNow)) { try { localStorage.removeItem('meetUser'); sessionStorage.removeItem('meetUser'); } catch (e2) {} currentUser = null; return; }
       /* 저장된 로그인은 그대로 복원. (예전엔 state에 없으면 지워버려서, 로딩이 늦거나
          비어있을 때 로그인이 자꾸 풀렸음) 계정이 실제로 삭제된 경우엔 '내 정보 없음'으로 보이고
          본인이 다시 로그인/로그아웃 하면 됨. */
@@ -4342,7 +4344,7 @@
     (state.entries || []).forEach(function (e) { if (e.managedBy && e.ownerSelf) mmWithSelf[e.managedBy] = true; });
     /* 후보 풀: 보관 계정은 로그인 불가로 제외 · 대리 프로필은 유효한 임시 PIN 있을 때만 포함 */
     var pool = sortedEntries.concat(state.pendingEntries || []).filter(function (e) {
-      if (e.deactivated) return false; /* 🗄 보관 계정은 로그인 불가 */
+      if (e.deactivated && !restingSelf(e)) return false; /* 🗄 보관 계정은 로그인 불가 (💤 잠시 쉬기는 로그인 됨) */
       if (e.managedBy && (!hasPin(e) || subPinExpired(e))) return false;
       return true;
     }).map(function (e) {
@@ -7747,7 +7749,8 @@
         '<p class="sub">' + escapeHtml(me.nickname) + '님, 반가워요! 받은 요청은 직접 승인하거나 거절할 수 있어요.</p>' +
         (me.deleteRequested ? '<div class="mine-note reject" style="margin-top:10px;">🗑 삭제 요청이 접수되어 <b>관리자 확인 중</b>이에요. <button type="button" class="card-btn" data-action="cancel-delete" data-id="' + escapeHtml(me.id) + '" style="flex:none;padding:4px 12px;margin-left:8px;">삭제 요청 취소</button></div>' : '') +
         (me.deactivateRequested ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">🗄 비활성화(보관) 요청이 접수되어 <b>관리자 확인 중</b>이에요. <button type="button" class="card-btn" data-action="cancel-deactivate" data-id="' + escapeHtml(me.id) + '" style="flex:none;padding:4px 12px;margin-left:8px;">요청 취소</button></div>' : '') +
-        (me.deactivated ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">🗄 <b>보관 상태</b>예요 (명단에 노출되지 않아요). 복구는 상단 <b>💬 Q&amp;A</b>로 관리자에게 요청해 주세요.</div>' : '') +
+        (restingSelf(me) ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">💤 <b>잠시 쉬는 중</b>이에요. 다른 회원에게는 내 프로필이 보이지 않고, 요청·대화 보내기도 멈춰 있어요. <button type="button" class="card-btn approve" data-action="self-reactivate" data-id="' + escapeHtml(me.id) + '" style="flex:none;padding:4px 12px;margin-left:8px;">♻️ 다시 활동하기</button></div>'
+          : me.deactivated ? '<div class="mine-note" style="margin-top:10px;background:var(--gold-soft);border-color:var(--gold);">🗄 <b>보관 상태</b>예요 (명단에 노출되지 않아요). 복구는 상단 <b>💬 Q&amp;A</b>로 관리자에게 요청해 주세요.</div>' : '') +
         '' + /* 관리자 메시지는 💬 대화 탭 맨 위 '👑 베니브릿지 관리자' 방으로 (2026-10-15) */
         (isSubProfile ? '' : joinRequestSectionHtml(state, false)) + /* 나에게 온 주선자 요청 있으면 표시 */
         tabsHtml +
@@ -11275,7 +11278,7 @@
     }
     if (entry.deactivateRequested) { modalNotice('안내', '이미 잠시 쉬기를 요청했어요. 관리자 확인 중이에요.'); return; }
     modalMessage('💤 잠시 쉬기',
-      '소개팅을 잠시 쉬는 동안 명단에서 내 프로필이 숨겨져요. 다시 활동하고 싶으면 상단 Q&A로 관리자에게 알려 주세요. 이유를 짧게 남겨 주세요.',
+      '소개팅을 잠시 쉬는 동안 다른 회원에게 내 프로필이 보이지 않아요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있고, 언제든 ⚙️ 내 계정의 [다시 활동하기]로 돌아올 수 있어요. 이유를 짧게 남겨 주세요.',
       '잠시 쉬기 요청', 'primary', '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요', true).then(function (reason) {
       if (reason === null || reason === undefined) return;
       db.runTransaction(function (tx) {
@@ -11335,6 +11338,7 @@
       (!isSub && !viaMm && !me.deleteRequested ? row('data-action="report-couple" data-id="' + id + '"', '💕', '좋은 인연 만났어요', '축하 후기 남기고 명단에서 내리기') : '') +
       row('data-action="blocked-list" data-id="' + id + '"', '🚫', '차단한 회원', myBlockedIds.length ? myBlockedIds.length + '명 · 풀기' : '서로 안 보이게 한 회원 관리') +
       (!me.deactivateRequested && !me.deactivated && !me.deleteRequested ? row('data-action="deactivate" data-id="' + id + '"', '💤', '잠시 쉬기', '명단에서 숨기고 나중에 다시 활동') : '') +
+      (restingSelf(me) ? row('data-action="self-reactivate" data-id="' + id + '"', '♻️', '다시 활동하기', '명단에 다시 보이고 요청·대화 재개') : '') +
       (!me.deleteRequested ? row('data-action="delete" data-id="' + id + '"', '🗑', '탈퇴하기', '바로 명단에서 숨김 · 관리자 확인 후 삭제', true) : row('data-action="cancel-delete" data-id="' + id + '"', '↩️', '탈퇴 요청 취소', '관리자 확인 중이에요')) +
       (!isSub && !viaMm && !amMM && !iManage ? (myJoinReq ? row('id="cancel-mm-req"', '⏳', '주선자 요청 취소', '승인 대기 중') : row('id="request-mm"', '🤝', '주선자에게 관리 요청', '친구가 내 프로필을 대신 관리')) : '') +
       (!isSub && !viaMm ? row('id="start-proxy"', '🤝', '주선자 계정으로 전환', '친구를 대신 소개하기') : '') +
@@ -11510,6 +11514,31 @@
     }).then(function () {
       modalNotice('취소됨', '비활성화 요청을 취소했어요.');
     }).catch(function (err) { modalNotice('오류', '취소 실패: ' + (err.message || err)); });
+  }
+  /* 회원 본인: 💤 잠시 쉬기 → ♻️ 다시 활동하기 (관리자 확인 없이 바로, 2026-10-31). 관리자 보관·탈퇴 보관은 관리자만 되돌림 */
+  function handleSelfReactivate(id) {
+    var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
+    if (!entry || !restingSelf(entry)) return;
+    if (!(currentUser && (currentUser.id === id || iManageTarget(currentState, id)))) return modalNotice('안내', '본인(또는 내가 소개한 친구) 프로필만 바꿀 수 있어요.');
+    modalConfirm('♻️ 다시 활동하기', escapeHtml(entry.nickname) + '님 프로필을 다시 명단에 보이게 할까요? 멈춰 있던 요청도 다시 이어져요.', '다시 활동하기', 'approve').then(function (ok) {
+      if (!ok) return;
+      db.runTransaction(function (tx) {
+        return tx.get(stateRef).then(function (doc) {
+          var s = doc.data();
+          var entries = (s.entries || []).map(function (e) {
+            if (e.id !== id || !restingSelf(e)) return e;
+            var c = JSON.parse(JSON.stringify(e)); delete c.deactivated; delete c.deactivatedReason; delete c.deactivatedAt; delete c.deactivatedVia; return c;
+          });
+          tx.update(stateRef, { entries: entries });
+        });
+      }).then(function () {
+        appendLog('request', entry.nickname, '잠시 쉬기 끝 · 다시 활동 (본인)');
+        notifyAdmin('♻️ 다시 활동', entry.nickname + '님이 잠시 쉬기를 끝내고 다시 활동해요.');
+        return refreshNow();
+      }).then(function () {
+        modalNotice('다시 활동 시작', '다시 명단에 보여요. 반가워요! 🙌');
+      }).catch(function (err) { modalNotice('오류', '처리 실패: ' + (err.message || err)); });
+    });
   }
   /* 관리자: 보관(비활성) 계정을 다시 활성화 → 일반 계정으로.
      대리(주선자 친구)였거나 자체 로그인 PIN이 없던 계정은 독립 일반 계정으로 전환하고 PIN을 1234로 초기화. */
@@ -12726,7 +12755,7 @@
       var hits = pool.filter(function (e) { return (e.nickname || '').trim() === nick; });
       if (!hits.length) return say('그 닉네임을 찾지 못했어요. 로그인 목록에 보이는 닉네임 그대로 넣어주세요.');
       var ent = hits[0];
-      if (ent.deactivated) return say('보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
+      if (ent.deactivated && !restingSelf(ent)) return say('보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
       var pubJwk = st.adminAuth && st.adminAuth.publicKeyJwk;
       if (!pubJwk) return say('지금은 요청할 수 없어요. 관리자에게 문의해주세요.');
       var btn = ov.querySelector('#pr-send'); btn.disabled = true;
@@ -13373,6 +13402,7 @@
       else if (action === 'cancel-deactivate') handleCancelDeactivateReq(id);
       else if (action === 'set-status') handleSetAccountStatus(id, actionBtn.getAttribute('data-status'));
       else if (action === 'reactivate') handleReactivate(id);
+      else if (action === 'self-reactivate') handleSelfReactivate(id);
       else if (action === 'edit-reviewed') handleEditReviewed(id);
       else if (action === 'notify-connected') showConnectedMembers(id);
       else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
