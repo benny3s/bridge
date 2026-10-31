@@ -130,6 +130,9 @@
   .masthead p { margin: 6px 0 0; color: var(--paper); opacity: 0.72; font-size: 0.92rem; }
   .masthead-sub { margin: 6px 0 0; color: var(--paper); opacity: 0.72; font-size: 0.92rem; line-height: 1.5; }
   .masthead-note { margin: 4px 0 0; color: var(--gold); opacity: 0.92; font-size: 0.82rem; line-height: 1.45; }
+  .leave-mm { background: var(--gold-soft); border: 1px solid var(--gold); border-radius: 10px; padding: 10px 12px; font-size: 0.86rem; line-height: 1.5; margin: 4px 0 10px; color: var(--ink); }
+  .leave-lbl { display: block; font-weight: 600; margin: 6px 0 2px; } .leave-lbl span { color: var(--muted); font-weight: 400; }
+  .leave-stars { display: flex; gap: 2px; margin: 0 0 8px; } .leave-stars button { font-size: 1.9rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--gold); padding: 2px 4px; }
   .adm-head { display: grid; gap: 10px; margin-bottom: 14px; }
   .adm-tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
   .adm-tools .card-btn { flex: none; width: 100%; padding: 10px 12px; font-size: 0.9rem; }
@@ -1133,7 +1136,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-31-507';
+  var APP_VERSION = '2026-10-31-509';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1364,7 +1367,8 @@
       return '<div style="' + box + 'var(--gold);background:var(--gold-soft);color:var(--ink);">' + line +
         '<div style="margin-top:4px;">' + (rest ? '💤 <b>잠시 쉬는 중</b>' : '🗄 <b>휴면(보관) 중</b>') + ' — 다른 회원에게 내 프로필이 안 보이고, 사진·대화 신청과 채팅 보내기는 멈춰 있어요.' +
         (rest ? ' <button type="button" class="card-btn approve" data-action="self-reactivate" data-id="' + escapeHtml(act.id) + '" style="flex:none;padding:3px 10px;margin-left:4px;">♻️ 다시 활동하기</button>'
-              : ' 다시 활동하려면 상단 <b>💬 Q&amp;A</b>로 관리자에게 말씀해 주세요.') + '</div></div>';
+              : ' 다시 활동하려면 상단 <b>💬 Q&amp;A</b>로 관리자에게 말씀해 주세요.') +
+        ' <button type="button" class="card-btn" data-action="leave-sheet" style="flex:none;padding:3px 10px;margin-left:4px;">⭐ 의견 · 🤝 주선자로 남기</button>' + '</div></div>';
     }
     return '<div style="' + box + 'var(--line);background:var(--card, #fff);color:var(--ink);">' + line + '</div>';
   }
@@ -8656,6 +8660,7 @@
               '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> <span class="chip" style="background:var(--gold-soft);color:var(--gold);">🗄 보관</span>' + viaChip + sentChip,
               '<div class="p-meta">' + genderLabel(e.gender) + ' · ' + escapeHtml(e.region || '') + (e.deactivatedAt ? ' · 보관: ' + fmtDate(e.deactivatedAt) : '') + '</div>' +
               (e.deactivatedReason ? '<div class="p-meta" style="color:var(--ink);">사유: "' + escapeHtml(e.deactivatedReason) + '"</div>' : '') +
+              ((e.leaveRating || e.leaveNote) ? '<div class="p-meta" style="color:var(--gold);">' + (e.leaveRating ? '⭐ 만족도 ' + e.leaveRating + '/5' : '💬 의견') + (e.leaveNote ? ' — "' + escapeHtml(e.leaveNote) + '"' : '') + '</div>' : '') +
               sentNote +
               '<div class="pending-actions">' +
                 '<button type="button" class="card-btn" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">👤 프로필</button>' +
@@ -10712,14 +10717,18 @@
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
     if (entry.deleteRequested) { modalNotice('안내', '이미 삭제 요청됐어요. 관리자 확인 중이에요.'); return; }
-    modalMessage('🗑 탈퇴하기', entry.nickname + '님 프로필 삭제(탈퇴)를 요청할까요? 이유를 짧게 남겨 주세요. 요청하면 바로 명단에서 숨겨지고, 관리자 확인 후 완전히 지워져요. 프로필을 따로 지우지 않으셔도 돼요.\n(잠깐 쉬고 싶은 거라면 \'💤 잠시 쉬기\'로 명단에서만 숨길 수도 있어요)', '탈퇴 요청', 'danger', '예: 좋은 인연을 만났어요 / 개인 사정', true).then(function (reason) {
-      if (reason === null || reason === undefined) return;
+    openLeaveSheet({ title: '🗑 탈퇴하기', okLabel: '탈퇴 요청', okClass: 'danger', requireReason: true, selfAccount: !!currentUser && currentUser.id === id && !entry.managedBy,
+      msg: escapeHtml(entry.nickname) + '님 프로필 삭제(탈퇴)를 요청할까요? 요청하면 바로 명단에서 숨겨지고, 관리자 확인 후 완전히 지워져요. 이유를 짧게 남겨 주세요.<br>(잠깐 쉬고 싶은 거라면 \'💤 잠시 쉬기\'로 명단에서만 숨길 수도 있어요)',
+      placeholder: '예: 좋은 인연을 만났어요 / 개인 사정' }).then(function (res) {
+      if (!res) return;
+      if (res.mmOnly) { leaveAsMatchmakerOnly(res); return; }
+      var reason = res.reason + ratingTag(res.rating);
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
           var entries = (s.entries || []).map(function (e) {
             if (e.id !== id) return e;
-            var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString(); c.deleteReason = reason; return c;
+            var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString(); c.deleteReason = reason; if (res.rating) c.leaveRating = res.rating; return c;
           });
           tx.update(stateRef, { entries: entries });
         });
@@ -10728,7 +10737,7 @@
         notifyAdmin('🗑 삭제 요청', entry.nickname + '님이 프로필 삭제를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        modalNotice('탈퇴 요청 접수', '명단에서 바로 숨겨졌고, 관리자 확인 후 완전히 삭제돼요. 그 전엔 ⚙️ 내 계정에서 취소할 수 있어요.');
+        leaveThanks('탈퇴 요청 접수', '명단에서 바로 숨겨졌고, 관리자 확인 후 완전히 삭제돼요. 그 전엔 ⚙️ 내 계정에서 취소할 수 있어요. 그동안 함께해 주셔서 고마웠어요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
@@ -11166,6 +11175,99 @@
   }
 
   /* ── 비활성화(보관) 흐름 — 본인이 요청 → 관리자 승인 시 보관(테스트 계정) 처리 ── */
+  /* 💤 쉬기 · 🗑 탈퇴 · 🗄 휴면 공통 창 (2026-10-31 Benny: '앱 만족 별점, 주변 친구 소개 부탁, 굳이 쉬지 않아도 주선자 계정이 되면 프로필 지우고 안 보인다고 안내')
+     resolve: {reason, rating} · {mmOnly:true, reason, rating}(주선자로만 남기) · null(닫기). 별점은 선택 */
+  function ratingTag(r) { return r ? ' · 만족도 ⭐' + r : ''; }
+  function openLeaveSheet(o) {
+    return new Promise(function (resolve) {
+      var me = myAuthEntry(currentState);
+      var canMm = !!(o.selfAccount && me && !isMatchmakerEntry(me) && !me.managedBy && !me.deleteRequested);
+      var ov = openModal(
+        '<h3>' + o.title + '</h3>' +
+        '<p class="modal-msg">' + o.msg + '</p>' +
+        (canMm ? '<div class="leave-mm"><b>💡 ' + (o.mmLead || '쉬거나 탈퇴하지 않아도 돼요') + '</b><br>주선자 계정으로만 남으면 내 소개팅 프로필(사진·소개·직장 등)은 지워지고 회원 명단에도 보이지 않아요. 계정은 남아서 좋은 친구를 대신 소개할 수 있어요.' +
+          '<button type="button" class="card-btn" id="lv-mm" style="width:100%;margin-top:8px;">🤝 주선자로만 남기</button></div>' : '') +
+        '<label class="leave-lbl">베니브릿지 어떠셨어요? <span>(별점, 선택)</span></label>' +
+        '<div class="leave-stars" id="lv-stars">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" data-star="' + n + '" aria-label="' + n + '점">☆</button>'; }).join('') + '</div>' +
+        '<textarea class="modal-input" id="lv-reason" rows="3" maxlength="200" placeholder="' + escapeHtml(o.placeholder || '하고 싶은 말 (선택)') + '"></textarea>' +
+        '<p class="modal-msg" id="lv-warn" style="color:var(--accent);font-size:0.82rem;margin:4px 0 0;" hidden></p>' +
+        '<div class="modal-actions"><button type="button" class="card-btn" id="lv-cancel">닫기</button><button type="button" class="card-btn ' + (o.okClass || 'primary') + '" id="lv-ok">' + o.okLabel + '</button></div>'
+      );
+      var rating = 0, starsEl = ov.querySelector('#lv-stars'), ta = ov.querySelector('#lv-reason'), warn = ov.querySelector('#lv-warn');
+      function drawStars() { starsEl.querySelectorAll('[data-star]').forEach(function (b) { var on = +b.getAttribute('data-star') <= rating; b.textContent = on ? '★' : '☆'; b.classList.toggle('on', on); }); }
+      starsEl.addEventListener('click', function (e) { var b = e.target.closest('[data-star]'); if (!b) return; var n = +b.getAttribute('data-star'); rating = (rating === n ? 0 : n); drawStars(); });
+      function done(v) { closeModal(ov); resolve(v); }
+      ov.querySelector('#lv-cancel').addEventListener('click', function () { done(null); });
+      var mmBtn = ov.querySelector('#lv-mm');
+      if (mmBtn) mmBtn.addEventListener('click', function () { done({ mmOnly: true, rating: rating, reason: (ta.value || '').trim() }); });
+      ov.querySelector('#lv-ok').addEventListener('click', function () {
+        var reason = (ta.value || '').trim();
+        if (o.requireReason && !reason) { warn.textContent = '이유를 짧게 남겨 주세요.'; warn.hidden = false; return; }
+        if (o.requireSomething && !reason && !rating) { warn.textContent = '별점이나 하고 싶은 말을 남겨 주세요.'; warn.hidden = false; return; }
+        done({ reason: reason, rating: rating });
+      });
+    });
+  }
+  /* 끝난 뒤 감사 + 친구 소개 부탁 (아는 사람 소개로만 들어오는 곳이라) */
+  function leaveThanks(title, msg) {
+    var ov = openModal('<h3>' + title + '</h3><p class="modal-msg">' + msg + '</p>' +
+      '<div class="leave-mm" style="text-align:center;">🙏 베니브릿지가 괜찮으셨다면 <b>주변의 좋은 친구</b>에게 소개해 주세요. 아는 사람 소개로만 들어오는 곳이라 한 분의 소개가 큰 힘이 돼요.' +
+        '<button type="button" class="card-btn primary" id="lv-share" style="width:100%;margin-top:8px;">🔗 친구에게 소개하기</button></div>' +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="lv-close">닫기</button></div>');
+    ov.querySelector('#lv-share').addEventListener('click', function () { closeModal(ov); handleShare(); });
+    ov.querySelector('#lv-close').addEventListener('click', function () { closeModal(ov); });
+  }
+  /* 🤝 주선자로만 남기 = 주선자 계정으로 전환(convertToMatchmakerTx) + 내 소개팅 프로필(이제 '본인' 프로필) 삭제 요청 → 명단에서 바로 숨고 관리자 확인 후 삭제 */
+  function leaveAsMatchmakerOnly(res) {
+    var me = myAuthEntry(currentState); if (!me) return;
+    var oldId = me.id, nick = me.nickname || '회원';
+    modalConfirm('🤝 주선자로만 남기', '내 소개팅 프로필(사진·소개·직장 등)은 회원 명단에서 바로 내려가고, 관리자 확인 후 완전히 지워져요. 로그인 PIN은 그대로이고, 주선자 계정으로 친구를 대신 소개할 수 있어요. 진행할까요?', '주선자로만 남기', 'primary').then(function (ok) {
+      if (!ok) return;
+      convertToMatchmakerTx().then(function () {
+        return db.runTransaction(function (tx) {
+          return tx.get(stateRef).then(function (doc) {
+            var s = doc.data();
+            tx.update(stateRef, { entries: (s.entries || []).map(function (e) {
+              if (e.id !== oldId) return e;
+              var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString();
+              c.deleteReason = '주선자로만 남기 (내 프로필 삭제)' + (res.reason ? ' · ' + res.reason : '') + ratingTag(res.rating);
+              if (res.rating) c.leaveRating = res.rating;
+              return c;
+            }) });
+          });
+        });
+      }).then(function () {
+        appendLog('request', nick, '주선자로만 남기 (내 프로필 삭제 요청)' + ratingTag(res.rating));
+        notifyAdmin('🤝 주선자로만 남기', nick + '님이 주선자 계정만 남기고 소개팅 프로필 삭제를 요청했어요.' + ratingTag(res.rating) + (res.reason ? ' (' + res.reason + ')' : ''));
+        return refreshNow();
+      }).then(function () {
+        activeTab = 'mine'; paint(currentState);
+        leaveThanks('주선자 계정이 되었어요 🤝', '내 소개팅 프로필은 명단에서 내려갔고, 관리자 확인 후 완전히 지워져요. 이제 주선자 홈에서 친구를 대신 소개할 수 있어요.');
+      }).catch(function (err) { modalNotice('오류', '실패: ' + ((err && err.message) || err)); });
+    });
+  }
+  /* 🗄 휴면 중인 회원: 별점·의견 남기기 + 주선자로만 남기 (상단 띠의 버튼) */
+  function openDormantSheet() {
+    var me = myAuthEntry(currentState); if (!me || !me.deactivated) return;
+    openLeaveSheet({ title: restingSelf(me) ? '💤 잠시 쉬는 중이에요' : '🗄 휴면 중이에요', okLabel: '보내기', selfAccount: true, requireSomething: true,
+      mmLead: '소개팅은 쉬어도 주선자로 함께할 수 있어요',
+      msg: '지금은 다른 회원에게 내 프로필이 보이지 않아요. 그동안 베니브릿지가 어떠셨는지 알려 주시면 더 좋은 곳으로 다듬을게요.' }).then(function (res) {
+      if (!res) return;
+      if (res.mmOnly) { leaveAsMatchmakerOnly(res); return; }
+      db.runTransaction(function (tx) {
+        return tx.get(stateRef).then(function (doc) {
+          var s = doc.data();
+          tx.update(stateRef, { entries: (s.entries || []).map(function (e) {
+            if (e.id !== me.id) return e;
+            var c = JSON.parse(JSON.stringify(e)); if (res.rating) c.leaveRating = res.rating; c.leaveNote = res.reason || ''; c.leaveNoteAt = new Date().toISOString(); return c;
+          }) });
+        });
+      }).then(function () {
+        notifyAdmin('⭐ 휴면 회원 의견', (me.nickname || '회원') + '님' + ratingTag(res.rating) + (res.reason ? ' — ' + res.reason : ''));
+        leaveThanks('고마워요 🙏', '남겨 주신 이야기는 관리자에게 잘 전달했어요.');
+      }).catch(function (err) { modalNotice('오류', '전송 실패: ' + ((err && err.message) || err)); });
+    });
+  }
   function handleDeactivate(id) {
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
@@ -11173,16 +11275,18 @@
       return modalNotice('안내', '본인(또는 내가 소개한 친구) 프로필만 비활성화할 수 있어요.');
     }
     if (entry.deactivateRequested) { modalNotice('안내', '이미 잠시 쉬기를 요청했어요. 관리자 확인 중이에요.'); return; }
-    modalMessage('💤 잠시 쉬기',
-      '소개팅을 잠시 쉬는 동안 다른 회원에게 내 프로필이 보이지 않아요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있고, 언제든 ⚙️ 내 계정의 [다시 활동하기]로 돌아올 수 있어요. 이유를 짧게 남겨 주세요.',
-      '잠시 쉬기 요청', 'primary', '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요', true).then(function (reason) {
-      if (reason === null || reason === undefined) return;
+    openLeaveSheet({ title: '💤 잠시 쉬기', okLabel: '잠시 쉬기 요청', requireReason: true, selfAccount: currentUser.id === id && !entry.managedBy,
+      msg: '소개팅을 잠시 쉬는 동안 다른 회원에게 내 프로필이 보이지 않아요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있고, 언제든 ⚙️ 내 계정의 [다시 활동하기]로 돌아올 수 있어요. 이유를 짧게 남겨 주세요.',
+      placeholder: '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요' }).then(function (res) {
+      if (!res) return;
+      if (res.mmOnly) { leaveAsMatchmakerOnly(res); return; }
+      var reason = res.reason + ratingTag(res.rating);
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
           var entries = (s.entries || []).map(function (e) {
             if (e.id !== id) return e;
-            var c = JSON.parse(JSON.stringify(e)); c.deactivateRequested = true; c.deactivateReqAt = new Date().toISOString(); c.deactivateReason = reason; return c;
+            var c = JSON.parse(JSON.stringify(e)); c.deactivateRequested = true; c.deactivateReqAt = new Date().toISOString(); c.deactivateReason = reason; if (res.rating) c.leaveRating = res.rating; return c;
           });
           tx.update(stateRef, { entries: entries });
         });
@@ -11191,7 +11295,7 @@
         notifyAdmin('🗄 비활성화 요청', entry.nickname + '님이 프로필 비활성화(보관)를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        modalNotice('요청 접수', '관리자 확인 후 보관 상태로 전환돼요. 그때까지는 명단에 남아 있어요.');
+        leaveThanks('요청 접수 💤', '관리자 확인 후 쉬는 상태로 바뀌어요. 그때까지는 명단에 남아 있어요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
@@ -13298,6 +13402,7 @@
       else if (action === 'set-status') handleSetAccountStatus(id, actionBtn.getAttribute('data-status'));
       else if (action === 'reactivate') handleReactivate(id);
       else if (action === 'self-reactivate') handleSelfReactivate(id);
+      else if (action === 'leave-sheet') openDormantSheet();
       else if (action === 'edit-reviewed') handleEditReviewed(id);
       else if (action === 'notify-connected') showConnectedMembers(id);
       else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
