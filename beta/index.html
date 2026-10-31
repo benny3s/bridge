@@ -1126,7 +1126,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-31-501';
+  var APP_VERSION = '2026-10-31-503';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1340,7 +1340,7 @@
   /* 테스트 계정끼리는 서로 보이게 → 테스트 계정으로 로그인 시 명단에서 다른 테스트 계정도 보여 요청 가능 */
   function meIsTest() { var me = currentUser && findMyEntry(currentState); return !!(me && me.testAccount && !me.deactivated); }
   function showTestInList() { return meIsTest(); }
-  /* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 로그인·메시지함·관리자 문의는 되고 명단·요청·채팅 보내기만 멈춤 (2026-10-31). 관리자 보관·탈퇴 보관은 해당 없음 */
+  /* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 본인이 [다시 활동하기]로 바로 복귀. 휴면은 모두 로그인 되고 명단·요청·채팅 보내기만 멈춤 (2026-10-31). 관리자 보관·탈퇴 보관 복귀는 관리자만 */
   function restingSelf(e) { return !!(e && e.deactivated && e.deactivatedVia === 'deactivate-request'); }
   /* 명단 노출 판정: 보관 계정은 항상 숨김 · 테스트는 테스트 로그인끼리만 · 나머지 일반 */
   function listMemberVisible(e) {
@@ -4302,9 +4302,7 @@
       if (!raw) return;
       var u = JSON.parse(raw);
       if (!u || !u.id) return;
-      /* 보관(비활성) 계정이면 저장된 세션을 폐기하고 로그인 해제 (보관 후에도 세션 잔류로 앱을 쓰던 문제 방지) */
-      var meNow = ((state && state.entries) || []).find(function (e) { return e.id === u.id; });
-      if (meNow && meNow.deactivated && !restingSelf(meNow)) { try { localStorage.removeItem('meetUser'); sessionStorage.removeItem('meetUser'); } catch (e2) {} currentUser = null; return; }
+      /* 휴면(보관) 계정도 로그인 유지 (2026-10-31 — 명단에서만 숨김, 요청·채팅 보내기는 서버가 막음) */
       /* 저장된 로그인은 그대로 복원. (예전엔 state에 없으면 지워버려서, 로딩이 늦거나
          비어있을 때 로그인이 자꾸 풀렸음) 계정이 실제로 삭제된 경우엔 '내 정보 없음'으로 보이고
          본인이 다시 로그인/로그아웃 하면 됨. */
@@ -4342,9 +4340,8 @@
     /* 주선자 계정 중 "본인(ownerSelf) 프로필"이 있는 계정 → 본인 로그인 탭에도 노출 */
     var mmWithSelf = {};
     (state.entries || []).forEach(function (e) { if (e.managedBy && e.ownerSelf) mmWithSelf[e.managedBy] = true; });
-    /* 후보 풀: 보관 계정은 로그인 불가로 제외 · 대리 프로필은 유효한 임시 PIN 있을 때만 포함 */
+    /* 후보 풀: 휴면 계정도 포함(2026-10-31) · 대리 프로필은 유효한 임시 PIN 있을 때만 포함 */
     var pool = sortedEntries.concat(state.pendingEntries || []).filter(function (e) {
-      if (e.deactivated && !restingSelf(e)) return false; /* 🗄 보관 계정은 로그인 불가 (💤 잠시 쉬기는 로그인 됨) */
       if (e.managedBy && (!hasPin(e) || subPinExpired(e))) return false;
       return true;
     }).map(function (e) {
@@ -12755,7 +12752,6 @@
       var hits = pool.filter(function (e) { return (e.nickname || '').trim() === nick; });
       if (!hits.length) return say('그 닉네임을 찾지 못했어요. 로그인 목록에 보이는 닉네임 그대로 넣어주세요.');
       var ent = hits[0];
-      if (ent.deactivated && !restingSelf(ent)) return say('보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
       var pubJwk = st.adminAuth && st.adminAuth.publicKeyJwk;
       if (!pubJwk) return say('지금은 요청할 수 없어요. 관리자에게 문의해주세요.');
       var btn = ov.querySelector('#pr-send'); btn.disabled = true;
