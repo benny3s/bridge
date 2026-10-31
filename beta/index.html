@@ -1136,7 +1136,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-01-511';
+  var APP_VERSION = '2026-11-01-513';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -2093,7 +2093,7 @@
           var k1 = 'in:' + r.id;
           if (mSeen.indexOf(k1) < 0) add({ icon: isP ? '📷' : '💌', text: pre + nick(r.fromId) + '님이 ' + (isP ? '사진' : '대화') + ' 요청을 보냈어요', route: 'mine', focusId: r.id, key: k1 });
         }
-        if (r.fromId === me.id && (r.decidedAt || '') > seen) {
+        if (r.fromId === me.id && (r.decidedAt || '') > seen && !r.expired) {   /* 7일 자동 마감은 새 소식에 '거절'로 띄우지 않음 */
           var st = reqStatus(r), lbl = st === 'approved' ? '승인했어요 🎉' : st === 'rejected' ? '거절했어요' : st === 'held' ? '보류했어요' : '응답했어요';
           var k2 = 'dec:' + r.id + ':' + st;
           if (mSeen.indexOf(k2) < 0) add({ icon: st === 'approved' ? '✅' : st === 'rejected' ? '⛔' : '📌', text: pre + nick(r.toId) + '님이 ' + (isP ? '사진' : '대화') + ' 요청을 ' + lbl, route: 'mine', focusId: r.id, key: k2 });
@@ -5514,7 +5514,10 @@
   function statusLabel(st) {
     return st === 'approved' ? '승인됨' : st === 'rejected' ? '거절됨' : st === 'held' ? '보류 중' : st === 'user_approved' ? '본인 승인' : '대기중';
   }
-  function statusChip(st) {
+  var REQ_INBOX_CAP = 5;   /* 서버 reqCreate 와 같은 값 — 받는 사람이 답 안 한 신청이 이만큼이면 새 신청을 잠시 막음 (2026-11-01) */
+  function inboxWaiting(state, id) { return (state.dateRequests || []).filter(function (r) { return r.toId === id && reqStatus(r) === 'pending'; }).length; }
+  function statusChip(st, r) {
+    if (r && r.expired) return '<span class="chip" style="background:#f1f3f4;color:#5f6368;">⌛ 답 없이 마감</span>';
     if (st === 'approved') return '<span class="chip" style="background:#e6f4ea;color:#137333;">승인됨</span>';
     if (st === 'rejected') return '<span class="chip" style="background:#fce8e6;color:#c5221f;">거절됨</span>';
     if (st === 'held') return '<span class="chip" style="background:#fef7e0;color:#b06000;">보류 중</span>';
@@ -5924,13 +5927,16 @@
     var _pendChip = function (label) { return '<span class="card-btn" style="background:var(--card);color:var(--muted);cursor:default;border-color:var(--line);">' + label + '</span>'; };
     var _rejChip = function (label) { return '<span class="card-btn" style="background:#f6e9e7;color:#c5221f;cursor:default;border-color:#e0a3a0;">' + label + '</span>'; };
     var canSeePhoto = !!(viewer && pCount > 0 && canViewPhotoOf(state, viewer.id, entry.id));
+    var _busy = !!(viewer && !isAdminUnlocked && viewer.id !== entry.id && inboxWaiting(state, entry.id) >= REQ_INBOX_CAP);
+    var _busyBtn = '<button type="button" class="card-btn" data-action="busy-suggest" data-id="' + escapeHtml(entry.id) + '" style="background:var(--card);color:var(--muted);border-color:var(--line);">📮 답장 대기 중 · 다른 분 보기</button>';
     var photoBtn;
     if (canSeePhoto) photoBtn = '<button type="button" class="card-btn approve" data-action="gallery" data-id="' + escapeHtml(entry.id) + '">📷 사진 볼 수 있어요</button>';
     else {
       var _pr = viewer ? myLatestReqTo(state, viewer.id, entry.id, 'photo') : null;
       var _ps = _pr ? reqStatus(_pr) : null;
       if (_ps === 'pending' || _ps === 'held' || _ps === 'user_approved') photoBtn = _pendChip('📷 요청 대기중');
-      else if (_ps === 'rejected') photoBtn = _rejChip('📷 거절됨');
+      else if (_ps === 'rejected') photoBtn = _pr.expired ? _pendChip('📷 답 없이 마감') : _rejChip('📷 거절됨');
+      else if (_busy) photoBtn = _busyBtn;
       else photoBtn = '<button type="button" class="card-btn orange" data-action="request-photo" data-id="' + escapeHtml(entry.id) + '">📷 사진 요청</button>';
     }
     /* 대화 신청(구 번호 요청): 성사되면 앱 내 채팅. 이미 성사면 "채팅하기" */
@@ -5941,7 +5947,8 @@
       var _cr = viewer ? myLatestReqTo(state, viewer.id, entry.id, 'contact') : null;
       var _cs = _cr ? reqStatus(_cr) : null;
       if (_cs === 'pending' || _cs === 'held' || _cs === 'user_approved') dateBtn = _pendChip('💌 대화 대기중');
-      else if (_cs === 'rejected') dateBtn = _rejChip('💌 거절됨');
+      else if (_cs === 'rejected') dateBtn = _cr.expired ? _pendChip('💌 답 없이 마감') : _rejChip('💌 거절됨');
+      else if (_busy) dateBtn = _busyBtn;
       else dateBtn = '<button type="button" class="card-btn primary" data-action="request-contact" data-id="' + escapeHtml(entry.id) + '">💌 대화 신청</button>';
     }
     /* 같은 주선자 소속(형제)끼리는 사진·대화 요청 불가 — 임시 PIN으로 직접 로그인한 경우도 포함 */
@@ -6791,6 +6798,7 @@
     var replyMsg = '';
     if (st === 'approved' && r.approveMessage) replyMsg = '<div class="mine-note">답장: ' + escapeHtml(r.approveMessage) + '</div>';
     else if (st === 'held' && r.holdMessage) replyMsg = '<div class="mine-note">보류 메시지: ' + escapeHtml(r.holdMessage) + '</div>';
+    else if (st === 'rejected' && r.expired) replyMsg = '<div class="mine-note">⌛ 7일 동안 답이 없어 자동으로 마감됐어요. 거절된 건 아니에요 — 다른 분께도 신청해 보세요.</div>';
     else if (st === 'rejected' && r.rejectMessage) replyMsg = '<div class="mine-note reject">거절 메시지: ' + escapeHtml(r.rejectMessage) + '</div>';
     /* 주선자가 친구 대신 응답한 경우 → 요청자에게 안내 (답장이 "친구…"로 보여도 뜬금없지 않게) */
     if (!incoming && r.decidedViaMm) replyMsg += '<div class="mine-note" style="background:var(--gold-soft);border:1px solid var(--gold);border-radius:8px;color:var(--gold);">🤝 이 프로필은 <b>주선자가 대신 관리</b>해요. 위 답장은 주선자가 전한 거예요.</div>';
@@ -6833,7 +6841,7 @@
           '<div class="chat-av md" style="background:' + avatarColor(otherId) + ';">' + escapeHtml(initials(other ? other.nickname : '?')) + '</div>' +
           '<span class="req-mid"><span class="req-sum-who">' + escapeHtml(otherLabel) + '</span>' +
             '<span class="req-sub">' + (isPhoto ? '📷 사진 요청' : '💌 대화 요청') + ' · ' + escapeHtml(fmtDate(r.submittedAt)) + (other && other.deactivated ? ' · 💤 상대 휴면 중' : '') + '</span></span>' +
-          statusChip(st) +
+          statusChip(st, r) +
         '</summary>' +
         '<div class="req-fold-body">' + body + '</div>' +
       '</details>'
@@ -7542,7 +7550,9 @@
         : '';
       if (f === 'hidden' && shown.length) tabInner = '<p class="sub" style="margin:2px 0 6px;font-size:0.8rem;">내 목록에서 숨긴 요청이에요. 줄을 눌러 \'↩️ 숨김 취소\'로 되돌릴 수 있어요.</p>' + tabInner;
       var heldCnt = items.filter(function (r) { return reqStatus(r) === 'held'; }).length;
-      paneData[g.key] = { n: items.length, need: g.incoming ? needCnt : heldCnt, html: chips + tabInner, hasAny: items.length + hiddenItems.length > 0 };   /* 보낸 요청 숫자는 '보류(다시 요청 가능)'만 — 거절은 할 일이 아님 */
+      var _pendIn = g.incoming ? items.filter(function (r) { return reqStatus(r) === 'pending'; }).length : 0;
+      var bulkBar = _pendIn >= 3 ? '<div class="leave-mm" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><span style="flex:1 1 180px;">📮 답을 기다리는 신청 <b>' + _pendIn + '건</b> · 7일 지나면 자동으로 마감돼요</span><button type="button" class="card-btn" data-action="bulk-reject" style="flex:none;">🙏 한 번에 정중히 거절</button></div>' : '';
+      paneData[g.key] = { n: items.length, need: g.incoming ? needCnt : heldCnt, html: bulkBar + chips + tabInner, hasAny: items.length + hiddenItems.length > 0 };   /* 보낸 요청 숫자는 '보류(다시 요청 가능)'만 — 거절은 할 일이 아님 */
       /* 5개 초과면 스크롤 */
       var body = items.length > 5
         ? '<div style="max-height:300px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + inner + '</div>'
@@ -8750,7 +8760,7 @@
       if (st === 'approved') {
         actionBtns = manageBtns;
       } else if (st === 'rejected') {
-        actionBtns = '<span class="chip" style="background:#f1f3f4;color:#5f6368;">' + (r.rejectedBy === 'user' ? '본인 거절' : '관리자 거절') + '</span>' + manageBtns;
+        actionBtns = '<span class="chip" style="background:#f1f3f4;color:#5f6368;">' + (r.expired ? '⌛ 7일 자동 마감' : r.rejectedBy === 'user' ? '본인 거절' : '관리자 거절') + '</span>' + manageBtns;
       } else {
         actionBtns = decideBtns + manageBtns;
       }
@@ -11274,7 +11284,7 @@
     if (!(currentUser && (currentUser.id === id || iManageTarget(currentState, id)))) {
       return modalNotice('안내', '본인(또는 내가 소개한 친구) 프로필만 비활성화할 수 있어요.');
     }
-    if (entry.deactivateRequested) { modalNotice('안내', '이미 잠시 쉬기를 요청했어요. 관리자 확인 중이에요.'); return; }
+    if (entry.deactivated) { modalNotice('안내', '이미 쉬는 중이에요.'); return; }
     openLeaveSheet({ title: '💤 잠시 쉬기', okLabel: '잠시 쉬기 요청', requireReason: true, selfAccount: currentUser.id === id && !entry.managedBy,
       msg: '소개팅을 잠시 쉬는 동안 다른 회원에게 내 프로필이 보이지 않아요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있고, 언제든 ⚙️ 내 계정의 [다시 활동하기]로 돌아올 수 있어요. 이유를 짧게 남겨 주세요.',
       placeholder: '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요' }).then(function (res) {
@@ -11286,16 +11296,18 @@
           var s = doc.data();
           var entries = (s.entries || []).map(function (e) {
             if (e.id !== id) return e;
-            var c = JSON.parse(JSON.stringify(e)); c.deactivateRequested = true; c.deactivateReqAt = new Date().toISOString(); c.deactivateReason = reason; if (res.rating) c.leaveRating = res.rating; return c;
+            /* 2026-11-01 Benny: 잠시 쉬기는 관리자 승인 없이 바로 */
+            var c = JSON.parse(JSON.stringify(e)); c.deactivated = true; c.deactivatedVia = 'deactivate-request'; c.deactivatedAt = new Date().toISOString(); c.deactivatedReason = reason;
+            delete c.deactivateRequested; delete c.deactivateReqAt; delete c.deactivateReason; if (res.rating) c.leaveRating = res.rating; return c;
           });
           tx.update(stateRef, { entries: entries });
         });
       }).then(function () {
-        appendLog('request', entry.nickname, '프로필 비활성화(보관) 요청 · ' + reason);
+        appendLog('request', entry.nickname, '잠시 쉬기 · ' + reason);
         notifyAdmin('🗄 비활성화 요청', entry.nickname + '님이 프로필 비활성화(보관)를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        leaveThanks('요청 접수 💤', '관리자 확인 후 쉬는 상태로 바뀌어요. 그때까지는 명단에 남아 있어요.');
+        leaveThanks('잠시 쉬는 중 💤', '지금부터 다른 회원에게 내 프로필이 보이지 않아요. 돌아오고 싶을 땐 ⚙️ 내 계정의 [♻️ 다시 활동하기]를 누르면 돼요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
@@ -12173,6 +12185,44 @@
     '자기소개를 조금 더 알려주실 수 있을까요?',
     '조금 더 생각해 볼 시간이 필요해요. 곧 답드릴게요!'
   ];
+  /* 📮 답장 대기가 많은 분 대신: 아직 신청을 많이 못 받았고 나와 주고받은 적 없는 이성 회원 (새로 온 순) */
+  function openFreshSuggest(busyId) {
+    var state = currentState, me = findMyEntry(state);
+    if (!me) return;
+    var busy = (state.entries || []).find(function (e) { return e.id === busyId; });
+    var talked = {};
+    (state.dateRequests || []).forEach(function (r) { if (r.fromId === me.id) talked[r.toId] = 1; if (r.toId === me.id) talked[r.fromId] = 1; });
+    var recv = {};
+    (state.dateRequests || []).forEach(function (r) { if (reqStatus(r) === 'pending') recv[r.toId] = (recv[r.toId] || 0) + 1; });
+    var list = (state.entries || []).filter(function (e) {
+      return e.id !== me.id && e.gender && e.gender !== me.gender && !e.deactivated && !e.testAccount && !e.isMatchmaker && !e.deleteRequested && !talked[e.id]
+        && (recv[e.id] || 0) < REQ_INBOX_CAP && !(me.managedBy && e.managedBy === me.managedBy);
+    }).sort(function (a, b) { return ((recv[a.id] || 0) - (recv[b.id] || 0)) || String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')); }).slice(0, 6);
+    var rows = list.map(function (e) {
+      var age = e.birthYear ? (String(e.birthYear).slice(2) + '년생') : '';
+      return '<button type="button" class="acct-row" data-sug="' + escapeHtml(e.id) + '"><span class="acct-ic">' + ((recv[e.id] || 0) ? '🙂' : '🆕') + '</span><span class="acct-tx"><b>' + escapeHtml(e.nickname || '') + '</b><small>' + escapeHtml([age, e.region || ''].filter(Boolean).join(' · ')) + '</small></span><span class="acct-go">›</span></button>';
+    }).join('');
+    var ov = openModal('<h3>📮 답장 대기가 많아요</h3>' +
+      '<p class="modal-msg">' + escapeHtml((busy && busy.nickname) || '이 분') + '님은 지금 답을 기다리는 신청이 ' + REQ_INBOX_CAP + '건 넘게 있어서, 답장할 때까지 새 신청을 잠시 받지 않아요. (7일 지나면 자동 정리돼요)</p>' +
+      (rows ? '<p class="modal-msg" style="font-weight:600;margin:8px 0 4px;">아직 신청을 많이 못 받은 분들이에요</p><div class="acct-list">' + rows + '</div>' : '<p class="modal-msg">지금 추천할 분이 없어요. 새로 들어오는 분을 기다려 주세요 🙂</p>') +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="sug-close">닫기</button></div>');
+    ov.querySelector('#sug-close').addEventListener('click', function () { closeModal(ov); });
+    ov.addEventListener('click', function (e) { var b = e.target.closest && e.target.closest('[data-sug]'); if (!b) return; closeModal(ov); handleCardDetail(b.getAttribute('data-sug')); });
+  }
+  /* 📥 받은 신청 여러 건을 기본 인사로 한 번에 거절 (2026-11-01 Benny: '거절은 한 번에 가볍게') */
+  function bulkRejectIncoming() {
+    var state = currentState, me = findMyEntry(state);
+    if (!me) return;
+    var ids = (state.dateRequests || []).filter(function (r) { return r.toId === me.id && reqStatus(r) === 'pending' && (r.hiddenBy || []).indexOf(me.id) < 0; }).map(function (r) { return r.id; });
+    if (!ids.length) return;
+    modalConfirm('🙏 한 번에 정중히 거절', '답을 기다리는 신청 ' + ids.length + '건을 "' + REJECT_CHIPS[0] + '" 인사로 한 번에 거절할까요? 마음에 드는 분이 있다면 먼저 그분만 승인해 두세요.', ids.length + '건 거절', 'danger').then(function (ok) {
+      if (!ok) return;
+      var done = 0;
+      ids.reduce(function (p, id) { return p.then(function () { return reqCall('reqReject', { as: me.id, id: id, msg: REJECT_CHIPS[0] }).then(function () { done++; }).catch(function () {}); }); }, Promise.resolve())
+        .then(function () { return refreshNow(); })
+        .then(function () { modalNotice('정리 완료', done + '건을 정중히 거절했어요. 보낸 분들에겐 기본 인사가 전해져요.'); });
+    });
+  }
   function handleUserRejectRequest(id) {
     var state = currentState;
     var me = findMyEntry(state);
@@ -13403,6 +13453,8 @@
       else if (action === 'reactivate') handleReactivate(id);
       else if (action === 'self-reactivate') handleSelfReactivate(id);
       else if (action === 'leave-sheet') openDormantSheet();
+      else if (action === 'busy-suggest') openFreshSuggest(id);
+      else if (action === 'bulk-reject') bulkRejectIncoming();
       else if (action === 'edit-reviewed') handleEditReviewed(id);
       else if (action === 'notify-connected') showConnectedMembers(id);
       else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
