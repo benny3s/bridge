@@ -2870,6 +2870,13 @@ async function aiQuotaTake(uid, max) {
     tx.set(ref, { n: (d.n || 0) + 1, uid, day }, { merge: true });
   });
 }
+/* 회원이 앱 안에서 대신 등록한 친구 프로필(주선자 = 승인된 활동 회원)인가 — 이 길은 회원 로그인이 필요하고 signups 기록을 남기지 않음.
+   예전엔 기록이 없다고 '앱 밖 경로 의심'으로 늘 보류됐음 (2026-10-31 제나 건) */
+function proxyByLiveMember(p, st) {
+  if (!p || !p.managedBy) return false;
+  const mm = (st.entries || []).find((e) => e && e.id === p.managedBy);
+  return !!(mm && !mm.deactivated && !mm.managedBy && !mm.testAccount);
+}
 /* 신청서 외부 공격 신호 (AI 자동 승인 전 서버 확인, 2026-10-27) — 반환: 사유 목록(없으면 []) */
 async function signupRisk(id) {
   const su = (await db.collection('signups').doc(id).get()).data();
@@ -3793,6 +3800,8 @@ exports.aiConcierge = functions
          규칙은 코드로 — 신청서 글로 AI 를 속여도 이 확인은 못 넘음. 신호가 있으면 승인 대신 관리자 확인 대기(신청자에겐 평소처럼 '심사 중') */
       const riskMap = {};
       for (const id of Object.keys(approveMap)) {
+        const pp = (st.pendingEntries || []).find((x) => x && x.id === id);
+        if (proxyByLiveMember(pp, st)) continue;
         const why = await signupRisk(id).catch(() => ['신청 기록 확인 실패']);
         if (why.length) { riskMap[id] = why; delete approveMap[id]; }
       }
