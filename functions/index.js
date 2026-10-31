@@ -242,7 +242,7 @@ exports.memberLogin = functions
       await suspiciousAlert(o, await suspicionOf(o)).catch(() => {});
       throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
     }
-    /* 휴면(보관) 계정도 로그인은 허용 (2026-10-31) — 명단·티저에서 숨기고 요청·채팅 보내기만 막음. 직접 복귀는 💤 잠시 쉬기(restingSelf)만 */
+    /* 휴면(보관) 계정도 로그인은 허용 (2026-10-31) — 명단·티저에서 숨기고 요청·채팅 보내기만 막음. 직접 복귀는 restingSelf(탈퇴 보관 빼고 모두) */
     if (entry.managedBy && entry.pinExpiresAt && Date.now() > new Date(entry.pinExpiresAt).getTime()) {
       throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
     }
@@ -845,9 +845,10 @@ async function sendTo(id, title, body, nav) {
   const tokens = await tokensFor(id);
   await sendToTokens(tokens, title, body, [id], nav);
 }
-/* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 본인이 [다시 활동하기]로 바로 복귀 가능. (휴면은 모두 로그인 됨, 명단·요청·채팅 보내기만 멈춤 — 2026-10-31) */
+/* 💤 쉬는 중(휴면) — 잠시 쉬기·관리자 보관을 하나로 합침(2026-11-01 Benny): 본인이 [다시 활동하기]로 바로 복귀. 탈퇴 요청으로 보관된 계정만 제외.
+   (휴면은 모두 로그인 됨, 명단·요청·채팅 보내기만 멈춤) */
 function restingSelf(e) {
-  return !!(e && e.deactivated && e.deactivatedVia === 'deactivate-request');
+  return !!(e && e.deactivated && e.deactivatedVia !== 'delete-request');
 }
 function entryById(entries, id) {
   return (entries || []).find((x) => x.id === id) || null;
