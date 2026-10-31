@@ -132,6 +132,7 @@
   .masthead-note { margin: 4px 0 0; color: var(--gold); opacity: 0.92; font-size: 0.82rem; line-height: 1.45; }
   .leave-mm { background: var(--gold-soft); border: 1px solid var(--gold); border-radius: 10px; padding: 10px 12px; font-size: 0.86rem; line-height: 1.5; margin: 4px 0 10px; color: var(--ink); }
   .leave-lbl { display: block; font-weight: 600; margin: 6px 0 2px; } .leave-lbl span { color: var(--muted); font-weight: 400; }
+  .leave-ret { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; }
   .leave-stars { display: flex; gap: 2px; margin: 0 0 8px; } .leave-stars button { font-size: 1.9rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--gold); padding: 2px 4px; }
   .adm-head { display: grid; gap: 10px; margin-bottom: 14px; }
   .adm-tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
@@ -1136,7 +1137,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-01-513';
+  var APP_VERSION = '2026-11-01-515';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6798,7 +6799,7 @@
     var replyMsg = '';
     if (st === 'approved' && r.approveMessage) replyMsg = '<div class="mine-note">답장: ' + escapeHtml(r.approveMessage) + '</div>';
     else if (st === 'held' && r.holdMessage) replyMsg = '<div class="mine-note">보류 메시지: ' + escapeHtml(r.holdMessage) + '</div>';
-    else if (st === 'rejected' && r.expired) replyMsg = '<div class="mine-note">⌛ 7일 동안 답이 없어 자동으로 마감됐어요. 거절된 건 아니에요 — 다른 분께도 신청해 보세요.</div>';
+    else if (st === 'rejected' && r.expired) replyMsg = '<div class="mine-note">⌛ ' + (r.expiredWhy === 'resting' ? '상대가 지금 쉬는 중이라' : '7일 동안 답이 없어') + ' 자동으로 마감됐어요. 거절된 건 아니에요 — 다른 분께도 신청해 보세요.</div>';
     else if (st === 'rejected' && r.rejectMessage) replyMsg = '<div class="mine-note reject">거절 메시지: ' + escapeHtml(r.rejectMessage) + '</div>';
     /* 주선자가 친구 대신 응답한 경우 → 요청자에게 안내 (답장이 "친구…"로 보여도 뜬금없지 않게) */
     if (!incoming && r.decidedViaMm) replyMsg += '<div class="mine-note" style="background:var(--gold-soft);border:1px solid var(--gold);border-radius:8px;color:var(--gold);">🤝 이 프로필은 <b>주선자가 대신 관리</b>해요. 위 답장은 주선자가 전한 거예요.</div>';
@@ -7550,9 +7551,7 @@
         : '';
       if (f === 'hidden' && shown.length) tabInner = '<p class="sub" style="margin:2px 0 6px;font-size:0.8rem;">내 목록에서 숨긴 요청이에요. 줄을 눌러 \'↩️ 숨김 취소\'로 되돌릴 수 있어요.</p>' + tabInner;
       var heldCnt = items.filter(function (r) { return reqStatus(r) === 'held'; }).length;
-      var _pendIn = g.incoming ? items.filter(function (r) { return reqStatus(r) === 'pending'; }).length : 0;
-      var bulkBar = _pendIn >= 3 ? '<div class="leave-mm" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><span style="flex:1 1 180px;">📮 답을 기다리는 신청 <b>' + _pendIn + '건</b> · 7일 지나면 자동으로 마감돼요</span><button type="button" class="card-btn" data-action="bulk-reject" style="flex:none;">🙏 한 번에 정중히 거절</button></div>' : '';
-      paneData[g.key] = { n: items.length, need: g.incoming ? needCnt : heldCnt, html: bulkBar + chips + tabInner, hasAny: items.length + hiddenItems.length > 0 };   /* 보낸 요청 숫자는 '보류(다시 요청 가능)'만 — 거절은 할 일이 아님 */
+      paneData[g.key] = { n: items.length, need: g.incoming ? needCnt : heldCnt, html: chips + tabInner, hasAny: items.length + hiddenItems.length > 0 };   /* 보낸 요청 숫자는 '보류(다시 요청 가능)'만 — 거절은 할 일이 아님 */
       /* 5개 초과면 스크롤 */
       var body = items.length > 5
         ? '<div style="max-height:300px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' + inner + '</div>'
@@ -11197,6 +11196,8 @@
         '<p class="modal-msg">' + o.msg + '</p>' +
         (canMm ? '<div class="leave-mm"><b>💡 ' + (o.mmLead || '쉬거나 탈퇴하지 않아도 돼요') + '</b><br>주선자 계정으로만 남으면 내 소개팅 프로필(사진·소개·직장 등)은 지워지고 회원 명단에도 보이지 않아요. 계정은 남아서 좋은 친구를 대신 소개할 수 있어요.' +
           '<button type="button" class="card-btn" id="lv-mm" style="width:100%;margin-top:8px;">🤝 주선자로만 남기</button></div>' : '') +
+        (o.askReturn ? '<label class="leave-lbl">언제쯤 돌아올까요? <span>(그날 알려 드려요)</span></label><div class="leave-ret" id="lv-ret">' +
+          [[7, '1주'], [14, '2주'], [30, '1달'], [0, '정하지 않음']].map(function (x) { return '<button type="button" class="req-chip' + (x[0] === 14 ? ' on' : '') + '" data-ret="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>' : '') +
         '<label class="leave-lbl">베니브릿지 어떠셨어요? <span>(별점, 선택)</span></label>' +
         '<div class="leave-stars" id="lv-stars">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" data-star="' + n + '" aria-label="' + n + '점">☆</button>'; }).join('') + '</div>' +
         '<textarea class="modal-input" id="lv-reason" rows="3" maxlength="200" placeholder="' + escapeHtml(o.placeholder || '하고 싶은 말 (선택)') + '"></textarea>' +
@@ -11206,7 +11207,9 @@
       var rating = 0, starsEl = ov.querySelector('#lv-stars'), ta = ov.querySelector('#lv-reason'), warn = ov.querySelector('#lv-warn');
       function drawStars() { starsEl.querySelectorAll('[data-star]').forEach(function (b) { var on = +b.getAttribute('data-star') <= rating; b.textContent = on ? '★' : '☆'; b.classList.toggle('on', on); }); }
       starsEl.addEventListener('click', function (e) { var b = e.target.closest('[data-star]'); if (!b) return; var n = +b.getAttribute('data-star'); rating = (rating === n ? 0 : n); drawStars(); });
-      function done(v) { closeModal(ov); resolve(v); }
+      var retDays = 14, retEl = ov.querySelector('#lv-ret');
+      if (retEl) retEl.addEventListener('click', function (e) { var b = e.target.closest('[data-ret]'); if (!b) return; retDays = +b.getAttribute('data-ret'); retEl.querySelectorAll('[data-ret]').forEach(function (x) { x.classList.toggle('on', x === b); }); });
+      function done(v) { if (v && o.askReturn) v.returnDays = retDays; closeModal(ov); resolve(v); }
       ov.querySelector('#lv-cancel').addEventListener('click', function () { done(null); });
       var mmBtn = ov.querySelector('#lv-mm');
       if (mmBtn) mmBtn.addEventListener('click', function () { done({ mmOnly: true, rating: rating, reason: (ta.value || '').trim() }); });
@@ -11285,7 +11288,7 @@
       return modalNotice('안내', '본인(또는 내가 소개한 친구) 프로필만 비활성화할 수 있어요.');
     }
     if (entry.deactivated) { modalNotice('안내', '이미 쉬는 중이에요.'); return; }
-    openLeaveSheet({ title: '💤 잠시 쉬기', okLabel: '잠시 쉬기 요청', requireReason: true, selfAccount: currentUser.id === id && !entry.managedBy,
+    openLeaveSheet({ title: '💤 잠시 쉬기', okLabel: '잠시 쉬기', requireReason: true, askReturn: true, selfAccount: currentUser.id === id && !entry.managedBy,
       msg: '소개팅을 잠시 쉬는 동안 다른 회원에게 내 프로필이 보이지 않아요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있고, 언제든 ⚙️ 내 계정의 [다시 활동하기]로 돌아올 수 있어요. 이유를 짧게 남겨 주세요.',
       placeholder: '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요' }).then(function (res) {
       if (!res) return;
@@ -11298,7 +11301,9 @@
             if (e.id !== id) return e;
             /* 2026-11-01 Benny: 잠시 쉬기는 관리자 승인 없이 바로 */
             var c = JSON.parse(JSON.stringify(e)); c.deactivated = true; c.deactivatedVia = 'deactivate-request'; c.deactivatedAt = new Date().toISOString(); c.deactivatedReason = reason;
-            delete c.deactivateRequested; delete c.deactivateReqAt; delete c.deactivateReason; if (res.rating) c.leaveRating = res.rating; return c;
+            delete c.deactivateRequested; delete c.deactivateReqAt; delete c.deactivateReason; if (res.rating) c.leaveRating = res.rating;
+            delete c.returnNudged; if (res.returnDays) c.returnAt = new Date(Date.now() + res.returnDays * 86400000).toISOString(); else delete c.returnAt;
+            return c;
           });
           tx.update(stateRef, { entries: entries });
         });
@@ -11307,7 +11312,7 @@
         notifyAdmin('🗄 비활성화 요청', entry.nickname + '님이 프로필 비활성화(보관)를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        leaveThanks('잠시 쉬는 중 💤', '지금부터 다른 회원에게 내 프로필이 보이지 않아요. 돌아오고 싶을 땐 ⚙️ 내 계정의 [♻️ 다시 활동하기]를 누르면 돼요.');
+        leaveThanks('잠시 쉬는 중 💤', '지금부터 다른 회원에게 내 프로필이 보이지 않아요.' + (res.returnDays ? ' ' + (res.returnDays === 30 ? '한 달' : (res.returnDays / 7) + '주') + ' 뒤에 알려 드릴게요.' : '') + ' 돌아오고 싶을 땐 언제든 ⚙️ 내 계정의 [♻️ 다시 활동하기]를 누르면 돼요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
@@ -12208,20 +12213,6 @@
       '<div class="modal-actions"><button type="button" class="card-btn" id="sug-close">닫기</button></div>');
     ov.querySelector('#sug-close').addEventListener('click', function () { closeModal(ov); });
     ov.addEventListener('click', function (e) { var b = e.target.closest && e.target.closest('[data-sug]'); if (!b) return; closeModal(ov); handleCardDetail(b.getAttribute('data-sug')); });
-  }
-  /* 📥 받은 신청 여러 건을 기본 인사로 한 번에 거절 (2026-11-01 Benny: '거절은 한 번에 가볍게') */
-  function bulkRejectIncoming() {
-    var state = currentState, me = findMyEntry(state);
-    if (!me) return;
-    var ids = (state.dateRequests || []).filter(function (r) { return r.toId === me.id && reqStatus(r) === 'pending' && (r.hiddenBy || []).indexOf(me.id) < 0; }).map(function (r) { return r.id; });
-    if (!ids.length) return;
-    modalConfirm('🙏 한 번에 정중히 거절', '답을 기다리는 신청 ' + ids.length + '건을 "' + REJECT_CHIPS[0] + '" 인사로 한 번에 거절할까요? 마음에 드는 분이 있다면 먼저 그분만 승인해 두세요.', ids.length + '건 거절', 'danger').then(function (ok) {
-      if (!ok) return;
-      var done = 0;
-      ids.reduce(function (p, id) { return p.then(function () { return reqCall('reqReject', { as: me.id, id: id, msg: REJECT_CHIPS[0] }).then(function () { done++; }).catch(function () {}); }); }, Promise.resolve())
-        .then(function () { return refreshNow(); })
-        .then(function () { modalNotice('정리 완료', done + '건을 정중히 거절했어요. 보낸 분들에겐 기본 인사가 전해져요.'); });
-    });
   }
   function handleUserRejectRequest(id) {
     var state = currentState;
@@ -13454,7 +13445,6 @@
       else if (action === 'self-reactivate') handleSelfReactivate(id);
       else if (action === 'leave-sheet') openDormantSheet();
       else if (action === 'busy-suggest') openFreshSuggest(id);
-      else if (action === 'bulk-reject') bulkRejectIncoming();
       else if (action === 'edit-reviewed') handleEditReviewed(id);
       else if (action === 'notify-connected') showConnectedMembers(id);
       else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
