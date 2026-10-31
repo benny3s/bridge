@@ -251,8 +251,7 @@ exports.memberLogin = functions
       await suspiciousAlert(o, await suspicionOf(o)).catch(() => {});
       throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
     }
-    /* 💤 잠시 쉬기(본인 요청 휴면)는 로그인 허용 — 명단·요청에서만 빠짐 (2026-10-31). 관리자 보관·탈퇴 요청 보관은 그대로 막음 */
-    if (entry.deactivated && !restingSelf(entry)) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
+    /* 휴면(보관) 계정도 로그인은 허용 (2026-10-31) — 명단·티저에서 숨기고 요청·채팅 보내기만 막음. 직접 복귀는 💤 잠시 쉬기(restingSelf)만 */
     if (entry.managedBy && entry.pinExpiresAt && Date.now() > new Date(entry.pinExpiresAt).getTime()) {
       throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
     }
@@ -1018,7 +1017,7 @@ async function sendTo(id, title, body, nav) {
   const tokens = await tokensFor(id);
   await sendToTokens(tokens, title, body, [id], nav);
 }
-/* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 로그인·관리자 문의·AI 도우미는 되고, 명단·요청·채팅 보내기만 멈춤 (2026-10-31) */
+/* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 본인이 [다시 활동하기]로 바로 복귀 가능. (휴면은 모두 로그인 됨, 명단·요청·채팅 보내기만 멈춤 — 2026-10-31) */
 function restingSelf(e) {
   return !!(e && e.deactivated && e.deactivatedVia === 'deactivate-request');
 }
@@ -1329,7 +1328,7 @@ function buildPublicView(state) {
   /* 공개 로그인 목록에서 휴면 계정은 빼고, 일반 계정의 'PIN 있음' 표시도 뺌 (2026-10-27 — 10-26 대입 공격이 이 표시로 대상 155명을 골랐음).
      대리(주선자 관리) 계정만 유효한 임시 PIN 이 있을 때 넣음(앱 로그인 창이 그 기준으로 보여 줌). 닉네임 중복은 서버(nickTaken)가 확인 */
   const pinLive = (e) => !!(e.pinAuth || e.pinHash || e.pinSet) && !(e.pinExpiresAt && Date.now() > Date.parse(e.pinExpiresAt));
-  const loginDir = entries.filter((e) => (!e.deactivated || restingSelf(e)) && (!e.managedBy || pinLive(e))).map((e) => {
+  const loginDir = entries.filter((e) => (!e.managedBy || pinLive(e))).map((e) => {
     const d = dirOf(e, false);
     if (!e.managedBy) delete d.pinOn;
     return d;
@@ -1538,7 +1537,6 @@ exports.applicantAction = functions
         const s = (await tx.get(stateRef)).data() || {};
         const ent = (s.entries || []).concat(s.pendingEntries || []).find((e) => (e.nickname || '').trim() === nick);
         if (!ent) throw new HttpsError('not-found', '그 닉네임을 찾지 못했어요. 로그인 목록에 보이는 닉네임 그대로 넣어주세요.');
-        if (ent.deactivated && !restingSelf(ent)) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
         let list = (s.pinResetReqs || []).filter((q) => !(q.entryId === ent.id && q.status === 'pending'));
         list.push({ id: nodeCrypto.randomUUID(), entryId: ent.id, nickname: ent.nickname || nick, phoneEnc: data.phoneEnc, at: new Date().toISOString(), status: 'pending' });
         if (list.length > 50) list = list.slice(list.length - 50);
@@ -2017,7 +2015,7 @@ async function memberReqAction(op, data, context) {
     const entries = s.entries || [];
     const me = entries.find((e) => e.id === asId);
     if (!me || !actsAs(context, me)) throw new HttpsError('permission-denied', '이 프로필로 할 수 없어요.');
-    if (me.deactivated) throw new HttpsError('failed-precondition', restingSelf(me) ? "지금 '잠시 쉬기' 중이에요. ⚙️ 내 계정의 '다시 활동하기'를 누르면 요청할 수 있어요." : '보관(휴면) 중인 프로필이에요.');
+    if (me.deactivated) throw new HttpsError('failed-precondition', restingSelf(me) ? "지금 '잠시 쉬기' 중이에요. ⚙️ 내 계정의 '다시 활동하기'를 누르면 요청할 수 있어요." : '휴면(보관) 중이라 요청할 수 없어요. 다시 활동하려면 💬 Q&A 로 관리자에게 말씀해 주세요.');
     const authE = entries.find((e) => e.id === uid);
     const viaMm = !!(me.managedBy && me.managedBy === uid && !me.ownerSelf && authE && authE.isMatchmaker);   /* 주선자가 친구 대신 */
     const nick = (x) => (entries.find((e) => e.id === x) || {}).nickname || '상대방';
@@ -2482,7 +2480,7 @@ exports.chatAction = functions
       const otherE = entries.find((e) => e.id === otherId);
       if (!otherE) throw new HttpsError('failed-precondition', '탈퇴한 회원에게는 보낼 수 없어요.');
       if (otherE.deactivated) throw new HttpsError('failed-precondition', '상대가 지금 휴면(보관) 중이라 메시지를 보낼 수 없어요.');
-      if (asE.deactivated) throw new HttpsError('failed-precondition', restingSelf(asE) ? "지금 '잠시 쉬기' 중이에요. ⚙️ 내 계정의 '다시 활동하기'를 누르면 대화할 수 있어요." : '보관(휴면) 중인 계정이에요.');
+      if (asE.deactivated) throw new HttpsError('failed-precondition', restingSelf(asE) ? "지금 '잠시 쉬기' 중이에요. ⚙️ 내 계정의 '다시 활동하기'를 누르면 대화할 수 있어요." : '휴면(보관) 중이라 메시지를 보낼 수 없어요. 다시 활동하려면 💬 Q&A 로 관리자에게 말씀해 주세요.');
       if (!chatApproved(state, asId, otherId)) throw new HttpsError('failed-precondition', '대화 신청이 수락된 사이에서만 대화할 수 있어요.');
       if (await blockedBetween((r) => r.get(), asId, otherId)) throw new HttpsError('failed-precondition', '지금은 이 회원에게 메시지를 보낼 수 없어요.');
       const m = { id: nodeCrypto.randomUUID(), fromId: asId, toId: otherId, text, at: new Date().toISOString() };
@@ -4137,7 +4135,7 @@ exports.aiConcierge = functions
        지금 명단에 있는 회원(m)·승인 대기 신청자(p)만, 그리고 관리자 아닌 모든 AI 호출에 하루 한도 하나 */
     if (!isAdmin) {
       const stLive = (await db.doc('app/state').get()).data() || {};
-      const live = ((tok.m === 1 ? stLive.entries : stLive.pendingEntries) || []).some((e) => e && e.id === context.auth.uid && (!e.deactivated || restingSelf(e)));
+      const live = ((tok.m === 1 ? stLive.entries : stLive.pendingEntries) || []).some((e) => e && e.id === context.auth.uid);
       if (!live || secBlocked(stLive, context.auth.uid)) throw new HttpsError('permission-denied', '지금은 쓸 수 없는 계정이에요.');
       await aiQuotaTake(context.auth.uid, 60);
     }
