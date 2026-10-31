@@ -1126,7 +1126,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-29-496';
+  var APP_VERSION = '2026-10-29-499';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1431,21 +1431,34 @@
   /* v474: 로그인(서버 함수) 직전엔 기다리지 않고 바로 불러와 토큰을 붙임 — 나중에 로그인 함수에 App Check 를 강제할 준비.
      ensureAppCheck() 는 최대 2.5초만 기다리고(느린 폰에서 로그인이 막히지 않게) 그냥 진행 */
   var _appCheckP = null;
+  /* 10-29: 보안 확인 토큰이 준비되기까지 걸린 시간(ms) — memberLogin 이 로그인 기록에 남김(운영 강제 전 폰별 속도 보기), 베타 🧪 패널에 표시 */
+  var _acInfo = { t0: 0, ms: -1, ok: null, ms2: -1, ok2: null, loginMs: -1, retried: 0 };
   function ensureAppCheck() {
     if (!_appCheckP) _appCheckP = new Promise(function (resolve) {
+      _acInfo.t0 = Date.now();
+      function done(ok) { if (_acInfo.ms < 0) { _acInfo.ms = Date.now() - _acInfo.t0; _acInfo.ok = ok; } resolve(ok); }
       var s = document.createElement('script');
       s.src = 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check-compat.js';
       s.async = true;
       s.onload = function () {
         try {
           firebase.appCheck().activate(new firebase.appCheck.ReCaptchaEnterpriseProvider(RECAPTCHA_SITE_KEY), true);
-          firebase.appCheck().getToken().then(function () { resolve(true); }, function () { resolve(false); });
-        } catch (e) { try { console.warn('appCheck', e); } catch (e2) {} resolve(false); }
+          firebase.appCheck().getToken().then(function () { done(true); }, function () { done(false); });
+        } catch (e) { try { console.warn('appCheck', e); } catch (e2) {} done(false); }
       };
-      s.onerror = function () { resolve(false); };
+      s.onerror = function () { done(false); };
       document.head.appendChild(s);
     });
     return Promise.race([_appCheckP, new Promise(function (r) { setTimeout(function () { r(false); }, 2500); })]);
+  }
+  /* 서버가 '보안 확인이 아직'(details.appcheck)이라고 하면: 토큰이 준비될 때까지(최대 ms) 기다림. 처음 시도가 실패했으면 한 번 더 받아 봄 */
+  function waitAppCheck(ms) {
+    var p = (_appCheckP || Promise.resolve(false)).then(function (ok) {
+      if (ok) return true;
+      var t1 = Date.now();   /* 다시 받기 결과도 남김(ms2) — 처음 실패만 보이면 속도 판단이 틀어짐 */
+      try { return firebase.appCheck().getToken().then(function () { _acInfo.ms2 = Date.now() - t1; _acInfo.ok2 = true; return true; }, function () { _acInfo.ms2 = Date.now() - t1; _acInfo.ok2 = false; return false; }); } catch (e) { return false; }
+    });
+    return Promise.race([p, new Promise(function (r) { setTimeout(function () { r(false); }, ms); })]);
   }
   (function loadAppCheck() {
     function later() { setTimeout(ensureAppCheck, 1500); }
@@ -2377,10 +2390,19 @@
      '토큰 있는 회원/관리자'만 데이터 접근을 허용하는 기반. 손님은 익명 토큰. */
   function authUid() { var u = firebase.auth().currentUser; return (u && !u.isAnonymous) ? u.uid : ''; }
   function serverSignIn(fnName, payload) {
-    var direct = ensureAppCheck().then(function () {
+    var t0 = Date.now();
+    function call() {
+      payload.acMs = _acInfo.ms;
       return fns ? fns.httpsCallable(fnName)(payload).catch(function (e) { if (isSwMsgError(e)) return callFn(fnName, payload); throw e; }) : callFn(fnName, payload);
+    }
+    var direct = ensureAppCheck().then(call).catch(function (e) {
+      /* 서버가 App Check 를 강제하는데 토큰이 아직 → 준비될 때까지 기다렸다 한 번만 다시 (실패로 안 셈) */
+      if (!(e && e.details && e.details.appcheck)) throw e;
+      _acInfo.retried++;
+      return waitAppCheck(15000).then(call);
     });
     return direct.then(function (r) {
+      _acInfo.loginMs = Date.now() - t0;
       var t = r && r.data && r.data.token;
       if (!t) throw new Error('토큰을 받지 못했어요.');
       return firebase.auth().signInWithCustomToken(t);
@@ -2413,6 +2435,11 @@
       return id;
     } catch (e) { return ''; }
   }
+  /* 기기 열쇠(10-29): 믿을 기기가 될 때 서버가 이 기기에만 주는 값 — 기기 id 만으로는 믿을 기기로 안 봄(포털·레이더와 같이 씀) */
+  function adminDeviceKey() { try { return localStorage.getItem('bennyAdminDeviceKey') || ''; } catch (e) { return ''; } }
+  function saveAdminDeviceKey(k) { if (k) { try { localStorage.setItem('bennyAdminDeviceKey', String(k)); } catch (e) {} } }
+  /* 서버가 새 기기 id 를 줄 때(이미 열쇠 가진 기기 id 로 다시 승인받으면 기존 기기를 덮지 않고 새 id) */
+  function saveAdminDeviceId(id) { if (/^[A-Za-z0-9_-]{16,64}$/.test(id || '')) { try { localStorage.setItem('bennyAdminDevice', id); } catch (e) {} } }
   function adminDeviceName() {
     var ua = navigator.userAgent || '';
     var os = /iPhone/.test(ua) ? '아이폰' : /iPad/.test(ua) ? '아이패드' : /Android/.test(ua) ? '안드로이드' : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows PC' : '기기';
@@ -2422,10 +2449,12 @@
   function adminServerLogin(pw) {
     _adminOnceUntil = 0; clearTimeout(_adminOnceTimer);
     var dev = adminDeviceId();
-    var payload = { password: pw, deviceId: dev, deviceName: adminDeviceName() };
+    /* onceOk: 이 화면은 이번만 허용을 앎(비번 저장 안 함·끝나면 나감) — 서버는 이게 없는 보류를 이번만으로 허용하지 않음 */
+    var payload = { password: pw, deviceId: dev, deviceKey: adminDeviceKey(), deviceName: adminDeviceName(), onceOk: 1, keyOk: 1 };   /* keyOk: 열쇠를 저장할 수 있음 */
     var direct = fns ? fns.httpsCallable('adminLogin')(payload).catch(function (e) { if (isSwMsgError(e)) return callFn('adminLogin', payload); throw e; }) : callFn('adminLogin', payload);
     return direct.then(function (r) {
       var d = (r && r.data) || {};
+      saveAdminDeviceId(d.deviceId); saveAdminDeviceKey(d.deviceKey);
       if (d.token) return d.token;
       if (d.pending) return adminWaitApproval(d, dev);
       throw new Error('토큰을 받지 못했어요.');
@@ -2472,6 +2501,7 @@
       function ask(extra) {
         return callFn('adminLogin', Object.assign({ holdId: d.holdId, pollKey: d.pollKey, deviceId: dev }, extra || {})).then(function (r) {
           var x = (r && r.data) || {};
+          saveAdminDeviceId(x.deviceId); saveAdminDeviceKey(x.deviceKey);   /* 그냥 허용 → 믿을 기기 열쇠 (새 id 면 id 도) */
           if (x.token) { _adminOnceUntil = x.once ? (Number(x.until) || 0) : 0; finish(null, x.token); return x; }
           return x;
         });
@@ -2505,19 +2535,28 @@
   }
   /* 관리자 토큰이 있는 기기(이미 로그인돼 있던 폰·PC)는 앱을 열 때 '믿을 기기'로 등록 — 한 번만 */
   var _adminEnrolled = false;
+  function enrollAdminDeviceForce() { _adminEnrolled = false; enrollAdminDevice(); refreshNotifTokens(); }
   function enrollAdminDevice() {
     if (_adminEnrolled) return;
     _adminEnrolled = true;
-    callFn('adminDevice', { op: 'enroll', deviceId: adminDeviceId(), deviceName: adminDeviceName() }).catch(function () { _adminEnrolled = false; });
+    /* wantKey: 열쇠 없는 예전 믿을 기기면 서버가 열쇠를 한 번 줌 → 저장 */
+    callFn('adminDevice', { op: 'enroll', deviceId: adminDeviceId(), deviceKey: adminDeviceKey(), deviceName: adminDeviceName(), wantKey: 1 })
+      .then(function (r) {
+        var k = r && r.data && r.data.deviceKey;
+        saveAdminDeviceKey(k);
+        if (k) refreshNotifTokens();   /* 방금 열쇠를 받았으면 관리자 알림 묶기를 다시 (열쇠 전에 보낸 건 거절됐을 수 있음) */
+      }).catch(function () { _adminEnrolled = false; });
   }
   /* 서버가 'PIN이 틀렸다/잠겼다/보관 계정'처럼 확실히 거절한 경우 (네트워크·서버 오류와 구분) */
   function isAuthRejection(e) {
+    if (e && e.details && e.details.appcheck) return false;   /* App Check(보안 확인)가 늦은 것 — PIN 문제 아님, 저장된 로그인 유지 */
     var c = ((e && e.code) || '') + '';
     return /permission-denied|resource-exhausted|failed-precondition|not-found/.test(c);
   }
   function authErrMsg(e) { return ((e && e.message) || '로그인에 실패했어요.') + ''; }
   /* 로그아웃·관리자 잠금 시 토큰을 손님으로 되돌림 (회원으로 로그인 중이면 회원 토큰 유지) */
   function dropToGuestAuth() {
+    _adminOnceUntil = 0; clearTimeout(_adminOnceTimer);   /* 관리자 잠금·로그아웃이면 이번만 세션도 끝 (다시 열 땐 승인부터) */
     var u = firebase.auth().currentUser;
     if (!u || u.isAnonymous) return Promise.resolve();
     return firebase.auth().signOut().then(function () { return firebase.auth().signInAnonymously(); }).catch(function () {});
@@ -9333,10 +9372,94 @@
     /* AI 가 '본인으로 보임' 판정한 건(알림 안 보냄)은 확인 필요 수에서 빼고 흐리게 */
     var secQuiet = function (a) { return !!(a.triage && a.triage.state === 'benign'); };
     var secOpen = _secAlerts.filter(function (a) { return !a.resolved && !secQuiet(a); });
+    /* 2026-10-29 Benny "보안경고 탭 너무 길어서 보기 힘들어" → 확인할 것만 짧은 카드(같은 사람·같은 일은 ×n 으로 묶음), 나머지는 '지난 경고'에 날짜별 한 줄,
+       자세한 내용(사유·IP·기기·AI 이유)은 눌러서 펼침, 설명 글도 접음 */
+    var SEC_ICON = { tamper: '🚨', quarantine: '⛔', 'admin-device': '🔐', 'login-lock': '🔒', 'admin-lock': '🚨', 'ip-block': '🛡', suspicious: '👁', 'vpn-hold': '🛂' };
+    var ADEV_KIND = { pending: '새 기기 로그인 대기', trusted: '믿을 기기로 등록됨', once: '이번만 허용', unregistered: '등록 안 된 기기에 관리자 로그인' };
+    function secWho(a) {
+      if (a.type === 'tamper') return a.writerNick || a.writer || '';
+      if (a.type === 'admin-device') return a.nickname || a.device || '기기';
+      if (a.type === 'login-lock' || a.type === 'admin-lock') return a.target || '';
+      return a.nickname || a.target || '';
+    }
+    function secWhat(a) {
+      if (a.type === 'suspicious') return SUS_KIND[a.kind] || a.kind || '';
+      if (a.type === 'admin-device') return ADEV_KIND[a.kind] || a.kind || '';
+      if (a.type === 'tamper') return '다른 회원 데이터 ' + (a.issues || []).length + '건 바꿈';
+      if (a.type === 'quarantine') return '계정 자동 차단';
+      if (a.type === 'ip-block') return '1시간에 ' + (a.fails || 0) + '번 실패 → IP 1시간 차단';
+      if (a.type === 'vpn-hold') return 'VPN 로그인 보류';
+      if (a.type === 'login-lock') return '회원 로그인 잠김';
+      if (a.type === 'admin-lock') return '관리자 로그인 잠김';
+      return SEC_TYPE[a.type] || a.type || '';
+    }
+    function secAiTag(t) {
+      if (!t || !t.state || t.state === 'skip') return '';
+      var v = t.state === 'noted' ? t.ai : t.state;
+      var m = { benign: ['본인 같음', '#137333'], suspicious: ['수상', '#c5221f'], unsure: ['애매', '#8a6d00'], pending: ['판단 중', '#8a6d00'], note: ['판단 중', '#8a6d00'] }[v];
+      return m ? ' <span style="color:' + m[1] + ';font-weight:600;white-space:nowrap;">🤖' + m[0] + '</span>' : '';
+    }
+    /* 펼치면 보이는 자세한 내용 */
+    function secDetail(a) {
+      var b = '';
+      var ipLine = function () { return '<span class="sub">' + escapeHtml(a.ip || '') + (a.intel && (a.intel.city || a.intel.provider) ? ' (' + escapeHtml([a.intel.city, a.intel.provider].filter(Boolean).join(' · ')) + (a.intel.vpn ? ', VPN' : '') + ')' : '') + (a.device ? ' · ' + escapeHtml(a.device) : '') + '</span>'; };
+      if (a.type === 'tamper') b = escapeHtml(a.summary || '');
+      else if (a.type === 'quarantine') b = '7일 안에 다른 회원 데이터를 ' + (a.strikes || 2) + '번 바꾸려 해 앱 접속·로그인을 막음' + ((state.secBlock || []).indexOf(a.target) >= 0 ? '' : ' <span style="color:#137333;">(지금은 풀림)</span>');
+      else if (a.type === 'admin-device') b = ipLine() + (a.via ? ' <span class="sub">· ' + escapeHtml(a.via) + '</span>' : '');
+      else if (a.type === 'vpn-hold') b = ((a.reasons || []).length ? escapeHtml(a.reasons.join(' / ')) + '<br>' : '') + ipLine() + '<br><button type="button" class="card-btn" data-action="sec-holds" style="flex:none;margin-top:4px;">🛂 허용·거부 하러 가기</button>';
+      else if (a.type === 'suspicious') b = ((a.reasons || []).length ? escapeHtml(a.reasons.join(' / ')) + '<br>' : '') + ipLine();
+      else if (a.type === 'login-lock' || a.type === 'admin-lock') b = (a.fails || 0) + '번 틀림';
+      b += secAiLine(a.triage);
+      if (a.restoredAt) b += ' <span style="color:#137333;">(되돌림 ' + fmtDate(a.restoredAt) + ')</span>';
+      return b.replace(/^<br>/, '');
+    }
+    var secKey = function (a) { return a.type + '|' + secWho(a) + '|' + secWhat(a); };
+    var secCanRestore = function (a) { return !a.resolved && a.type === 'tamper' && !a.restoredAt && (a.issues || []).some(function (i) { return i && i.coll; }); };
+    /* 확인 필요: 같은 사람·같은 일은 한 카드로 (되돌릴 수 있는 이상 변경은 따로) */
+    var secOpenGroups = [], secOg = {};
+    secOpen.forEach(function (a) {
+      var k = secCanRestore(a) ? 'r:' + a._id : secKey(a);
+      if (!secOg[k]) { secOg[k] = []; secOpenGroups.push(secOg[k]); }
+      secOg[k].push(a);
+    });
+    var secOpenHtml = secOpenGroups.map(function (g) {
+      var a = g[0];
+      var reasons = (a.reasons || []).join(' · ');
+      var btns = '';
+      if (secCanRestore(a)) btns += '<button type="button" class="card-btn danger" data-action="sec-restore" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">되돌리기</button> ';
+      btns += '<button type="button" class="card-btn" data-action="sec-ack-many" data-ids="' + escapeHtml(g.map(function (x) { return x._id; }).join(',')) + '" style="flex:none;padding:3px 10px;">확인함' + (g.length > 1 ? ' (' + g.length + '건)' : '') + '</button>';
+      return '<div style="border:1px solid #f1b0ab;background:#fdecea;border-radius:10px;padding:7px 10px;margin-bottom:6px;font-size:0.84rem;">' +
+        '<div>' + (SEC_ICON[a.type] || '•') + ' ' + (secWho(a) ? '<b>' + escapeHtml(secWho(a)) + '</b> · ' : '') + escapeHtml(secWhat(a)) + (g.length > 1 ? ' <b>×' + g.length + '</b>' : '') + secAiTag(a.triage) + ' <span class="sub" style="white-space:nowrap;">' + relTimeShort(a.at) + '</span></div>' +
+        (reasons ? '<div class="sub" style="margin-top:2px;">' + escapeHtml(reasons) + '</div>' : '') +
+        '<details data-fk="so:' + escapeHtml(a._id) + '" style="margin:3px 0 5px;"><summary class="sub" style="cursor:pointer;">자세히</summary>' +
+          g.slice(0, 5).map(function (x) { return '<div style="font-size:0.8rem;margin:4px 0 0;"><span class="sub">' + fmtDate(x.at) + '</span> ' + secDetail(x) + '</div>'; }).join('') +
+          (g.length > 5 ? '<div class="sub">… 외 ' + (g.length - 5) + '건</div>' : '') + '</details>' +
+        btns + '</div>';
+    }).join('');
+    var secAckAll = secOpen.filter(function (a) { return !secCanRestore(a); });
+    /* 지난 경고: 확인함·AI 가 본인으로 본 것 — 날짜별 한 줄, 같은 일이 이어지면 ×n */
+    var secPast = _secAlerts.filter(function (a) { return a.resolved || secQuiet(a); });
+    var secDayOf = function (iso) { var d = new Date(iso); return isNaN(d) ? '' : (d.getMonth() + 1) + '/' + d.getDate(); };
+    var secToday = secDayOf(new Date().toISOString()), secYday = secDayOf(new Date(Date.now() - 86400000).toISOString());
+    var secPastRows = [], secLastDay = '', secPrev = null;
+    secPast.forEach(function (a) {
+      var dy = secDayOf(a.at);
+      if (secPrev && secPrev.day === dy && secPrev.key === secKey(a)) { secPrev.items.push(a); return; }
+      secPrev = { day: dy, key: secKey(a), items: [a] }; secPastRows.push(secPrev);
+    });
+    var secPastHtml = secPastRows.map(function (r) {
+      var a = r.items[0], hd = '';
+      if (r.day !== secLastDay) { secLastDay = r.day; hd = '<div class="sub" style="font-weight:700;margin:8px 0 2px;">' + escapeHtml(r.day) + (r.day === secToday ? ' (오늘)' : r.day === secYday ? ' (어제)' : '') + '</div>'; }
+      var t = new Date(a.at), hm = isNaN(t) ? '' : ('0' + t.getHours()).slice(-2) + ':' + ('0' + t.getMinutes()).slice(-2);
+      return hd + '<details data-fk="sp:' + escapeHtml(a._id) + '" style="border-bottom:1px solid var(--line);">' +
+        '<summary style="cursor:pointer;list-style:none;padding:5px 2px;font-size:0.82rem;display:flex;gap:6px;align-items:baseline;">' +
+          '<span class="sub" style="flex:none;width:40px;">' + hm + '</span>' +
+          '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (SEC_ICON[a.type] || '•') + ' ' + (secWho(a) ? escapeHtml(secWho(a)) + ' · ' : '') + escapeHtml(secWhat(a)) + (r.items.length > 1 ? ' ×' + r.items.length : '') + '</span>' +
+          secAiTag(a.triage) + '</summary>' +
+        '<div style="font-size:0.8rem;padding:2px 0 6px 46px;">' + r.items.slice(0, 5).map(function (x) { return (r.items.length > 1 ? '<span class="sub">' + fmtDate(x.at) + '</span> ' : '') + secDetail(x); }).join('<br>') + '</div></details>';
+    }).join('');
+    var secNQuiet = secPast.filter(function (a) { return !a.resolved; }).length;
     var securitySection = adminFold('🛡 보안 경고' + (secOpen.length ? ' <span class="blink-soft" style="background:#c5221f;color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">확인 필요 ' + secOpen.length + '</span>' : ''), null,
-      '<p class="sub">회원 계정으로 <b>다른 회원 데이터가 바뀌면</b>(개발자 도구 조작 의심) 바뀌기 전 내용과 함께 기록돼요. [되돌리기]로 원래대로 돌릴 수 있어요. 로그인 잠금·IP 차단도 여기 표시돼요. (7일 이내면 전체 시점 복구도 가능)</p>' +
-      '<p class="sub">👁 수상한 접속 = VPN·공격 이력 IP·처음 보는 기기·오래 안 쓰던 계정·쉬운 PIN 대입 등. 모든 로그인 시도와 앱 접속(IP·기기·사이트)은 서버에 남아요.</p>' +
-      '<p class="sub">🤖 \'새 기기·오래만의 접속\'뿐인 경고는 AI(Claude)가 먼저 봐요 — 본인으로 보이면 알림 없이 기록만(흐리게), 수상하거나 애매하면 알림. 나머지 경고는 바로 알림 + AI 의견만 덧붙여요.</p>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px;">' +
         '<button type="button" class="card-btn" data-action="sec-log" style="flex:none;">🔐 로그인·접속 기록</button>' +
         '<button type="button" class="card-btn" data-action="sec-holds" style="flex:none;">🛂 VPN 로그인 검토</button>' +
@@ -9350,32 +9473,15 @@
           return '<div style="display:flex;align-items:center;gap:8px;margin:3px 0;"><span style="flex:1;font-size:0.86rem;">' + escapeHtml(nickForEntry(state, id) || id) + '</span>' +
             '<button type="button" class="card-btn" data-action="sec-unblock" data-id="' + escapeHtml(id) + '" style="flex:none;padding:3px 10px;">차단 풀기</button></div>';
         }).join('') + '</div>' : '') +
-      (_secAlerts.length ? _secAlerts.map(function (a) {
-        var head = '<b>' + escapeHtml(SEC_TYPE[a.type] || a.type) + '</b> · ' + fmtDate(a.at);
-        var body = '';
-        if (a.type === 'tamper') body = escapeHtml(a.writerNick || a.writer || '') + '님 계정으로 ' + (a.issues || []).length + '건 — ' + escapeHtml(a.summary || '');
-        else if (a.type === 'quarantine') body = '<b>' + escapeHtml(a.nickname || a.target || '') + '</b> · 7일 안에 다른 회원 데이터를 ' + (a.strikes || 2) + '번 바꾸려 해 앱 접속·로그인을 막음' +
-          ((state.secBlock || []).indexOf(a.target) >= 0 ? '' : ' <span style="color:#137333;">(지금은 풀림)</span>');
-        else if (a.type === 'admin-device') body = '<b>' + escapeHtml(a.nickname || a.device || '기기') + '</b> · ' + (a.kind === 'pending' ? '새 기기 로그인 대기' : '믿을 기기로 등록됨') +
-          (a.ip ? '<br><span class="sub">' + escapeHtml(a.ip) + (a.via ? ' · ' + escapeHtml(a.via) : '') + '</span>' : '');
-        else if (a.type === 'ip-block') body = '한 곳에서 1시간에 ' + (a.fails || 0) + '번 실패 → 1시간 차단';
-        else if (a.type === 'vpn-hold') body = '<b>' + escapeHtml(a.nickname || '') + '</b> · PIN은 맞았지만 VPN이라 보류' +
-          '<br><span class="sub">' + escapeHtml(a.ip || '') + ' (' + escapeHtml([a.intel && a.intel.provider, a.intel && a.intel.country].filter(Boolean).join(' · ')) + ') · ' + escapeHtml(a.device || '') + '</span>' +
-          ((a.reasons || []).length ? '<br>' + escapeHtml(a.reasons.join(' / ')) : '') +
-          '<br><button type="button" class="card-btn" data-action="sec-holds" style="flex:none;margin-top:4px;">🛂 허용·거부 하러 가기</button>';
-        else if (a.type === 'suspicious') body ='<b>' + escapeHtml(a.nickname || a.target || '') + '</b> · ' + escapeHtml(SUS_KIND[a.kind] || a.kind || '') +
-          '<br>' + escapeHtml((a.reasons || []).join(' / ')) +
-          '<br><span class="sub">' + escapeHtml(a.ip || '') + (a.intel && (a.intel.city || a.intel.provider) ? ' (' + escapeHtml([a.intel.city, a.intel.provider].filter(Boolean).join(' · ')) + ')' : '') + ' · ' + escapeHtml(a.device || '') + '</span>';
-        else body = escapeHtml(a.target || '') + ' · ' + (a.fails || 0) + '번 틀림';
-        body += secAiLine(a.triage);
-        var btns = '';
-        if (!a.resolved && a.type === 'tamper' && !a.restoredAt && (a.issues || []).some(function (i) { return i && i.coll; })) btns += '<button type="button" class="card-btn danger" data-action="sec-restore" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">되돌리기</button> ';
-        if (!a.resolved && !secQuiet(a)) btns += '<button type="button" class="card-btn" data-action="sec-ack" data-id="' + escapeHtml(a._id) + '" style="flex:none;padding:3px 10px;">확인함</button>';
-        if (a.restoredAt) body += ' <span style="color:#137333;">(되돌림 ' + fmtDate(a.restoredAt) + ')</span>';
-        var calm = a.resolved || secQuiet(a);
-        return '<div style="border:1px solid ' + (calm ? 'var(--line)' : '#f1b0ab') + ';background:' + (calm ? 'transparent' : '#fdecea') + ';border-radius:10px;padding:8px 11px;margin-bottom:6px;' + (calm ? 'opacity:.6;' : '') + '">' +
-          '<div style="font-size:0.86rem;">' + head + '</div><div style="font-size:0.84rem;margin:3px 0 5px;">' + body + '</div>' + btns + '</div>';
-      }).join('') : '<p class="sub">경고가 없어요 🙆</p>'), !!secOpen.length, 'security');
+      (secOpenGroups.length ? secOpenHtml + (secAckAll.length > 1 ? '<button type="button" class="card-btn" data-action="sec-ack-many" data-ids="' + escapeHtml(secAckAll.map(function (x) { return x._id; }).join(',')) + '" style="flex:none;margin:0 0 8px;">모두 확인함 (' + secAckAll.length + '건)</button>' : '')
+        : '<p style="margin:0 0 8px;font-size:0.88rem;color:#137333;">✅ 확인할 경고가 없어요</p>') +
+      (secPast.length ? '<details class="req-fold" data-fk="sec-past"><summary><span style="flex:1;min-width:0;white-space:normal;">📂 지난 경고 <b>' + secPast.length + '</b>건' + (secNQuiet ? ' <span class="sub">· 🤖본인 같음 ' + secNQuiet + '</span>' : '') + '</span></summary>' +
+        '<div class="req-fold-body" style="padding-top:0;">' + secPastHtml + '</div></details>' : '') +
+      '<details data-fk="sec-help" style="margin-top:6px;"><summary class="sub" style="cursor:pointer;">ℹ️ 보안 경고 설명</summary>' +
+        '<p class="sub">회원 계정으로 <b>다른 회원 데이터가 바뀌면</b>(개발자 도구 조작 의심) 바뀌기 전 내용과 함께 기록돼요. [되돌리기]로 원래대로 돌릴 수 있어요. 로그인 잠금·IP 차단도 여기 표시돼요. (7일 이내면 전체 시점 복구도 가능)</p>' +
+        '<p class="sub">👁 수상한 접속 = VPN·공격 이력 IP·처음 보는 기기·오래 안 쓰던 계정·쉬운 PIN 대입 등. 모든 로그인 시도와 앱 접속(IP·기기·사이트)은 서버에 남아요.</p>' +
+        '<p class="sub">🤖 \'새 기기·오래만의 접속\'뿐인 경고는 AI(Claude)가 먼저 봐요 — 본인으로 보이면 알림 없이 기록만(지난 경고로), 수상하거나 애매하면 알림. 나머지 경고는 바로 알림 + AI 의견만 덧붙여요.</p>' +
+      '</details>', !!secOpen.length, 'security');
     var secHtml = {
       security: securitySection,
       reports: reportsSection,
@@ -10094,6 +10200,7 @@
           adminPrivateKey = key;
           isAdminUnlocked = true;
           saveAdminPin(pin);
+          enrollAdminDevice(); refreshNotifTokens();   /* 잠가 두고 쓰는 기기도 풀 때 열쇠·관리자 알림 묶음을 챙김 */
           return decryptAllAdminData(full);
         }).then(function () { hideBusy(); paint(currentState); });
       }).catch(function (err) {
@@ -10108,6 +10215,8 @@
     if (!isAdminUnlocked || !adminPrivateKey || !state.adminAuth) {
       return modalNotice('안내', '관리자 모드에서만 변경할 수 있어요.');
     }
+    /* 이번만 허용 기기는 12시간 뒤에도 남는 일(비밀번호 바꾸기)을 못 함 — 규칙도 막음 */
+    if (_adminOnceUntil) return modalNotice('안내', '이번만 허용된 기기에선 관리자 비밀번호를 바꿀 수 없어요. 등록된 관리자 기기에서 바꿔 주세요.');
     modalPinSetup().then(function (r) {
       if (!r) return;
       var pwErr = adminPwError(r.p1);
@@ -12724,7 +12833,7 @@
   /* 📱 관리자 기기 (v470) — 믿을 기기 목록(이름 바꾸기·해제), 새 기기 승인 대기(허용/거부), 문자 인증 번호(베니·아내).
      허용/거부·해제·번호 저장은 서버가 '이 기기도 믿을 기기'인지 확인 */
   function adminCall(op, extra) {
-    return callFn('adminDevice', Object.assign({ op: op, deviceId: adminDeviceId(), deviceName: adminDeviceName() }, extra || {}));
+    return callFn('adminDevice', Object.assign({ op: op, deviceId: adminDeviceId(), deviceKey: adminDeviceKey(), deviceName: adminDeviceName() }, extra || {}));
   }
   function ensureAdminToken() {
     return authClaims().then(function (c) {
@@ -12734,6 +12843,11 @@
         return adminServerLogin(pw).then(function () { enrollAdminDevice(); return true; });
       });
     });
+  }
+  /* '이번만'을 눌렀는데 서버가 이번만으로 처리하지 않음(옛 서버) → 그냥 허용된 것 — 믿을 기기가 됐으니 알림 */
+  function onceWasIgnored(r) { var d = (r && r.data) || {}; return d.status === 'approved' && d.once === undefined && !d.decided; }   /* 새 서버는 once 를 늘 돌려줌 */
+  function onceIgnored() {
+    modalNotice('확인 필요', '서버가 이번만 허용을 몰라 그 기기가 관리자 기기로 등록됐어요. 잠깐 쓰는 기기였다면 📱 관리자 기기에서 그 기기를 해제해 주세요.');
   }
   function openAdminApprove(holdId) {
     ensureAdminToken().then(function () { return adminCall('list'); }).then(function (r) {
@@ -12748,8 +12862,9 @@
         '<br><br>모르는 시도면 <b>거부</b>. 베니 님이 직접 로그인하는 중이면 — 계속 쓸 기기는 <b>허용</b>, 회사·남의 PC처럼 잠깐 쓰는 기기는 <b>이번만</b>(12시간 뒤 자동으로 끊기고 기기 등록 안 함).</p>' +
         '<div class="modal-actions"><button type="button" class="card-btn danger" id="ap-deny">거부</button><button type="button" class="card-btn" id="ap-once">이번만</button><button type="button" class="card-btn approve" id="ap-ok">허용</button></div>');
       function act(op, once) {
-        adminCall(op, once ? { holdId: holdId, once: true } : { holdId: holdId }).then(function () {
+        adminCall(op, once ? { holdId: holdId, once: true } : { holdId: holdId }).then(function (r) {
           closeModal(ov);
+          if (once && onceWasIgnored(r)) return onceIgnored();
           modalNotice('완료', op === 'deny' ? '거부했어요. 그 IP는 감시 목록에 넣었어요.' : once ? '이번만 허용했어요. 그 기기는 12시간 동안만 들어가요.' : '허용했어요. 그 기기에서 바로 들어가고, 관리자 기기로 등록돼요.');
         }).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
       }
@@ -12781,6 +12896,8 @@
           var off = v.status !== 'trusted';
           return '<div style="border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;' + (off ? 'opacity:.55;' : '') + '">' +
             (off ? '⛔ ' : '✅ ') + '<b>' + escapeHtml(v.name || v.device || '기기') + '</b>' + (v.me ? ' <span class="sub">(지금 이 기기)</span>' : '') +
+            (off ? '' : ' <span class="sub" style="white-space:nowrap;">' + (v.push ? '🔔 알림 받음' : '🔕 알림 안 받음') + '</span>') +
+            (off || v.keyed ? '' : ' <span class="sub" style="white-space:nowrap;color:#b06000;">🔑 열쇠 아직 — 그 기기의 📱 관리자 기기에서 [이 기기 열쇠 받기](승인 한 번)</span>') +
             '<br><span class="sub">' + escapeHtml(v.device || '') + ' · 마지막 ' + (v.lastAt ? fmtDate(v.lastAt) : '-') + ' · ' + escapeHtml(v.ip || '') + ' · ' + escapeHtml(viaText(v.via)) + '</span>' +
             (off ? '' : '<div style="margin-top:6px;display:flex;gap:6px;"><button type="button" class="card-btn" data-rn="' + escapeHtml(v.id) + '" style="flex:none;">이름 바꾸기</button>' +
               (v.me ? '' : '<button type="button" class="card-btn danger" data-rv="' + escapeHtml(v.id) + '" style="flex:none;">해제</button>') + '</div>') +
@@ -12795,21 +12912,26 @@
             '<input data-pl="1" value="' + escapeHtml((ph[1] && ph[1].label) || '아내') + '" maxlength="10" style="padding:6px;border:1px solid var(--line);border-radius:8px;font-family:inherit;"><input data-pn="1" inputmode="tel" placeholder="010-0000-0000 (바꿀 때만)" style="padding:6px;border:1px solid var(--line);border-radius:8px;font-family:inherit;">' +
           '</div><button type="button" class="card-btn primary" id="ad-ph-save" style="flex:none;margin-top:6px;">번호 저장</button>' +
           '<p class="sub" style="margin:4px 0 0;">두 칸 모두 새로 넣어야 저장돼요 (서버에 암호화, 화면엔 뒤 4자리만).</p></div>';
+        var meDev = (d.devices || []).find(function (v) { return v.me; });
+        var meLegacy = !d.meTrusted && meDev && meDev.status === 'trusted' && !meDev.keyed;
         var box = ov.querySelector('[data-ad]');
         box.innerHTML = '<div style="max-height:62vh;overflow:auto;">' +
-          (d.meTrusted ? '' : '<p style="color:#c5221f;font-size:0.84rem;">이 기기는 아직 관리자 기기가 아니라 보기만 돼요.</p>') +
+          (d.meTrusted ? '' : '<p style="color:#c5221f;font-size:0.84rem;">이 기기는 아직 관리자 기기가 아니라 보기만 돼요.' +
+            (meLegacy ? ' 예전에 등록된 기기라 열쇠만 받으면 돼요.</p><button type="button" class="card-btn primary" id="ad-getkey" style="flex:none;margin-bottom:8px;">🔑 이 기기 열쇠 받기 (비밀번호 → 다른 관리자 기기에서 허용)</button>' : '</p>')) +
           (holds ? '<h4 style="margin:4px 0 6px;">새 기기 승인 대기</h4>' + holds : '') +
           (onces ? '<h4 style="margin:8px 0 6px;">이번만 허용 (12시간)</h4>' + onces : '') +
           '<h4 style="margin:8px 0 6px;">관리자 기기</h4>' + (devs || '<p class="sub">없어요</p>') +
-          '<p class="sub" style="margin:2px 0 0;">해제·끊기를 하면 그 기기의 관리자 로그인이 늦어도 1시간 안에 끊기고, 다른 관리자 기기도 한 번 다시 로그인해야 해요(비밀번호만).</p>' +
+          (d.legacyPush ? '<div style="border:1px dashed var(--line);border-radius:10px;padding:8px 11px;margin-bottom:6px;font-size:0.84rem;">📦 옛 방식 관리자 알림 <b>' + d.legacyPush + '</b>개 <span class="sub">— 어느 기기 건지 몰라요(예전에 해제한 기기 것도 섞여 있을 수 있어요). 알림을 켜 둔 관리자 기기는 앱을 열면 저절로 위 기기 목록(🔔)으로 옮겨져요 — 쓰는 기기에 🔔가 보이면 비워 주세요.</span>' +
+            (d.meTrusted ? '<div style="margin-top:6px;"><button type="button" class="card-btn" id="ad-push-clear" style="flex:none;">옛 방식 비우기</button></div>' : '') + '</div>' : '') +
+          '<p class="sub" style="margin:2px 0 0;">해제하면 그 기기로 가던 관리자 알림도 바로 끊겨요. 해제·끊기를 하면 그 기기의 관리자 로그인이 늦어도 1시간 안에 끊기고, 다른 관리자 기기도 한 번 다시 로그인해야 해요(열쇠 있는 기기는 비밀번호만, 🔑 열쇠 아직인 기기는 승인도 한 번).</p>' +
           (d.meTrusted ? '<button type="button" class="card-btn danger" id="ad-cut-all" style="flex:none;margin-top:6px;">모든 관리자 세션 끊기</button>' : '') + phHtml + '</div>';
         [].forEach.call(box.querySelectorAll('[data-ap]'), function (b) { b.addEventListener('click', function () {
           var ex = { holdId: b.getAttribute('data-id') };
           if (b.getAttribute('data-once')) ex.once = true;
-          adminCall(b.getAttribute('data-ap'), ex).then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+          adminCall(b.getAttribute('data-ap'), ex).then(function (r) { if (ex.once && onceWasIgnored(r)) onceIgnored(); draw(); }).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
         }); });
         function cut(holdId) {
-          modalConfirm('관리자 세션 끊기', (holdId ? '이 이번만 허용 로그인을 끊을까요?' : '모든 관리자 로그인을 끊을까요?') + ' 관리자 로그인은 한 계정이라 이 기기를 포함한 등록된 기기도 한 번 다시 로그인해요(비밀번호만).', '끊기', 'danger').then(function (yes) {
+          modalConfirm('관리자 세션 끊기', (holdId ? '이 이번만 허용 로그인을 끊을까요?' : '모든 관리자 로그인을 끊을까요?') + ' 관리자 로그인은 한 계정이라 이 기기를 포함한 등록된 기기도 한 번 다시 로그인해요(열쇠 있는 기기는 비밀번호만, 🔑 열쇠 아직인 기기는 승인도 한 번).', '끊기', 'danger').then(function (yes) {
             if (!yes) return;
             adminCall('cutSessions', holdId ? { holdId: holdId } : {}).then(function () { modalNotice('끊음', '늦어도 1시간 안에 끊겨요.'); draw(); }).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
           });
@@ -12823,11 +12945,32 @@
           });
         }); });
         [].forEach.call(box.querySelectorAll('[data-rv]'), function (b) { b.addEventListener('click', function () {
-          modalConfirm('기기 해제', '이 기기를 관리자 기기에서 뺄까요? 다시 쓰려면 새로 승인받아야 해요.', '해제', 'danger').then(function (yes) {
+          modalConfirm('기기 해제', '이 기기를 관리자 기기에서 뺄까요? 그 기기로 가던 관리자 알림도 끊겨요. 다시 쓰려면 새로 승인받아야 해요.', '해제', 'danger').then(function (yes) {
             if (!yes) return;
-            adminCall('revoke', { targetId: b.getAttribute('data-rv') }).then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+            adminCall('revoke', { targetId: b.getAttribute('data-rv') }).then(function (r) {
+              var n = (r && r.data && r.data.legacyCleared) || 0, kept = (r && r.data && r.data.legacyKept) || 0;
+              if (n) modalNotice('해제했어요', '어느 기기 건지 모르는 옛 방식 관리자 알림 ' + n + '개도 같이 비웠어요. 다른 관리자 기기는 앱을 한 번 열면 알림이 저절로 다시 켜져요.');
+              else if (kept) modalNotice('해제했어요', '옛 방식 관리자 알림 ' + kept + '개는 남겨 뒀어요 — 알림이 옮겨진 다른 기기가 아직 없어서, 지우면 관리자 알림이 아무 데도 안 가요. 쓰는 기기에서 앱을 열어 🔔가 보이면 [옛 방식 비우기]를 눌러 주세요(그 전엔 해제한 기기에도 알림이 갈 수 있어요).');
+              draw();
+            }).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
           });
         }); });
+        var gk = box.querySelector('#ad-getkey');
+        if (gk) gk.addEventListener('click', function () {
+          /* 열쇠 없는 예전 기기: 다시 로그인 → 새 기기처럼 보류 → 다른 관리자 기기에서 허용하면 열쇠 */
+          modalPin('이 기기 열쇠 받기', '관리자 비밀번호를 넣으면 다른 관리자 기기(베니 폰 등)로 허용 요청이 가요.', { password: true }).then(function (pw) {
+            if (!pw) return;
+            adminServerLogin(pw).then(function () { modalNotice('열쇠 받음 🔑', '이 기기는 이제 관리자 기기예요. 관리자 알림도 다시 켜져요.'); enrollAdminDeviceForce(); draw(); })
+              .catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+          });
+        });
+        var pc = box.querySelector('#ad-push-clear');
+        if (pc) pc.addEventListener('click', function () {
+          modalConfirm('옛 방식 알림 비우기', '어느 기기 건지 모르는 옛 관리자 알림 ' + d.legacyPush + '개를 지울까요? 알림을 켜 둔 관리자 기기는 앱을 한 번 열면 저절로 다시 받아요.', '비우기', 'danger').then(function (yes) {
+            if (!yes) return;
+            adminCall('pushClearLegacy').then(draw).catch(function (e) { modalNotice('오류', (e && e.message) || String(e)); });
+          });
+        });
         var sv = box.querySelector('#ad-ph-save');
         if (sv) sv.addEventListener('click', function () {
           var list = [0, 1].map(function (i) { return { label: (box.querySelector('[data-pl="' + i + '"]').value || '').trim(), phone: (box.querySelector('[data-pn="' + i + '"]').value || '').trim() }; })
@@ -13356,6 +13499,7 @@
       else if (action === 'sec-holds') { if (isAdminUnlocked) openLoginHolds(); }
       else if (action === 'sec-admindev') { if (isAdminUnlocked) openAdminDevices(); }
       else if (action === 'sec-pinaudit') { if (isAdminUnlocked) runPinAudit(); }
+      else if (action === 'sec-ack-many') { if (isAdminUnlocked) { var _now = new Date().toISOString(); Promise.all(String(actionBtn.getAttribute('data-ids') || '').split(',').filter(Boolean).map(function (x) { return db.collection('securityAlerts').doc(x).update({ resolved: true, resolvedAt: _now }); })).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); }); } }
       else if (action === 'sec-ack') { if (isAdminUnlocked) db.collection('securityAlerts').doc(id).update({ resolved: true, resolvedAt: new Date().toISOString() }).catch(function (e) { modalNotice('오류', String((e && e.message) || e)); }); }
       else if (action === 'sec-restore') { if (isAdminUnlocked) restoreTamper(id); }
       else if (action === 'sec-unblock') { if (isAdminUnlocked) releaseSecBlock(id); }
@@ -14084,11 +14228,9 @@
     }).then(function (token) {
       if (!token) return;
       var jobs = [];
+      /* 관리자 알림은 서버가 이 기기에 묶음(10-29) — 믿을 기기만 받아 줌, 해제하면 같이 끊김 */
       if (adminNotifOn() && !_adminOnceUntil) {
-        jobs.push(pushTokensRef.doc('admin').set({
-          tokens: firebase.firestore.FieldValue.arrayUnion(token),
-          updatedAt: new Date().toISOString()
-        }, { merge: true }));
+        jobs.push(authClaims().then(function (c) { if (c.admin === 1 && !c.ao) return adminCall('pushOn', { token: token }); }).catch(function () {}));
       }
       if (notifOn()) {
         /* 알림 토큰은 항상 로그인 본인(주선자) 기기에 저장 — sub로 활동 중이어도 currentUser 기준 */
@@ -14307,10 +14449,7 @@
   function enableAdminNotif() {
     if (_adminOnceUntil) return modalNotice('안내', '이번만 허용된 기기에선 관리자 알림을 켤 수 없어요. 계속 쓸 기기라면 관리자 기기로 허용받아 주세요.');
     ensureFcmToken().then(function (token) {
-      return pushTokensRef.doc('admin').set({
-        tokens: firebase.firestore.FieldValue.arrayUnion(token),
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
+      return adminCall('pushOn', { token: token });   /* 서버가 믿을 기기인지 확인하고 이 기기에 묶음 */
     }).then(function () {
       try { localStorage.setItem('adminNotifOn', '1'); } catch (e) {}
       paint(currentState);
@@ -14321,14 +14460,14 @@
   }
   function disableAdminNotif() {
     var token = ''; try { token = localStorage.getItem('notifToken') || ''; } catch (e) {}
-    var p = token
-      ? pushTokensRef.doc('admin').set({ tokens: firebase.firestore.FieldValue.arrayRemove(token) }, { merge: true })
-      : Promise.resolve();
-    p.catch(function () {}).then(function () {
+    /* 서버에서 못 끄면 화면도 켜진 채로 둠 — 꺼진 줄 알았는데 알림이 계속 오는 일이 없게 */
+    adminCall('pushOff', { token: token }).then(function () {
       try { localStorage.removeItem('adminNotifOn'); } catch (e) {}
       maybeReleaseToken(); /* 회원 알림도 꺼져 있을 때만 토큰 폐기 */
       paint(currentState);
       modalNotice('관리자 알림 꺼짐', '이 기기로는 새 신청서 알림이 오지 않아요.');
+    }).catch(function (err) {
+      modalNotice('오류', '관리자 알림을 끄지 못했어요: ' + ((err && err.message) || err) + ' (관리자로 다시 로그인한 뒤 눌러 주세요)');
     });
   }
   /* 앱이 열려 있을 때 오는 메시지 — messaging은 동적 로드라, 로드 완료 시 loadMessagingSdk()가 이 함수를 호출 */
@@ -14802,6 +14941,14 @@
       }).then(function () { hide(); activeTab = 'admin'; paint(currentState); draw(); })
         .catch(function (e) { hide(); modalNotice('실패', (e && e.message) || String(e)); });
     }
+    /* 이 기기를 베타 믿을 관리자 기기로(열쇠 받기) — 실기기 시험용. 베타 서버(betaSeed trustDevice)만 받아 줌 */
+    function trustThisDevice() {
+      var hide = showBusy('이 기기를 베타 관리자 기기로 등록 중…');
+      callFn('betaSeed', { op: 'trustDevice', password: BETA_ADMIN_PW, deviceId: adminDeviceId(), deviceName: adminDeviceName() }).then(function (r) {
+        saveAdminDeviceId(r && r.data && r.data.deviceId); saveAdminDeviceKey(r && r.data && r.data.deviceKey); hide();
+        modalNotice('등록됨', '이 기기는 이제 베타 관리자 기기예요. [관리자로]를 누르면 바로 들어가고, 다른 기기의 새 기기 승인(허용·이번만·거부)을 할 수 있어요.');
+      }).catch(function (e) { hide(); modalNotice('실패', (e && e.message) || String(e)); });
+    }
     function asMember(id) {
       var hide = showBusy('시험 회원으로 들어가는 중…');
       clearAdminPin(); adminPrivateKey = null; isAdminUnlocked = false;
@@ -14824,6 +14971,16 @@
     box.id = 'beta-panel';
     box.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;font:12px/1.4 sans-serif;';
     var open = false;
+    try { if (sessionStorage.getItem('betaPanelOpen')) { open = true; sessionStorage.removeItem('betaPanelOpen'); } } catch (x) {}
+    /* App Check 속도 (10-29): 베타 memberLogin 은 App Check 강제 — 토큰 준비 시간·회원 로그인 시간(누른 뒤 토큰 받기까지)을 폰에서 바로 봄 */
+    function acHtml() {
+      if (typeof _acInfo === 'undefined') return '🛡 App Check 속도: 이 판 화면엔 재는 기능이 없어요';   /* 10-29 전 index.html 로 빌드한 베타 */
+      /* 버튼은 이 칸 밖에 둠 — 1초마다 이 칸만 다시 그려 누르는 중인 버튼이 바뀌지 않게 */
+      return '🛡 App Check (베타는 강제)<br>보안 확인 준비: <b>' +
+        (_acInfo.ms < 0 ? (_acInfo.t0 ? '받는 중…' : '아직 시작 전') : (_acInfo.ms / 1000).toFixed(1) + '초 ' + (_acInfo.ok ? '✅' : '❌ 실패')) + '</b>' +
+        (_acInfo.ms2 >= 0 ? '<br>다시 받기: <b>' + (_acInfo.ms2 / 1000).toFixed(1) + '초 ' + (_acInfo.ok2 ? '✅' : '❌') + '</b>' : '') +
+        '<br>회원 로그인: <b>' + (_acInfo.loginMs < 0 ? '-' : (_acInfo.loginMs / 1000).toFixed(1) + '초') + '</b>' + (_acInfo.retried ? ' <span style="color:#b06000;">(보안 확인 기다림 ' + _acInfo.retried + '번)</span>' : '');
+    }
     function who() {
       if (isAdminUnlocked) return '관리자';
       if (currentUser) return '회원 ' + (currentUser.nickname || '');
@@ -14838,7 +14995,10 @@
       box.innerHTML = '<div style="background:#fff;border:2px solid #5b3df5;border-radius:12px;padding:10px;width:230px;box-shadow:0 4px 16px rgba(0,0,0,.25);color:#222;">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><b style="color:#5b3df5;">🧪 베타 서버</b><button type="button" id="bp-close" style="border:0;background:none;font-size:16px;">×</button></div>' +
         '<div style="margin-bottom:6px;color:#555;">지금: <b>' + escapeHtml(who()) + '</b><br>가짜 데이터 — 실제 회원과 무관</div>' +
+        '<div style="margin-bottom:6px;padding:5px 6px;background:#f3f0ff;border-radius:8px;color:#333;"><div id="bp-ac">' + acHtml() + '</div>' +
+          '<button type="button" id="bp-ac-reload" style="margin-top:3px;">새로고침해서 다시 재기</button></div>' +
         '<div style="display:flex;gap:4px;margin-bottom:6px;"><button type="button" id="bp-admin" style="flex:1;">관리자로</button><button type="button" id="bp-guest" style="flex:1;">손님으로</button></div>' +
+        '<button type="button" id="bp-trust" style="width:100%;margin-bottom:6px;">📱 이 기기를 베타 관리자 기기로</button>' +
         '<div style="display:flex;gap:4px;margin-bottom:6px;"><select id="bp-mem" style="flex:1;min-width:0;">' +
           (_known.length ? _known.map(function (k) { return '<option value="' + escapeHtml(k.id) + '">' + escapeHtml(k.nick) + (k.tag ? ' (' + k.tag + ')' : '') + '</option>'; }).join('') : '<option value="">(관리자로 한 번 들어가면 목록이 생겨요)</option>') +
         '</select><button type="button" id="bp-mem-go">회원으로</button></div>' +
@@ -14852,13 +15012,16 @@
       else if (id === 'bp-close') { open = false; draw(); }
       else if (id === 'bp-admin') asAdmin();
       else if (id === 'bp-guest') toGuest();
+      else if (id === 'bp-trust') trustThisDevice();
+      else if (id === 'bp-ac-reload') { try { sessionStorage.setItem('betaPanelOpen', '1'); } catch (x) {} location.reload(); }
       else if (id === 'bp-mem-go') { var v = box.querySelector('#bp-mem').value; if (v) asMember(v); }
       else if (id === 'bp-seed-tpl') modalConfirm('운영 모양으로 심기', '베타 데이터를 모두 지우고, 운영과 같은 모양(인원·관계·시각)의 가짜 데이터로 바꿔요. 계속할까요?').then(function (ok) { if (ok) seedFromTemplate(); });
       else if (id === 'bp-seed') modalConfirm('시험 데이터 다시 심기', '베타 서버의 데이터를 모두 지우고 가짜 회원 28명을 새로 만들어요. 계속할까요?').then(function (ok) { if (ok) seed(); });
     });
     document.body.appendChild(box);
     draw();
-    setInterval(function () { if (!open) draw(); }, 3000);
+    var _tick = 0;
+    setInterval(function () { _tick++; if (!open) { if (_tick % 3 === 0) draw(); return; } var a = box.querySelector('#bp-ac'); if (a) a.innerHTML = acHtml(); }, 1000);
     window.__beta = { seed: seed, seedFromTemplate: seedFromTemplate, asAdmin: asAdmin, asMember: asMember, toGuest: toGuest, known: function () { remember(); return _known; } };
   })();
 

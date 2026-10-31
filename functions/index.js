@@ -251,7 +251,8 @@ exports.memberLogin = functions
       await suspiciousAlert(o, await suspicionOf(o)).catch(() => {});
       throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
     }
-    if (entry.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
+    /* 💤 잠시 쉬기(본인 요청 휴면)는 로그인 허용 — 명단·요청에서만 빠짐 (2026-10-31). 관리자 보관·탈퇴 요청 보관은 그대로 막음 */
+    if (entry.deactivated && !restingSelf(entry)) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
     if (entry.managedBy && entry.pinExpiresAt && Date.now() > new Date(entry.pinExpiresAt).getTime()) {
       throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
     }
@@ -1017,6 +1018,10 @@ async function sendTo(id, title, body, nav) {
   const tokens = await tokensFor(id);
   await sendToTokens(tokens, title, body, [id], nav);
 }
+/* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 로그인·관리자 문의·AI 도우미는 되고, 명단·요청·채팅 보내기만 멈춤 (2026-10-31) */
+function restingSelf(e) {
+  return !!(e && e.deactivated && e.deactivatedVia === 'deactivate-request');
+}
 function entryById(entries, id) {
   return (entries || []).find((x) => x.id === id) || null;
 }
@@ -1324,7 +1329,7 @@ function buildPublicView(state) {
   /* 공개 로그인 목록에서 휴면 계정은 빼고, 일반 계정의 'PIN 있음' 표시도 뺌 (2026-10-27 — 10-26 대입 공격이 이 표시로 대상 155명을 골랐음).
      대리(주선자 관리) 계정만 유효한 임시 PIN 이 있을 때 넣음(앱 로그인 창이 그 기준으로 보여 줌). 닉네임 중복은 서버(nickTaken)가 확인 */
   const pinLive = (e) => !!(e.pinAuth || e.pinHash || e.pinSet) && !(e.pinExpiresAt && Date.now() > Date.parse(e.pinExpiresAt));
-  const loginDir = entries.filter((e) => !e.deactivated && (!e.managedBy || pinLive(e))).map((e) => {
+  const loginDir = entries.filter((e) => (!e.deactivated || restingSelf(e)) && (!e.managedBy || pinLive(e))).map((e) => {
     const d = dirOf(e, false);
     if (!e.managedBy) delete d.pinOn;
     return d;
@@ -1533,7 +1538,7 @@ exports.applicantAction = functions
         const s = (await tx.get(stateRef)).data() || {};
         const ent = (s.entries || []).concat(s.pendingEntries || []).find((e) => (e.nickname || '').trim() === nick);
         if (!ent) throw new HttpsError('not-found', '그 닉네임을 찾지 못했어요. 로그인 목록에 보이는 닉네임 그대로 넣어주세요.');
-        if (ent.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
+        if (ent.deactivated && !restingSelf(ent)) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요. 관리자에게 문의해주세요.');
         let list = (s.pinResetReqs || []).filter((q) => !(q.entryId === ent.id && q.status === 'pending'));
         list.push({ id: nodeCrypto.randomUUID(), entryId: ent.id, nickname: ent.nickname || nick, phoneEnc: data.phoneEnc, at: new Date().toISOString(), status: 'pending' });
         if (list.length > 50) list = list.slice(list.length - 50);
@@ -2012,7 +2017,7 @@ async function memberReqAction(op, data, context) {
     const entries = s.entries || [];
     const me = entries.find((e) => e.id === asId);
     if (!me || !actsAs(context, me)) throw new HttpsError('permission-denied', '이 프로필로 할 수 없어요.');
-    if (me.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 프로필이에요.');
+    if (me.deactivated) throw new HttpsError('failed-precondition', restingSelf(me) ? "지금 '잠시 쉬기' 중이에요. ⚙️ 내 계정의 '다시 활동하기'를 누르면 요청할 수 있어요." : '보관(휴면) 중인 프로필이에요.');
     const authE = entries.find((e) => e.id === uid);
     const viaMm = !!(me.managedBy && me.managedBy === uid && !me.ownerSelf && authE && authE.isMatchmaker);   /* 주선자가 친구 대신 */
     const nick = (x) => (entries.find((e) => e.id === x) || {}).nickname || '상대방';
@@ -2477,7 +2482,7 @@ exports.chatAction = functions
       const otherE = entries.find((e) => e.id === otherId);
       if (!otherE) throw new HttpsError('failed-precondition', '탈퇴한 회원에게는 보낼 수 없어요.');
       if (otherE.deactivated) throw new HttpsError('failed-precondition', '상대가 지금 휴면(보관) 중이라 메시지를 보낼 수 없어요.');
-      if (asE.deactivated) throw new HttpsError('failed-precondition', '보관(휴면) 중인 계정이에요.');
+      if (asE.deactivated) throw new HttpsError('failed-precondition', restingSelf(asE) ? "지금 '잠시 쉬기' 중이에요. ⚙️ 내 계정의 '다시 활동하기'를 누르면 대화할 수 있어요." : '보관(휴면) 중인 계정이에요.');
       if (!chatApproved(state, asId, otherId)) throw new HttpsError('failed-precondition', '대화 신청이 수락된 사이에서만 대화할 수 있어요.');
       if (await blockedBetween((r) => r.get(), asId, otherId)) throw new HttpsError('failed-precondition', '지금은 이 회원에게 메시지를 보낼 수 없어요.');
       const m = { id: nodeCrypto.randomUUID(), fromId: asId, toId: otherId, text, at: new Date().toISOString() };
@@ -2964,7 +2969,7 @@ const MEMBER_FAQ = [
   "[M33] 프로필 수정: ⚙️ 내 계정 → ✏️ 프로필 수정(또는 내 카드 '수정'). 사진은 최대 3장. 저장하면 바로 반영되고 관리자가 변경 내용을 확인해요(다시 승인을 기다릴 필요 없음). 실명·번호·PIN 칸은 비워 두면 그대로 유지돼요.",
   "[M34] 🙈 지인 필터(명단 위): 연락처 파일(vcf)을 올리거나 번호를 직접 넣으면 그 번호의 회원과 서로 명단에서 안 보여요. 번호는 서버에서 바로 암호화 지문으로만 바뀌어 원본은 저장되지 않고 관리자도 누구 번호인지 몰라요. '🔄 필터 리셋'으로 지워요.",
   "[M35] 🚫 차단: 카드 아래 '🚫 차단' 또는 채팅 ⋯ → 🚫 차단. 서로 명단에서 안 보이고 신청·채팅이 막히며 지금 연결도 끊겨요. 상대에게 알리지 않아요. 풀기는 ⚙️ 내 계정 → 🚫 차단한 회원 → 차단 풀기(끊긴 연결은 다시 신청해야 해요).",
-  "[M36] 💤 잠시 쉬기: 이유를 쓰고 요청하면 관리자 확인 뒤 휴면이 돼요(그 전까진 명단에 있어요). 휴면이면 명단에서 숨겨지고 로그인·채팅·요청이 멈추며, 받은 요청은 지워지지 않고 멈춰요. 다시 활동하려면 로그인 전 💬 Q&A 로 관리자에게 말씀해 주세요.",
+  "[M36] 💤 잠시 쉬기: 이유를 쓰고 요청하면 관리자 확인 뒤 휴면이 돼요(그 전까진 명단에 있어요). 쉬는 동안 명단에서 숨겨지고 요청·채팅 보내기가 멈추며, 받은 요청은 지워지지 않고 멈춰요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있어요. 다시 활동하려면 ⚙️ 내 계정의 '♻️ 다시 활동하기'를 누르면 바로 명단에 돌아와요.",
   "[M37] 🗑 탈퇴하기: 이유를 쓰고 '탈퇴 요청'을 누르면 바로 명단에서 숨겨지고 관리자 확인 뒤 완전히 지워져요. 확인 전엔 ⚙️ 내 계정 '↩️ 탈퇴 요청 취소'로 취소할 수 있어요.",
   "[M38] 💕 좋은 인연 만났어요(⚙️ 내 계정): 커플 성사를 관리자에게 알려요. 후기(선택, 비공개/익명/공개)와 내 프로필 처리(명단에서 내리기/탈퇴/그대로)를 고르고, 관리자 확인 뒤 적용·집계돼요.",
   "[M39] 🔔 알림(로그인 후): 새 소식(받은 요청, 보낸 요청 결과, 관리자 메시지)을 모아 보여요. 푸시는 🔔 알림 → 🔔 알림 설정에서 켜고 '🔔 테스트 알림'으로 확인해요.",
@@ -4132,7 +4137,7 @@ exports.aiConcierge = functions
        지금 명단에 있는 회원(m)·승인 대기 신청자(p)만, 그리고 관리자 아닌 모든 AI 호출에 하루 한도 하나 */
     if (!isAdmin) {
       const stLive = (await db.doc('app/state').get()).data() || {};
-      const live = ((tok.m === 1 ? stLive.entries : stLive.pendingEntries) || []).some((e) => e && e.id === context.auth.uid && !e.deactivated);
+      const live = ((tok.m === 1 ? stLive.entries : stLive.pendingEntries) || []).some((e) => e && e.id === context.auth.uid && (!e.deactivated || restingSelf(e)));
       if (!live || secBlocked(stLive, context.auth.uid)) throw new HttpsError('permission-denied', '지금은 쓸 수 없는 계정이에요.');
       await aiQuotaTake(context.auth.uid, 60);
     }
@@ -4643,7 +4648,7 @@ exports.aiConcierge = functions
         reply = "PIN 은 아래 버튼으로 바로 바꿀 수 있어요. 생일·1234 같은 쉬운 번호는 피해 주세요. PIN 을 잊으셨다면 로그인 화면의 'PIN을 잊으셨나요?'를 눌러 주세요.";
         buttons.push({ act: 'pin', label: '🔑 PIN 바꾸기' });
       } else if (intent === 'deactivate') {
-        reply = '잠시 쉬기를 요청하면 관리자 확인 뒤 명단에서 숨겨지고, 받은 신청은 쉬는 동안 멈춰요. 다시 활동하고 싶을 땐 관리자에게 말씀해 주세요. 아래 버튼에서 확인 후 진행돼요.';
+        reply = '잠시 쉬기를 요청하면 관리자 확인 뒤 명단에서 숨겨지고, 받은 신청은 쉬는 동안 멈춰요. 쉬는 동안에도 로그인은 되고, 다시 활동하고 싶을 땐 ⚙️ 내 계정의 [다시 활동하기]를 누르면 돼요. 아래 버튼에서 확인 후 진행돼요.';
         buttons.push({ act: 'deactivate', label: '💤 잠시 쉬기' });
       } else if (intent === 'delete') {
         reply = "탈퇴를 요청하면 바로 명단에서 숨겨지고, 관리자 확인 후 완전히 지워져요. 잠깐 쉬고 싶으신 거라면 '잠시 쉬기'도 있어요. 아래 버튼에서 한 번 더 확인해요.";
