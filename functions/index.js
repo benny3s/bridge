@@ -931,7 +931,7 @@ exports.onStateChange = functions
         const isApproved = (ns === 'approved' || ns === 'user_approved');
         if (isApproved && !wasApproved) jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 승인 🎉', nameOf(entries, r.toId) + '님이 요청을 승인했어요', nav));
         else if (ns === 'held' && ps !== 'held') jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 보류', nameOf(entries, r.toId) + '님이 요청을 보류했어요', nav));
-        else if (ns === 'rejected' && ps !== 'rejected') jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 거절', nameOf(entries, r.toId) + '님이 요청을 거절했어요', nav));
+        else if (ns === 'rejected' && ps !== 'rejected' && !r.expired) jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 거절', nameOf(entries, r.toId) + '님이 요청을 거절했어요', nav));
         else if (ns === 'pending' && (ps === 'held' || ps === 'rejected')) jobs.push(notifyRecipient(entries, r.toId, type + ' 재요청', nameOf(entries, r.fromId) + '님이 정보를 담아 다시 요청했어요', nav));
       }
     });
@@ -980,7 +980,9 @@ exports.onStateChange = functions
    remind1Sent / remind2Sent 플래그로 중복 방지. 이후는 관리자가 직접 챙김. */
 const REMIND_1_MS = 24 * 60 * 60 * 1000; /* 1일 */
 const REMIND_2_MS = 72 * 60 * 60 * 1000; /* 3일 */
-const REMIND_3_MS = 7 * 24 * 60 * 60 * 1000; /* 7일 — 앱 관리자 메시지 1회(메시지함에 남음) */
+const REMIND_3_MS = 7 * 24 * 60 * 60 * 1000; /* 7일 — 답이 없으면 자동 마감 (2026-11-01, 예전엔 관리자 메시지 1회) */
+/* 받는 사람 한 명이 답 안 한 신청을 이만큼 갖고 있으면 새 신청을 잠시 막음 (2026-11-01 Benny: 여자 회원 쏠림·지침 줄이기) */
+const REQ_INBOX_CAP = 5;
 
 exports.remindPending = functions
   .region('asia-northeast3')
@@ -1010,11 +1012,12 @@ exports.remindPending = functions
         const age = now - t;
         const type = (r.type || 'contact') === 'photo' ? '사진' : '대화';
         const fromNick = nameOf(entries, r.fromId);
-        /* 7일+ 무응답: 앱 관리자 메시지 1회(메시지함에 남아 반드시 봄 · onStateChange가 푸시도 보냄). remind3Sent로 중복 방지 */
-        if (age >= REMIND_3_MS && !r.remind3Sent) {
-          newMsgs.push({ id: nodeCrypto.randomUUID(), entryId: r.toId, from: 'admin', text: '[베니브릿지] 확인 대기 중인 요청이 있어요. 앱에서 승인·보류·거절을 정해주세요 🙏', at: new Date().toISOString() });
+        /* 7일+ 무응답: 자동 마감 (2026-11-01 Benny: '답 없는 신청은 7일 뒤 자동으로 끝내기') — 거절처럼 닫히되 expired 로 구분,
+           보낸 사람 화면엔 '⌛ 답 없이 마감'. 예전의 관리자 독촉 메시지(받는 사람을 더 지치게 함)는 뺌 */
+        if (age >= REMIND_3_MS) {
           changed = true;
-          return Object.assign({}, r, { remind1Sent: true, remind2Sent: true, remind3Sent: true });
+          return Object.assign({}, r, { rejected: true, held: false, expired: true, rejectedBy: 'auto', decidedAt: new Date().toISOString(),
+            rejectMessage: '7일 동안 답이 없어 자동으로 마감됐어요. 다른 분께도 신청해 보세요 🙂', remind1Sent: true, remind2Sent: true, remind3Sent: true });
         }
         if (age >= REMIND_2_MS && !r.remind2Sent) {
           sends.push({ toId: r.toId, reqId: r.id, title: '⏰ ' + type + ' 요청 알림', body: fromNick + '님의 ' + type + ' 요청이 3일째 기다리고 있어요. 승인/거절을 정해주세요' });
@@ -1858,6 +1861,8 @@ async function memberReqAction(op, data, context) {
       need(!dup, dup && reqStatusOf(dup) === 'rejected' ? target.nickname + '님이 이 요청을 거절했어요.' : '이미 ' + target.nickname + '님에게 요청을 보냈어요.');
       const today = kstDayOf(now);
       const sent = reqs.filter((r) => r && r.fromId === me.id && (r.type || 'contact') === type && r.submittedAt && kstDayOf(r.submittedAt) === today).length;
+      const waiting = reqs.filter((r) => r && r.toId === toId && reqStatusOf(r) === 'pending').length;
+      if (waiting >= REQ_INBOX_CAP) throw new HttpsError('resource-exhausted', target.nickname + '님은 지금 답장을 기다리는 신청이 많아요. 며칠 뒤 다시 해 보거나, 아직 신청을 많이 못 받은 분께 먼저 보내 보세요.');
       if (sent >= REQ_DAILY_LIMIT) throw new HttpsError('resource-exhausted', '오늘 보낼 수 있는 ' + (type === 'photo' ? '사진 보기 요청' : '대화 신청') + '을 모두 썼어요. 내일 다시 보내 주세요.');
       const nr = { id: nodeCrypto.randomUUID(), type, fromId: me.id, toId, note, submittedAt: now };
       if (viaMm) nr.viaMm = true;
