@@ -4010,6 +4010,42 @@ exports.aiConcierge = functions
       };
     }
 
+    /* ✉️ 회원에게 보낼 문자 문구 (2026-10-31 Benny: '요청할 때마다 문자앱이 바로 열리고 문구도 채워지는 버튼, 앱 안에서 AI 써도 좋고')
+       관리자가 적은 '하고 싶은 말'을 문자 한 통으로 다듬음. 닉네임·하고 싶은 말만 보냄(번호·실명 X) */
+    if (op === 'draft_sms') {
+      if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 문자 문구를 만들 수 있어요.');
+      const nick = clip(data && data.nick, 30) || '회원';
+      const gist = clip(scrubPhones(data && data.gist), 400);
+      if (!gist) throw new HttpsError('invalid-argument', '하고 싶은 말을 먼저 적어 주세요.');
+      const sysMsg = '너는 지인 기반 소개팅 웹앱 "베니브릿지" 관리자(베니)의 문자 비서야. 관리자가 적은 요점을 회원에게 보낼 휴대폰 문자 한 통으로 써 줘. ' +
+        '규칙: 첫 줄은 "[베니브릿지] ' + nick + '님 안녕하세요, 관리자입니다." / 요점은 빠짐없이, 없는 사실·약속은 지어내지 말 것 / 존댓말, 따뜻하고 짧게(300자 안), 이모지는 1~2개만 / 마지막 줄에 https://benny3s.github.io/bridge/ . ' +
+        'JSON 으로만 답해: {"text":"문자 내용"}';
+      try {
+        if (ollamaKey) {
+          const r = await fetch('https://ollama.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + ollamaKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'deepseek-v3.2',
+              messages: [{ role: 'system', content: sysMsg }, { role: 'user', content: '[받는 사람] ' + nick + '\n[하고 싶은 말]\n' + gist }],
+              temperature: 0.4,
+              max_tokens: 400,
+              response_format: { type: 'json_object' }
+            })
+          });
+          if (r.ok) {
+            const j = await r.json();
+            const raw = (((j.choices || [])[0] || {}).message || {}).content || '';
+            const m = raw.match(/\{[\s\S]*\}/);
+            if (m) {
+              const p = JSON.parse(m[0]);
+              if (p.text) return { ok: true, ai: true, text: clip(scrubPhones(p.text), 500) };
+            }
+          }
+        }
+      } catch (e) {}
+      return { ok: true, ai: false, text: '[베니브릿지] ' + nick + '님 안녕하세요, 관리자입니다.\n' + gist + '\nhttps://benny3s.github.io/bridge/' };
+    }
     if (op === 'strategy_brief') {
       if (!isAdmin) throw new HttpsError('permission-denied', '관리자만 전략 브리핑을 조회할 수 있어요.');
       const stats = (data && data.stats) || {};

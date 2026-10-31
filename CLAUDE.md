@@ -22,6 +22,7 @@
   - `savePhone`/`setAcqFilter`/`clearAcqFilter`/`getHiddenIds` — 보안 번호 저장소(`sendContacts/{id}`, 서버키 AES) + 지인필터. 본인 토큰이면 PIN 없이, 아니면 PIN+실패 잠금(`callerOwns`)
   - `memberLogin`/`adminLogin`/`applicantAction` — 위 인증·대행. 서버 코드 변경 시 가짜 Firestore로 로컬 시험 가능(firebase-admin을 Module._load로 모킹 후 `exports.X.run(data, context)`) — Firebase callable SDK는 window.fetch 가로채기로 막을 수 없으니 브라우저 가로채기 시험 금지(실제 전송됨)
   - `adminSendSms` — Solapi 문자(배포돼 있으나 **현재 수동 문자는 "내 폰 문자앱(sms: 링크)"** 사용, `openSmsNative`. Solapi는 070·자동/대량용으로 보류)
+  - **📨 보낼 문자** (2026-10-31): 베니가 "○○님께 문자 준비해 줘" 하면 `node tools/sms-draft.js <닉네임> <문구 파일> [메모]`(PROJ=benny-bridge-beta 면 베타) → adminOnly/_smsDrafts 에 들어가 관리자 탭 맨 위에 [📱 보내기] 버튼(번호 복호화·문자앱, 열면 목록에서 빠짐). 앱 안에선 ✉️ 회원에게 문자(받는 사람 고르기 + ✨ AI 문구 = aiConcierge `draft_sms`, 관리자만). ☕ 후원자 기능은 같은 날 뺌(☕ 개발자 응원하기 QR 은 남김, state.supporters·adminOnly/_supporters 자료는 그대로)
 
 ## 배포 워크플로 (모든 코드 변경 시 반드시)
 1. `index.html` 편집 후 **`var APP_VERSION = 'YYYY-MM-DD-NNN';`** (파일 상단, ~907줄) **버전 올리기**. 새 버전 뜨면 열려있는 다른 탭에 새로고침 안내가 뜸.
