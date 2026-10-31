@@ -130,6 +130,13 @@
   .masthead p { margin: 6px 0 0; color: var(--paper); opacity: 0.72; font-size: 0.92rem; }
   .masthead-sub { margin: 6px 0 0; color: var(--paper); opacity: 0.72; font-size: 0.92rem; line-height: 1.5; }
   .masthead-note { margin: 4px 0 0; color: var(--gold); opacity: 0.92; font-size: 0.82rem; line-height: 1.45; }
+  .adm-head { display: grid; gap: 10px; margin-bottom: 14px; }
+  .adm-tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  .adm-tools .card-btn { flex: none; width: 100%; padding: 10px 12px; font-size: 0.9rem; }
+  .adm-more > summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; padding: 2px 0 8px; }
+  .sms-drafts { display: grid; gap: 8px; border: 1px solid var(--gold); background: var(--gold-soft); border-radius: 12px; padding: 10px 12px; }
+  .sms-draft { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; padding-top: 8px; border-top: 1px dashed var(--gold); }
+  .sms-draft-text { flex: 1 1 220px; min-width: 0; font-size: 0.84rem; white-space: pre-wrap; max-height: 6.5em; overflow-y: auto; }
   .admin-bar { max-width: 880px; margin: 14px auto 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
   .admin-bar-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .notice-bar {
@@ -1126,7 +1133,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-31-505';
+  var APP_VERSION = '2026-10-31-507';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1299,8 +1306,8 @@
   var openMsgFolds = {}; /* 관리자 메시지: 펼쳐둔 회원 대화 (리페인트 후 유지용) */
   var _mmFoldOpen = {};  /* 주선자 탭: 카드별 접힘 상태 (리페인트 후 유지용, 기본 열림) */
   var adminEditMode = false; /* 관리자 섹션 편집(순서·기본 열림) 모드 */
-  var DEFAULT_SEC_ORDER = ['security', 'usage', 'connlog', 'couple', 'pending', 'pinreset', 'reports', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'supporters', 'cap', 'seen', 'log'];
-  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', reports: '🚨 신고된 대화', security: '🛡 보안 경고', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', supporters: '☕ 후원자', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
+  var DEFAULT_SEC_ORDER = ['security', 'usage', 'connlog', 'couple', 'pending', 'pinreset', 'reports', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
+  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', reports: '🚨 신고된 대화', security: '🛡 보안 경고', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
   /* 섹션 열림 상태는 "세션 메모리에만" 저장 → 리페인트(버튼 클릭 등) 동안엔 유지되지만,
      새로고침하면 초기화되어 모두 접힌 상태로 시작 (이전에 열었던 걸 기억하지 않음) */
   var _adminSecOpen = {}, _adminSecOrder = null;
@@ -1669,243 +1676,99 @@
     }
     return state;
   }
-  /* ── ☕ 후원자 (2026-10-08 Benny: '후원해주신 분들 감사 인사 — 거슬리지 않게, 금액은 내가 입력') ──
-     원본(금액 포함)은 adminOnly/_supporters (관리자만 읽기), 회원에게 보이는 건 state.supporters (금액 없이 id·날짜·익명 여부).
-     id 로 저장하므로 닉네임이 바뀌면 화면도 따라감. 삭제된 회원·익명은 '익명의 후원자'.
-     보이는 곳: '개발자 응원하기' 팝업 안 명단(사람당 1번) + 화면 아래를 지나가는 감사 인사(기기당 하루 최대 1번):
-       · 후원 날짜가 최근 3일 이내면 그 사람을 띄움 (여러 번 후원했으면 '또 응원해 주셔서')
-       · 아니면 하루 1/3 확률로 전체 후원자 중 한 명을 누적 금액 가중치로 뽑아 띄움, 직전과 같은 사람은 피함
-         뽑힐 확률(누적 금액) = 1만 원 이하 ×1 · 5만 원 이하 ×2 · 그 이상 ×3 (추첨권 1·2·3장, 2026-10-08 Benny: 심플하게)
-       · 옛날 후원은 실제 날짜로 등록하면 한꺼번에 몰리지 않고 순환으로만 나옴 (2026-10-08 Benny) */
-  var SUP_DOC = '_supporters';
-  var SUP_FLOAT_DAYS = 3;
-  var SUP_ROTATE_P = 1 / 3;
-  function adminSupporters() { var d = _adminPriv[SUP_DOC]; return (d && Array.isArray(d.list)) ? d.list : []; }
-  function supKey(s) { return s.key || s.pk || s.entryId || s.id; }
-  function supTier(total) { var t = Number(total) || 0; return t <= 10000 ? 1 : (t <= 50000 ? 2 : 3); }
-  function supIsRecent(s) { return !!(s && s.at && Date.now() - new Date(s.at).getTime() < SUP_FLOAT_DAYS * 86400000); }
-  function supToday() { return new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10); }  /* 오늘(KST). ※ kstDay(iso) 는 다른 곳에 이미 있음 */
-  function supDateIso(v) { return (!v || v === supToday()) ? new Date().toISOString() : new Date(v + 'T12:00:00+09:00').toISOString(); }
-  function supporterName(state, s) {
-    if (!s || s.anon || !s.entryId) return '익명의 후원자';
-    var e = ((state && state.entries) || []).concat((state && state.pendingEntries) || []).find(function (x) { return x.id === s.entryId; });
-    return (e && e.nickname) || '익명의 후원자';
+  /* ── 📨 보낼 문자 · ✉️ 회원에게 문자 (2026-10-31 Benny: '요청할 때마다 문자앱이 바로 열리고 문구도 채워지는 버튼', 후원자 기능은 뺌) ──
+     준비된 문자 = adminOnly/_smsDrafts {items:[{id, entryId, nick, text, note, at, by}]} (관리자만 읽기·쓰기).
+     PC 의 Claude 가 운영 DB 에 넣거나, 관리자가 ✉️ 회원에게 문자 → [📌 나중에]로 넣음.
+     [📱 보내기] → openSmsNative(번호 복호화 → 문자앱) → 문자앱을 열면 목록에서 빠짐(활동 기록·📞 연락 필요 표엔 남음) */
+  var SMS_DRAFT_DOC = '_smsDrafts';
+  function smsDrafts() { var d = _adminPriv[SMS_DRAFT_DOC]; return (d && Array.isArray(d.items)) ? d.items : []; }
+  function saveSmsDrafts(items) { return adminOnlyRef.doc(SMS_DRAFT_DOC).set({ items: items, at: new Date().toISOString() }); }
+  function removeSmsDraft(id) { return saveSmsDrafts(smsDrafts().filter(function (x) { return x.id !== id; })); }
+  function smsDraftsHtml(state) {
+    var list = smsDrafts(); if (!list.length) return '';
+    var all = (state.entries || []).concat(state.pendingEntries || []);
+    return '<div class="sms-drafts"><b>📨 보낼 문자 ' + list.length + '</b>' + list.map(function (d) {
+      var e = all.find(function (x) { return x.id === d.entryId; });
+      var nick = (e && e.nickname) || d.nick || '(없는 회원)';
+      return '<div class="sms-draft">' +
+        '<div class="sms-draft-text"><b>' + escapeHtml(nick) + '님</b>' + (d.note ? ' <span style="color:var(--muted);">· ' + escapeHtml(d.note) + '</span>' : '') + '<br>' + escapeHtml(d.text || '') + '</div>' +
+        '<span style="display:flex;gap:6px;flex:none;">' +
+          '<button type="button" class="card-btn primary" data-action="sms-draft-send" data-id="' + escapeHtml(d.id) + '"' + (e ? '' : ' disabled') + ' style="flex:none;">📱 보내기</button>' +
+          '<button type="button" class="card-btn" data-action="sms-draft-del" data-id="' + escapeHtml(d.id) + '" style="flex:none;" title="지우기">🗑</button>' +
+        '</span></div>';
+    }).join('') + '</div>';
   }
-  /* 회원용 공개 목록: 사람당 1줄 (예전 형식이 섞여 있어도 사람 단위로 합침), 최근 후원 순 */
-  function publicSupporters(state) {
-    var by = {};
-    ((state && state.supporters) || []).forEach(function (s) {
-      var k = supKey(s), o = by[k];
-      if (!o) { by[k] = { pk: k, entryId: s.entryId || null, at: s.at || '', n: s.n || 1, anon: !!s.anon, w: s.w || 1 }; return; }
-      o.n += s.n || 1; if ((s.at || '') > o.at) { o.at = s.at; o.anon = !!s.anon; } o.w = Math.max(o.w, s.w || 1);
-    });
-    return Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) { return (b.at || '').localeCompare(a.at || ''); });
+  function sendSmsDraft(id) {
+    var d = smsDrafts().find(function (x) { return x.id === id; }); if (!d) return;
+    openSmsNative(d.entryId, d.text, null, function () { removeSmsDraft(id).catch(function () {}); });
   }
-  /* 관리자 원본(기록별·금액) → 회원용(사람별: 최근 날짜·횟수·익명·가중치만, 금액 없음) */
-  function saveSupporters(list) {
-    var pub = supPublicOf(list);
-    /* 회원용(state)과 관리자 원본(adminOnly)을 한 배치로 — 예전엔 차례로 저장해서, 두 번째가 안 되면(앱을 바로 닫는 등) 둘이 어긋났음 (2026-10-08) */
-    var b = db.batch();
-    b.update(stateRef, { supporters: pub });
-    b.set(adminOnlyRef.doc(SUP_DOC), { list: list, at: new Date().toISOString() });
-    return b.commit().then(function () { return refreshNow(); });
-  }
-  function supPublicOf(list) {
-    var by = {};
-    list.forEach(function (s) {
-      var k = supKey(s), o = by[k] || (by[k] = { pk: k, entryId: s.entryId || null, at: '', n: 0, anon: false, total: 0 });
-      o.n++; o.total += Number(s.amount) || 0;
-      if ((s.at || '') > o.at) o.at = s.at || '';
-      if (s.anon) o.anon = true;
-    });
-    return Object.keys(by).map(function (k) { var o = by[k]; return { pk: o.pk, entryId: o.entryId, at: o.at, n: o.n, anon: o.anon, w: supTier(o.total) }; });
-  }
-  /* 회원용 목록이 관리자 원본과 같은지 (어긋나면 관리자 화면에 '다시 맞추기') */
-  function supInSync(state) {
-    if (!_adminPriv[SUP_DOC]) return true;  /* 원본을 아직 못 받았으면 판단 안 함 */
-    var norm = function (arr) { return (arr || []).map(function (x) { return [x.pk || x.entryId || x.id, x.n || 1, !!x.anon, x.w || 1, x.at || ''].join('|'); }).sort().join('/'); };
-    return norm(supPublicOf(adminSupporters())) === norm(state.supporters);
-  }
-  function supErr(e) { modalNotice('저장 실패', ((e && e.message) || String(e)) + ' — 잠시 후 다시 해주세요.'); }
-  /* 후원자로 고를 수 있는 사람: 회원·주선자·휴면·승인 대기·삭제된 회원(삭제 이력) 전부 */
-  function supCandidates(state) {
-    var out = [];
-    (state.entries || []).forEach(function (e) {
-      out.push({ key: e.id, entryId: e.id, uid: formatUid(e), nick: e.nickname || '', tag: e.isMatchmaker ? '주선자' : (e.deactivated ? '휴면' : (e.testAccount ? '테스트' : '회원')) });
-    });
-    (state.pendingEntries || []).forEach(function (e) { out.push({ key: e.id, entryId: e.id, uid: formatUid(e), nick: e.nickname || '', tag: '승인 대기' }); });
-    (state.deletedLog || []).forEach(function (t) { out.push({ key: 'del:' + t.id, entryId: null, uid: t.uid || '', nick: t.nickname || '', tag: '삭제' }); });
-    return out;
-  }
-  function supCurrentLabel(state, s) {
-    var e = s.entryId ? ((state.entries || []).concat(state.pendingEntries || [])).find(function (x) { return x.id === s.entryId; }) : null;
-    if (e) return { uid: formatUid(e), nick: e.nickname || '', tag: e.isMatchmaker ? '주선자' : (e.deactivated ? '휴면' : (e.testAccount ? '테스트' : ((currentState.pendingEntries || []).indexOf(e) >= 0 ? '승인 대기' : '회원'))) };
-    return { uid: s.uid || '', nick: s.nick || '', tag: '삭제' };
-  }
-  function supportersSectionHtml(state, adminFold) {
-    var list = adminSupporters().slice().sort(function (a, b) { return (b.at || '').localeCompare(a.at || ''); });
-    var total = list.reduce(function (n, s) { return n + (Number(s.amount) || 0); }, 0);
-    var per = {};
-    list.forEach(function (s) { var k = supKey(s), o = per[k] || (per[k] = { n: 0, sum: 0 }); o.n++; o.sum += Number(s.amount) || 0; });
-    var wSum = Object.keys(per).reduce(function (n, k) { return n + supTier(per[k].sum); }, 0);
-    var rows = list.map(function (s) {
-      var c = supCurrentLabel(state, s), pp = per[supKey(s)], w = supTier(pp.sum);
-      return '<tr>' +
-        '<td>' + escapeHtml(c.uid) + ' <b>' + escapeHtml(c.nick || '(이름 없음)') + '</b> <span class="chip" style="font-size:0.7rem;">' + c.tag + '</span>' +
-          '<div class="sub" style="margin:2px 0 0;">' + (pp.n > 1 ? '누적 ' + pp.n + '회 · ' + pp.sum.toLocaleString('ko-KR') + '원 · ' : '') + '확률 ×' + w + ' (지금 뽑히면 ' + Math.round(w / wSum * 100) + '%)' + (supIsRecent(s) ? ' · 🆕 신규' : '') + (s.memo ? ' · ' + escapeHtml(s.memo) : '') + '</div></td>' +
-        '<td style="text-align:right;white-space:nowrap;">' + (Number(s.amount) || 0).toLocaleString('ko-KR') + '원</td>' +
-        '<td style="white-space:nowrap;"><button type="button" class="card-btn" data-action="sup-date" data-id="' + escapeHtml(s.id) + '" title="후원 날짜 바꾸기" style="flex:none;padding:2px 8px;font-size:0.76rem;">📅 ' + escapeHtml(new Date(new Date(s.at || 0).getTime() + 9 * 3600000).toISOString().slice(2, 10).replace(/-/g, '.')) + '</button></td>' +
-        '<td style="white-space:nowrap;">' + (c.tag === '삭제' ? '<span class="sub">익명(삭제)</span>'
-          : '<button type="button" class="card-btn" data-action="sup-anon" data-id="' + escapeHtml(s.id) + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">' + (s.anon ? '🙈 익명' : '👤 이름') + '</button>') + '</td>' +
-        '<td style="white-space:nowrap;"><button type="button" class="card-btn" data-action="sup-edit" data-id="' + escapeHtml(s.id) + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">✏️ 편집</button> <button type="button" class="card-btn danger" data-action="sup-del" data-id="' + escapeHtml(s.id) + '" style="flex:none;padding:2px 8px;font-size:0.76rem;">삭제</button></td>' +
-      '</tr>';
-    }).join('');
-    var people = Object.keys(per).length;
-    return adminFold('☕ 후원자', people,
-      '<p class="sub">금액은 <b>관리자만</b> 봐요. 회원에겐 이름만, <b>사람당 한 번</b> 보여요 (☕ 응원하기 팝업 명단 + 화면 아래 지나가는 감사 인사, 기기당 하루 최대 1번). ' +
-        '후원 날짜가 최근 ' + SUP_FLOAT_DAYS + '일이면 그 사람을 바로, 아니면 <b>하루 1/3 확률</b>로 한 명을 뽑아요. 뽑힐 확률은 <b>누적 금액</b>으로 1만 원 이하 ×1 · 5만 원 이하 ×2 · 그 이상 ×3 (×3이면 ×1보다 3배 자주). ' +
-        '<b>옛날 후원은 실제 날짜로</b> 넣으면 한꺼번에 몰리지 않아요. 같은 사람이 또 후원하면 한 번 더 추가하면 합쳐져요.</p>' +
-      '<div style="margin:0 0 10px;display:flex;gap:6px;flex-wrap:wrap;"><button type="button" class="card-btn primary" data-action="sup-add" style="flex:none;">➕ 후원 추가</button>' + (list.length ? '<button type="button" class="card-btn" data-action="sup-preview" style="flex:none;">👀 회원 화면 미리보기</button>' : '') +
-        '<button type="button" class="card-btn" data-action="sup-float-toggle" style="flex:none;' + (state.supFloatOn === true ? 'background:var(--gold-soft);border-color:var(--gold);color:var(--gold);font-weight:700;' : '') + '">' + (state.supFloatOn === true ? '🎈 떠다니는 인사: 켜짐' : '🎈 떠다니는 인사: 꺼짐') + '</button></div>' +
-      (supInSync(state) ? '' : '<p class="sub" style="margin:0 0 10px;color:var(--accent);">⚠️ 회원에게 보이는 명단이 이 목록과 달라요 (저장이 중간에 끊긴 듯). <button type="button" class="card-btn" data-action="sup-resync" style="flex:none;padding:2px 10px;">🔄 다시 맞추기</button></p>') +
-      '<p class="sub" style="margin:-4px 0 10px;">떠다니는 인사는 켜야 회원에게 보여요 (<b>이름 공개한 분만</b> 지나가요, 익명은 팝업에 \'익명 N분\'으로)  — 꺼져 있어도 ☕ 응원하기 팝업 명단은 보이고, 미리보기는 관리자에게만 떠요.</p>' +
-      (list.length
-        ? '<div class="admin-table-wrap"><table class="seen-table"><thead><tr><th>후원자</th><th>금액</th><th>날짜</th><th>공개</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
-          '<p class="sub" style="margin-top:6px;">합계 <b>' + total.toLocaleString('ko-KR') + '원</b> · ' + people + '명 · ' + list.length + '건</p>'
-        : '<p class="sub">아직 등록된 후원자가 없어요.</p>'), false, 'supporters');
-  }
-  /* 후원 추가·편집 창 (화면 갱신에 입력이 안 지워지게 별도 창). editId 가 있으면 그 기록을 고침(사람·금액·날짜·메모·익명) */
-  function supKstDate(iso) { return new Date(new Date(iso || Date.now()).getTime() + 9 * 3600000).toISOString().slice(0, 10); }
-  function openSupporterAdd(editId) {
-    if (!isAdminUnlocked) return;
+  /* ✉️ 회원에게 문자: 받는 사람 고르기 → 내용(하고 싶은 말만 쓰고 ✨ AI 문구) → 📱 문자앱 열기 또는 📌 나중에(보낼 문자 목록) */
+  function openSmsCompose() {
+    if (!isAdminUnlocked) { modalNotice('안내', '관리자 모드에서만 가능해요.'); return; }
     var picked = null;
-    var editRec = editId ? adminSupporters().find(function (x) { return x.id === editId; }) : null;
-    if (editId && !editRec) return;
     var ov = openModal(
-      '<h3>' + (editRec ? '✏️ 후원 기록 편집' : '☕ 후원 추가') + '</h3>' +
-      '<p class="modal-msg" style="font-size:0.82rem;">회원·주선자·휴면·승인 대기·삭제된 회원 모두에서 찾을 수 있어요.</p>' +
-      '<input type="text" class="modal-input" id="sup-q" placeholder="🔍 닉네임 · 고유번호 · 실명으로 좁히기" autocomplete="off">' +
-      '<div id="sup-res" style="margin:8px 0;max-height:34vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;"></div>' +
-      '<div id="sup-pick" class="modal-msg" style="font-size:0.86rem;margin:4px 0;">선택: <span style="color:var(--muted);">없음</span></div>' +
-      '<input type="text" class="modal-input" id="sup-amt" inputmode="numeric" placeholder="금액 (원, 관리자만 봐요)" value="' + (editRec ? (Number(editRec.amount) || 0).toLocaleString('ko-KR') : '') + '">' +
-      '<label style="display:block;font-size:0.8rem;color:var(--muted);margin:8px 0 2px;">후원 날짜 — 옛날 후원은 실제 날짜로 넣으면 한꺼번에 뜨지 않고 순환으로만 나와요</label>' +
-      '<input type="date" class="modal-input" id="sup-date" value="' + (editRec ? supKstDate(editRec.at) : supToday()) + '" max="' + supToday() + '">' +
-      '<input type="text" class="modal-input" id="sup-memo" placeholder="메모 (선택, 관리자만)" maxlength="60" style="margin-top:6px;" value="' + escapeHtml((editRec && editRec.memo) || '') + '">' +
-      '<label style="display:flex;align-items:center;gap:6px;margin:8px 0;font-size:0.86rem;"><input type="checkbox" id="sup-anon"> 회원에게 \'익명의 후원자\'로 보이기</label>' +
-      '<div class="modal-actions"><button type="button" class="card-btn" id="modal-cancel">닫기</button><button type="button" class="card-btn primary" id="sup-save">' + (editRec ? '저장' : '추가') + '</button></div>'
+      '<h3>✉️ 회원에게 문자</h3>' +
+      '<input type="text" class="modal-input" id="cs-q" placeholder="🔍 닉네임 · 고유번호로 찾기" autocomplete="off">' +
+      '<div id="cs-res" style="margin:8px 0;max-height:26vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;"></div>' +
+      '<div id="cs-pick" class="modal-msg" style="font-size:0.86rem;margin:4px 0;">받는 사람: <span style="color:var(--muted);">위에서 골라 주세요</span></div>' +
+      '<textarea class="modal-input" id="cs-text" rows="6" maxlength="500" placeholder="보낼 내용. 하고 싶은 말만 짧게 쓰고 ✨ AI 문구를 눌러도 돼요 (예: 개선 완료, 확인 부탁, 답장 늦어 죄송)"></textarea>' +
+      '<p class="modal-msg" id="cs-note" style="color:var(--muted);font-size:0.78rem;margin:6px 0 0;">📱 문자앱 열기 → 번호·내용이 채워진 문자앱이 열려요. 휴대폰에서 눌러 주세요.</p>' +
+      '<div class="modal-actions" style="flex-wrap:wrap;">' +
+        '<button type="button" class="card-btn" id="cs-cancel">닫기</button>' +
+        '<button type="button" class="card-btn" id="cs-ai">✨ AI 문구</button>' +
+        '<button type="button" class="card-btn" id="cs-later">📌 나중에</button>' +
+        '<button type="button" class="card-btn primary" id="cs-go">📱 문자앱 열기</button>' +
+      '</div>'
     );
-    var cands = supCandidates(currentState);
-    var q = ov.querySelector('#sup-q'), res = ov.querySelector('#sup-res'), pk = ov.querySelector('#sup-pick');
-    /* 처음부터 전체 목록(회원 → 주선자 → 휴면 → 승인 대기 → 삭제), 검색은 목록 좁히기. 카카오페이엔 실명이 찍히니 실명으로도 찾음(관리자 복호화 캐시) */
-    var TAG_ORDER = { '회원': 0, '주선자': 1, '휴면': 2, '승인 대기': 3, '테스트': 4, '삭제': 5 };
-    cands.forEach(function (c) { c.real = (c.entryId && decryptedNames[c.entryId]) || ''; });
-    cands.sort(function (a, b) { return (TAG_ORDER[a.tag] - TAG_ORDER[b.tag]) || (a.uid || '').localeCompare(b.uid || ''); });
+    var TAG_ORDER = { '회원': 0, '주선자': 1, '휴면': 2, '승인 대기': 3, '테스트': 4 };
+    var cands = [];
+    (currentState.entries || []).forEach(function (e) { cands.push({ id: e.id, uid: formatUid(e), nick: e.nickname || '', tag: e.isMatchmaker ? '주선자' : (e.deactivated ? '휴면' : (e.testAccount ? '테스트' : '회원')) }); });
+    (currentState.pendingEntries || []).forEach(function (e) { cands.push({ id: e.id, uid: formatUid(e), nick: e.nickname || '', tag: '승인 대기' }); });
+    cands.sort(function (x, y) { return (TAG_ORDER[x.tag] - TAG_ORDER[y.tag]) || (x.uid || '').localeCompare(y.uid || ''); });
+    var q = ov.querySelector('#cs-q'), res = ov.querySelector('#cs-res'), pk = ov.querySelector('#cs-pick'), ta = ov.querySelector('#cs-text'), note = ov.querySelector('#cs-note');
     function draw() {
       var t = (q.value || '').trim().toLowerCase();
-      var hits = cands.filter(function (c) { return !t || (c.nick + ' ' + c.uid + ' ' + c.real).toLowerCase().indexOf(t) >= 0; });
+      var hits = cands.filter(function (c) { return !t || (c.nick + ' ' + c.uid).toLowerCase().indexOf(t) >= 0; });
       res.innerHTML = hits.map(function (c) {
         var on = picked === c;
-        return '<button type="button" data-i="' + cands.indexOf(c) + '" style="display:flex;justify-content:space-between;gap:8px;width:100%;text-align:left;padding:6px 10px;border:0;border-bottom:1px solid var(--line);background:' + (on ? 'var(--gold-soft)' : 'transparent') + ';cursor:pointer;font:inherit;font-size:0.84rem;color:var(--ink);">' +
-          '<span>' + escapeHtml(c.uid ? c.uid + ' ' : '') + '<b>' + escapeHtml(c.nick || '(이름 없음)') + '</b>' + (c.real ? ' <span style="color:var(--muted);">' + escapeHtml(c.real) + '</span>' : '') + '</span>' +
+        return '<button type="button" data-i="' + cands.indexOf(c) + '" style="display:flex;justify-content:space-between;gap:8px;width:100%;text-align:left;padding:7px 10px;border:0;border-bottom:1px solid var(--line);background:' + (on ? 'var(--gold-soft)' : 'transparent') + ';cursor:pointer;font:inherit;font-size:0.86rem;color:var(--ink);">' +
+          '<span>' + escapeHtml(c.uid ? c.uid + ' ' : '') + '<b>' + escapeHtml(c.nick || '(이름 없음)') + '</b></span>' +
           '<span style="color:var(--muted);white-space:nowrap;">' + (on ? '✔ ' : '') + c.tag + '</span></button>';
       }).join('') || '<p class="sub" style="padding:8px;">찾는 사람이 없어요.</p>';
     }
     q.addEventListener('input', draw);
     draw();
-    function choose(c, keepAnon) {
-      picked = c;
-      draw();
-      var prev = adminSupporters().filter(function (x) { return supKey(x) === picked.key && (!editRec || x.id !== editRec.id); });
-      if (!keepAnon) ov.querySelector('#sup-anon').checked = prev.some(function (x) { return x.anon; });
-      pk.innerHTML = (prev.length ? '<span style="color:var(--gold);">' + (editRec ? '이 기록 말고도 ' : '이미 ') + prev.length + '번 후원 (' + prev.reduce(function (n, x) { return n + (Number(x.amount) || 0); }, 0).toLocaleString('ko-KR') + '원)' + (editRec ? '' : ' — 한 번 더 추가돼요') + '</span><br>' : '') + '선택: <b>' + escapeHtml((picked.uid ? picked.uid + ' ' : '') + (picked.nick || '(이름 없음)')) + '</b> · ' + picked.tag + (picked.tag === '삭제' ? ' <span style="color:var(--muted);">(회원에겐 익명으로 보여요)</span>' : '');
-    }
     res.addEventListener('click', function (e) {
       var b = e.target.closest('[data-i]'); if (!b) return;
-      choose(cands[parseInt(b.getAttribute('data-i'), 10)]);
+      picked = cands[parseInt(b.getAttribute('data-i'), 10)];
+      pk.innerHTML = '받는 사람: <b>' + escapeHtml(picked.nick) + '</b>님 <span style="color:var(--muted);">(' + picked.tag + ')</span>';
+      draw();
     });
-    if (editRec) {
-      /* 편집: 원래 사람을 미리 골라 둠 (목록에 없으면 — 삭제 이력에서도 지워진 경우 — 기록에 남은 이름으로) */
-      var ek = supKey(editRec);
-      var found = cands.find(function (c) { return c.key === ek; });
-      if (!found) { found = { key: ek, entryId: editRec.entryId || null, uid: editRec.uid || '', nick: editRec.nick || '', tag: '삭제', real: '' }; cands.push(found); }
-      ov.querySelector('#sup-anon').checked = !!editRec.anon;
-      choose(found, true);
-    }
-    var amt = ov.querySelector('#sup-amt');
-    amt.addEventListener('input', function () { var v = amt.value.replace(/[^0-9]/g, ''); amt.value = v ? Number(v).toLocaleString('ko-KR') : ''; });
-    ov.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(ov); });
-    ov.querySelector('#sup-save').addEventListener('click', function () {
-      if (!picked) { modalNotice('안내', '후원자를 먼저 골라주세요.'); return; }
-      var amount = parseInt((amt.value || '').replace(/[^0-9]/g, ''), 10) || 0;
-      if (!amount) { modalNotice('안내', '금액을 입력해주세요.'); return; }
-      var dv = ov.querySelector('#sup-date').value;
-      var rec = { id: editRec ? editRec.id : genId(), key: picked.key, entryId: picked.entryId || null, uid: picked.uid || '', nick: picked.nick || '', amount: amount,
-        memo: (ov.querySelector('#sup-memo').value || '').trim(), anon: !!ov.querySelector('#sup-anon').checked,
-        at: (editRec && dv === supKstDate(editRec.at)) ? editRec.at : supDateIso(dv) };  /* 편집에서 날짜를 안 바꿨으면 원래 시각 유지 */
-      var btn = ov.querySelector('#sup-save'); btn.disabled = true;
-      var next = editRec ? adminSupporters().map(function (x) { return x.id === editRec.id ? rec : x; }) : adminSupporters().concat([rec]);
-      next = next.map(function (x) { return (supKey(x) === rec.key && !!x.anon !== rec.anon) ? Object.assign({}, x, { anon: rec.anon }) : x; });  /* 익명은 사람 단위로 맞춤 */
-      saveSupporters(next).then(function () { closeModal(ov); appendLog('admin', '관리자', (editRec ? '후원 기록 편집 · ' : '후원자 등록 · ') + (rec.nick || '익명')); })
-        .catch(function (e) { btn.disabled = false; modalNotice('저장 실패', (e && e.message) || String(e)); });
+    function needPick() { if (!picked) { modalNotice('안내', '받는 사람을 먼저 골라 주세요.'); return true; } if (!(ta.value || '').trim()) { modalNotice('안내', '보낼 내용을 적어 주세요.'); return true; } return false; }
+    ov.querySelector('#cs-ai').addEventListener('click', function () {
+      if (needPick()) return;
+      var btn = this; btn.disabled = true; note.textContent = '✨ AI 가 문구를 만드는 중이에요…';
+      callFn('aiConcierge', { op: 'draft_sms', nick: picked.nick, gist: ta.value.trim() }).then(function (r) {
+        var d = (r && r.data) ? r.data : r;
+        if (d && d.text) ta.value = d.text;
+        note.textContent = (d && d.ai) ? '✨ AI 문구로 바꿨어요. 고쳐 써도 돼요.' : 'AI 가 지금 답하지 않아 기본 모양으로 채웠어요. 고쳐 써 주세요.';
+      }).catch(function (e) { note.textContent = 'AI 문구 실패: ' + ((e && e.message) || e) + ' — 직접 써서 보내도 돼요.'; })
+        .then(function () { btn.disabled = false; });
     });
+    ov.querySelector('#cs-later').addEventListener('click', function () {
+      if (needPick()) return;
+      var item = { id: genId(), entryId: picked.id, nick: picked.nick, text: ta.value.trim(), at: new Date().toISOString(), by: 'admin' };
+      saveSmsDrafts(smsDrafts().concat([item])).then(function () { closeModal(ov); schedulePaint(); })
+        .catch(function (e) { modalNotice('저장 실패', (e && e.message) || String(e)); });
+    });
+    ov.querySelector('#cs-go').addEventListener('click', function () {
+      if (needPick()) return;
+      var id = picked.id, text = ta.value.trim();
+      closeModal(ov);
+      openSmsNative(id, text);
+    });
+    ov.querySelector('#cs-cancel').addEventListener('click', function () { closeModal(ov); });
     setTimeout(function () { try { q.focus(); } catch (e) {} }, 50);
-  }
-  /* 감사 인사: 기기당 하루 최대 1번 (움직임 줄이기 설정이면 생략) */
-  var _thxChecked = false;
-  function supWeightedPick(list, avoidPk) {
-    var pool = list.filter(function (x) { return x.pk !== avoidPk; }); if (!pool.length) pool = list;
-    var sum = pool.reduce(function (n, x) { return n + (x.w || 1); }, 0), r = Math.random() * sum;
-    for (var i = 0; i < pool.length; i++) { r -= pool[i].w || 1; if (r < 0) return pool[i]; }
-    return pool[pool.length - 1];
-  }
-  /* 오늘 띄울 사람: 최근 후원자(최대 3명) 또는 확률 순환 1명. force=true(미리보기)면 확률 무시 */
-  function supNamed(state, s) { return !s.anon && !!s.entryId && supporterName(state, s) !== '익명의 후원자'; }
-  function supTodayPick(state, force) {
-    /* 이름 공개한 사람만 — '익명의 후원자님' 이 지나가는 건 의미 없음 (2026-10-08 Benny) */
-    var all = publicSupporters(state).filter(function (x) { return supNamed(state, x); }); if (!all.length) return null;
-    var recent = all.filter(supIsRecent);
-    if (recent.length) return recent.slice(0, 3);
-    if (!force && Math.random() >= SUP_ROTATE_P) return null;
-    var last = ''; try { last = localStorage.getItem('bb-thx-last') || ''; } catch (e) {}
-    return [supWeightedPick(all, last)];
-  }
-  function maybeFloatThanks(state) {
-    if (_thxChecked || dataMode !== 'full' || !state) return;
-    if (state.supFloatOn !== true) return;  /* 관리자 스위치 (기본 꺼짐 — 2026-10-08 Benny: 테스트 기간) */
-    _thxChecked = true;
-    try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return; } catch (e) {}
-    if (!publicSupporters(state).length) return;
-    var day = supToday(), key = 'bb-thx-day';
-    try { if (localStorage.getItem(key) === day) return; localStorage.setItem(key, day); } catch (e) {}  /* 확률에서 떨어져도 오늘은 끝 — 다시 열어 재추첨 방지 */
-    var pick = supTodayPick(state, false); if (!pick) return;
-    try { localStorage.setItem('bb-thx-last', pick[0].pk); } catch (e) {}
-    setTimeout(function () { showThanksFloat(thanksText(state, pick)); }, 4000);
-  }
-  function thanksText(state, list) {
-    var names = list.slice(0, 3).map(function (x) { return supporterName(state, x); });
-    var uniq = names.filter(function (n, i) { return names.indexOf(n) === i; });
-    var one = list.length === 1 ? list[0] : null;
-    var verb = (one && one.n > 1) ? (supIsRecent(one) ? '또 응원해 주셔서' : '여러 번 응원해 주셔서') : '응원해 주셔서';
-    return '🙏 ' + uniq.join('·') + '님, ' + verb + ' 감사해요';
-  }
-  function showThanksFloat(text, onTop) {
-    if (!document.getElementById('thx-style')) {
-      var st = document.createElement('style'); st.id = 'thx-style';
-      st.textContent = '@keyframes thxDrift{0%{transform:translateX(-100%);opacity:0}6%{opacity:.95}92%{opacity:.95}100%{transform:translateX(100vw);opacity:0}}' +
-        '.thx-float{position:fixed;left:0;bottom:88px;z-index:40;pointer-events:none;white-space:nowrap;font-size:0.8rem;color:var(--gold);background:var(--gold-soft);border:1px solid var(--gold);border-radius:999px;padding:4px 12px;transform:translateX(-100%);animation:thxDrift 16s linear 1 forwards;}';
-      document.head.appendChild(st);
-    }
-    var el = document.createElement('div'); el.className = 'thx-float'; el.textContent = text;
-    if (onTop) el.style.zIndex = '100000';
-    el.addEventListener('animationend', function () { if (el.parentNode) el.remove(); });
-    document.body.appendChild(el);
-  }
-  /* 관리자 미리보기: 회원이 보게 될 두 가지(응원하기 팝업 명단 + 떠다니는 인사)를 바로 띄움 — 하루 제한·확률 무시, 저장 없음 */
-  function previewSupporters() {
-    if (!publicSupporters(currentState).length) { modalNotice('안내', '등록된 후원자가 없어요.'); return; }
-    var pick = supTodayPick(currentState, true);
-    handleBuyCoffee();
-    if (pick) showThanksFloat(thanksText(currentState, pick), true);  /* 다 익명이면 떠다니는 인사 없음 */
   }
   var _secAlerts = [];
   var _contactFilter = 'all';
@@ -2978,7 +2841,7 @@
   }
 
   /* 내 휴대폰 문자앱으로 바로 보내기 (무료·내 번호) — 번호는 관리자 키로 복호화해 sms: 링크 구성. Solapi(서버·유료) 대신 수동 발송용 */
-  function openSmsNative(entryId, presetText, tplKind) {
+  function openSmsNative(entryId, presetText, tplKind, onOpen) {
     if (!isAdminUnlocked || !adminPrivateKey) { modalNotice('안내', '관리자 모드에서만 가능해요.'); return; }
     var all = (currentState.entries || []).concat(currentState.pendingEntries || []);
     var ent = all.find(function (e) { return e.id === entryId; });
@@ -3057,6 +2920,7 @@
       a.addEventListener('click', function () {
         try { appendLog('sms', '관리자', '내 폰 문자' + (kind ? '(' + smsTplLabel(kind) + ')' : '') + ' → ' + (mode === 'mm' ? (mmNick + '(주선자·' + nick + ')') : nick)); } catch (e) {}
         recordSms(entryId, kind ? ('native-' + kind) : 'native', true); /* '📞 연락 필요' 표의 마지막 문자 표시용 */
+        if (onOpen) { try { onOpen(); } catch (e) {} }   /* 📨 보낼 문자 목록에서 빼기 등 */
         setTimeout(function () { closeModal(ov); }, 400);
       });
       ov.querySelector('#sn-cancel').addEventListener('click', function () { closeModal(ov); });
@@ -9510,19 +9374,29 @@
       reports: reportsSection,
       usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), pending: pendingSection, pinreset: pinResetSectionHtml(state, adminFold), held: heldSection, stale: staleSection, editrev: editRevSection,
       deaclist: deacListSection, dellog: delLogSection,
-      active: activeReqSection, adminmsg: adminMsgSection, supporters: supportersSectionHtml(state, adminFold),
+      active: activeReqSection, adminmsg: adminMsgSection,
       cap: capSection, seen: seenSection, log: logSection
     };
     var order = adminSecOrder();
+    /* 맨 위 정리 (2026-10-31 Benny: '버튼 구성이 너무 별로, 사용하기 편하게') — 자주 쓰는 일만 크게, 설정은 접어 둠.
+       알림이 꺼졌거나 고장이면 알림 버튼을 위로 꺼냄 */
+    var _notifOk = adminNotifActive() && !adminNotifBroken();
+    var _notifBtn = '<button type="button" class="card-btn' + (_notifOk ? ' approve' : ' danger') + '" id="admin-notif-toggle">' + (adminNotifBroken() ? '🔔 알림 재설정 필요' : (adminNotifActive() ? '🔔 관리자 알림 켜짐' : '🔔 관리자 알림 켜기')) + '</button>';
     var headerBtns =
-      '<div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
-        '<button type="button" class="card-btn primary" data-action="broadcast" style="flex:none;">📢 전체 공지</button>' +
-        '<button type="button" class="card-btn" data-action="sms-custom" style="flex:none;">📱 임의 번호 문자</button>' +
-        '<button type="button" class="card-btn" data-action="fold-all" style="flex:none;">🔁 전체 펼치기·접기</button>' +
-        '<button type="button" class="card-btn' + (adminEditMode ? ' approve' : '') + '" id="admin-edit-toggle" style="flex:none;">' + (adminEditMode ? '✅ 편집 완료' : '✏️ 섹션 편집') + '</button>' +
-        '<button type="button" class="card-btn' + (adminNotifActive() ? ' approve' : '') + '" id="admin-notif-toggle" style="flex:none;">' + (adminNotifBroken() ? '🔔 관리자 알림 재설정 필요' : (adminNotifActive() ? '🔔 관리자 알림 켜짐' : '🔔 관리자 알림 켜기')) + '</button>' +
-        '<button type="button" class="card-btn" id="admin-change-pw" style="flex:none;">🔑 비밀번호 변경</button>' +
-      '</div>';
+      '<div class="adm-tools">' +
+        '<button type="button" class="card-btn primary" data-action="sms-compose">✉️ 회원에게 문자</button>' +
+        '<button type="button" class="card-btn" data-action="broadcast">📢 전체 공지</button>' +
+        '<button type="button" class="card-btn" data-action="sms-custom">📱 번호로 문자</button>' +
+        (_notifOk ? '' : _notifBtn) +
+      '</div>' +
+      '<details class="adm-more" data-fk="adm-more"' + (adminEditMode ? ' open' : '') + '><summary>⚙️ 설정 · 화면 정리</summary>' +
+        '<div class="adm-tools">' +
+          '<button type="button" class="card-btn" data-action="fold-all">🔁 전체 펼치기·접기</button>' +
+          '<button type="button" class="card-btn' + (adminEditMode ? ' approve' : '') + '" id="admin-edit-toggle">' + (adminEditMode ? '✅ 편집 완료' : '✏️ 섹션 순서') + '</button>' +
+          (_notifOk ? _notifBtn : '') +
+          '<button type="button" class="card-btn" id="admin-change-pw">🔑 비밀번호 변경</button>' +
+        '</div>' +
+      '</details>';
     if (adminEditMode) {
       var editList = order.map(function (k, i) {
         return '<div style="display:flex;align-items:center;gap:8px;padding:8px 8px;border:1px solid var(--line);border-radius:10px;margin-bottom:6px;background:var(--paper);">' +
@@ -9535,8 +9409,8 @@
       }).join('');
       return (
         '<div class="admin-panel">' +
-          headerBtns +
-          '<h2 style="margin:0 0 4px;">✏️ 섹션 편집</h2>' +
+          '<div class="adm-head">' + headerBtns + '</div>' +
+          '<h2 style="margin:0 0 4px;">✏️ 섹션 순서</h2>' +
           '<p class="sub">▲▼로 순서를 바꿔요. 모든 섹션은 열 때마다 접힌 상태로 시작해요. (순서는 이 기기에 저장)</p>' +
           editList +
           '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">' +
@@ -9551,9 +9425,11 @@
     var jump = function (k, label, n, hot) { return n ? '<button type="button" class="card-btn' + (hot ? ' danger' : ' primary') + '" data-action="sec-jump" data-id="' + k + '" style="flex:none;padding:5px 12px;">' + label + ' ' + n + '</button>' : ''; };
     var quickBar = jump('security', '🛡 보안 경고', _secOpenN, true) + jump('pending', '⏳ 승인 대기', pendingCountForBar, false) + jump('stale', '📞 연락 필요', contactRows.length, false);
     return (
-      '<div class="admin-panel">' +
+      '<div class="admin-panel"><div class="adm-head">' +
+        smsDraftsHtml(state) +
+        (quickBar ? '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + quickBar + '</div>' : '') +
         headerBtns +
-        (quickBar ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px;">' + quickBar + '</div>' : '') +
+      '</div>' +
         adminAiIntelBoardHtml(state) +
         order.map(function (k) { return secHtml[k] || ''; }).join('') +
       '</div>'
@@ -10032,7 +9908,6 @@
     try { applyLogFilter(); } catch (e) {} /* 활동기록 필터 재적용 */
     try { adjustSwitcherClip(); } catch (e) {} /* 전환창 친구 2줄 초과 시 접기 */
     try { updateCharCounts(); } catch (e) {} /* 자기소개 등 글자수 카운터 */
-    try { maybeFloatThanks(state); } catch (e) {} /* ☕ 최근 후원자 감사 인사 (하루 한 번) */
     try { applyFoldState(); } catch (e) {}
     maybeRestoreDraft();
   }
@@ -13516,24 +13391,12 @@
         actionBtn.textContent = chatListOpen ? '▴ 접기' : '▾ 대화 ' + nf + '개 더 보기';
       }
       else if (action === 'report-view') { if (isAdminUnlocked) openReportedChat(id); }
-      else if (action === 'sup-add') { openSupporterAdd(); return; }
-      else if (action === 'sup-preview') { previewSupporters(); return; }
-      else if (action === 'sup-resync') { if (isAdminUnlocked) saveSupporters(adminSupporters()).catch(supErr); return; }
-      else if (action === 'sup-date' || action === 'sup-edit') { if (isAdminUnlocked) openSupporterAdd(id); return; }
-      else if (action === 'sup-float-toggle') {
+      else if (action === 'sms-compose') { openSmsCompose(); return; }
+      else if (action === 'sms-draft-send') { if (isAdminUnlocked) sendSmsDraft(id); return; }
+      else if (action === 'sms-draft-del') {
         if (!isAdminUnlocked) return;
-        var _on = currentState.supFloatOn !== true;
-        stateRef.update({ supFloatOn: _on }).then(function () { return refreshNow(); }).then(function () { appendLog('admin', '관리자', '후원자 떠다니는 인사 ' + (_on ? '켜기' : '끄기')); })
-          .catch(function (e) { modalNotice('저장 실패', (e && e.message) || String(e)); });
-        return;
-      }
-      else if (action === 'sup-anon' || action === 'sup-del') {
-        if (!isAdminUnlocked) return;
-        var _sl = adminSupporters(), _sr = _sl.find(function (s) { return s.id === id; });
-        if (!_sr) return;
-        if (action === 'sup-anon') { var _k = supKey(_sr), _to = !_sr.anon; saveSupporters(_sl.map(function (s) { return supKey(s) === _k ? Object.assign({}, s, { anon: _to }) : s; })).catch(supErr); return; }  /* 익명은 사람 단위 */
-        modalConfirm('후원 기록 삭제', (_sr.nick || '후원자') + ' · ' + (Number(_sr.amount) || 0).toLocaleString('ko-KR') + '원 기록을 지울까요?').then(function (ok) {
-          if (ok) saveSupporters(_sl.filter(function (s) { return s.id !== id; })).then(function () { appendLog('admin', '관리자', '후원 기록 삭제 · ' + (_sr.nick || '익명')); }).catch(supErr);
+        modalConfirm('준비된 문자 지우기', '이 문자를 목록에서 지울까요? (보내지 않고 지워요)').then(function (ok) {
+          if (ok) removeSmsDraft(id).then(function () { schedulePaint(); }).catch(function (e) { modalNotice('저장 실패', (e && e.message) || String(e)); });
         });
         return;
       }
@@ -14338,18 +14201,6 @@
       '<h3>&#9749; 개발자 응원하기</h3>' +
       '<p class="modal-msg" style="text-align:center;">서버 운영과 기능 개선에 큰 힘이 돼요. 감사합니다! 🙏</p>' +
       '<div style="text-align:center;margin:6px 0 10px;"><img src="../coffee-qr.png" alt="카카오페이 후원 QR" style="width:230px;max-width:80%;border-radius:12px;"></div>' +
-      (function () {
-        var spAll = publicSupporters(currentState); if (!spAll.length) return '';
-        var sp = spAll.filter(function (x) { return supNamed(currentState, x); }), anonN = spAll.length - sp.length;
-        var shown = sp.slice(0, 30), more = sp.length - shown.length;
-        return '<div style="margin:4px 0 12px;text-align:center;">' +
-          '<div style="font-size:0.8rem;color:var(--muted);margin-bottom:6px;">🙏 함께 응원해 주신 분들</div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:center;">' +
-            shown.map(function (s) { return '<span style="font-size:0.78rem;padding:2px 9px;border-radius:999px;background:var(--gold-soft);color:var(--gold);border:1px solid var(--gold);">' + escapeHtml(supporterName(currentState, s)) + '</span>'; }).join('') +
-            (more > 0 ? '<span style="font-size:0.78rem;color:var(--muted);">외 ' + more + '분</span>' : '') +
-            (anonN > 0 ? '<span style="font-size:0.78rem;padding:2px 9px;border-radius:999px;background:var(--gold-soft);color:var(--gold);border:1px dashed var(--gold);">익명 ' + anonN + '분</span>' : '') +
-          '</div></div>';
-      })() +
       '<p class="modal-msg" style="text-align:center;font-size:0.84rem;">' + (isMobile ? '아래 <b>카카오페이 열기</b>를 누르거나, 휴대폰으로 <b>QR을 스캔</b>해 후원할 수 있어요.' : '휴대폰 카메라로 <b>QR을 스캔</b>하면 카카오페이로 후원할 수 있어요.') + '</p>' +
       '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
         (isMobile ? '<button type="button" class="card-btn" id="coffee-open" style="' + goldBtn + '">☕ 카카오페이 열기</button>' : '') +
