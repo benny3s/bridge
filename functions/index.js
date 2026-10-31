@@ -1184,12 +1184,18 @@ exports.remindPending = functions
       let changed = false;
       const updated = reqs.map((r) => {
         if (reqStatus(r) !== 'pending') return r;
-        /* 받는 사람이 보관(휴면) 중이면 리마인더·자동 메시지 모두 건너뜀(요청은 일시정지 상태로 보존) */
         const toE = entryById(entries, r.toId);
-        if (toE && toE.deactivated) return r;
         const t = r.submittedAt ? new Date(r.submittedAt).getTime() : 0;
         if (!t) return r;
         const age = now - t;
+        /* 받는 사람이 쉬는 중이어도 7일 지나면 마감 (2026-11-01: 예전엔 끝없이 '대기중'으로 남아 보낸 사람이 계속 기다림) */
+        if (age >= REMIND_3_MS && toE && toE.deactivated) {
+          changed = true;
+          return Object.assign({}, r, { rejected: true, held: false, expired: true, expiredWhy: 'resting', rejectedBy: 'auto', decidedAt: new Date().toISOString(),
+            rejectMessage: '상대가 지금 쉬는 중이라 자동으로 마감됐어요. 다른 분께도 신청해 보세요 🙂', remind1Sent: true, remind2Sent: true, remind3Sent: true });
+        }
+        /* 받는 사람이 쉬는 중이면 독촉 알림은 건너뜀 */
+        if (toE && toE.deactivated) return r;
         const type = (r.type || 'contact') === 'photo' ? '사진' : '대화';
         const fromNick = nameOf(entries, r.fromId);
         /* 7일+ 무응답: 자동 마감 (2026-11-01 Benny: '답 없는 신청은 7일 뒤 자동으로 끝내기') — 거절처럼 닫히되 expired 로 구분,
@@ -1211,12 +1217,31 @@ exports.remindPending = functions
         }
         return r;
       });
-      if (changed) tx.update(ref, { dateRequests: updated });
-      return { entries, sends, newMsgs };
+      /* 💤 쉬면서 고른 기간(returnAt)이 지나면 한 번만 '다시 활동해 볼까요?' (2026-11-01 Benny: 관리자 승인 대신 앱 안의 장치로) */
+      const nudges = [];
+      let entriesNext = null;
+      entries.forEach((e, i) => {
+        if (!e || !e.deactivated || !restingSelf(e) || !e.returnAt || e.returnNudged) return;
+        if (new Date(e.returnAt).getTime() > now) return;
+        const since = e.deactivatedAt || e.returnAt;
+        const fresh = entries.filter((x) => x && x.gender && e.gender && x.gender !== e.gender && !x.deactivated && !x.isMatchmaker && !x.testAccount && (x.submittedAt || '') > since).length;
+        nudges.push({ id: e.id, mm: e.managedBy || null, fresh });
+        entriesNext = entriesNext || entries.slice();
+        entriesNext[i] = Object.assign({}, e, { returnNudged: true });
+      });
+      const upd = {};
+      if (changed) upd.dateRequests = updated;
+      if (entriesNext) upd.entries = entriesNext;
+      if (Object.keys(upd).length) tx.update(ref, upd);
+      return { entries, sends, newMsgs, nudges };
     });
     /* 7일 안내 메시지는 그 회원 메시지 문서로 (B-2) — 요청 표시(remind3Sent)가 저장된 뒤에 */
     if (result && result.newMsgs && result.newMsgs.length) {
       await appendMemberMsgs(result.newMsgs.map((m) => Object.assign({ auto: true }, m)), result.entries).catch((e) => console.error('remind msgs', e));
+    }
+    if (result && result.nudges && result.nudges.length) {
+      await Promise.all(result.nudges.map((n) => sendTo(n.mm || n.id, '💤 쉬는 기간이 끝났어요',
+        (n.fresh ? '쉬는 동안 새 회원 ' + n.fresh + '명이 들어왔어요. ' : '') + '다시 활동해 볼까요? ⚙️ 내 계정 → [♻️ 다시 활동하기]', { route: 'mine' }).catch(() => {})));
     }
     if (result && result.sends.length) {
       await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
@@ -2038,7 +2063,7 @@ async function memberReqAction(op, data, context) {
       const target = entries.find((e) => e.id === toId);
       const note = clip(data.note, 200);
       need(type && target && toId !== me.id, '요청할 상대를 확인해 주세요.');
-      need(!target.deactivated, (target.nickname || '이 회원') + '님은 지금 휴면(보관) 중이라 요청할 수 없어요.');
+      need(!target.deactivated, (target.nickname || '이 회원') + '님은 지금 쉬는 중이라 요청할 수 없어요.');
       need(!me.isMatchmaker, '주선자 계정은 본인이나 친구 프로필로 바꾼 뒤 요청할 수 있어요.');
       need(!(me.managedBy && target.managedBy && me.managedBy === target.managedBy), '같은 주선자 소속끼리는 사진·대화 요청을 보낼 수 없어요.');
       need(note.length >= 10, '간단한 인사·요청 이유를 10자 이상 남겨 주세요.');
@@ -2140,7 +2165,7 @@ async function memberReqAction(op, data, context) {
       } else if (op === 'reqReapply') {               /* 보낸 사람이 보류·거절된 요청을 다시 */
         need(isFrom && (st === 'held' || st === 'rejected'));
         const to = entries.find((e) => e.id === req.toId);
-        need(to && !to.deactivated, nick(req.toId) + '님은 지금 휴면(보관) 중이라 다시 요청할 수 없어요.');
+        need(to && !to.deactivated, nick(req.toId) + '님은 지금 쉬는 중이라 다시 요청할 수 없어요.');
         c.note = clip(data.note, 200);
         ['held', 'holdMessage', 'heldBy', 'rejected', 'rejectMessage', 'rejectedBy', 'approved', 'userApproved', 'approveMessage', 'decidedAt', 'revealedContact', 'toContact'].forEach((k) => { delete c[k]; });
         c.submittedAt = now; c.reappliedAt = now;
@@ -2485,7 +2510,7 @@ exports.chatAction = functions
       if (!text) throw new HttpsError('invalid-argument', '메시지를 입력해주세요.');
       const otherE = entries.find((e) => e.id === otherId);
       if (!otherE) throw new HttpsError('failed-precondition', '탈퇴한 회원에게는 보낼 수 없어요.');
-      if (otherE.deactivated) throw new HttpsError('failed-precondition', '상대가 지금 휴면(보관) 중이라 메시지를 보낼 수 없어요.');
+      if (otherE.deactivated) throw new HttpsError('failed-precondition', '상대가 지금 쉬는 중이라 메시지를 보낼 수 없어요.');
       if (asE.deactivated) throw new HttpsError('failed-precondition', restingSelf(asE) ? "지금 '잠시 쉬기' 중이에요. ⚙️ 내 계정의 '다시 활동하기'를 누르면 대화할 수 있어요." : '휴면(보관) 중이라 메시지를 보낼 수 없어요. 다시 활동하려면 💬 Q&A 로 관리자에게 말씀해 주세요.');
       if (!chatApproved(state, asId, otherId)) throw new HttpsError('failed-precondition', '대화 신청이 수락된 사이에서만 대화할 수 있어요.');
       if (await blockedBetween((r) => r.get(), asId, otherId)) throw new HttpsError('failed-precondition', '지금은 이 회원에게 메시지를 보낼 수 없어요.');
