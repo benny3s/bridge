@@ -1126,7 +1126,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-31-503';
+  var APP_VERSION = '2026-10-31-505';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1340,6 +1340,27 @@
   /* 테스트 계정끼리는 서로 보이게 → 테스트 계정으로 로그인 시 명단에서 다른 테스트 계정도 보여 요청 가능 */
   function meIsTest() { var me = currentUser && findMyEntry(currentState); return !!(me && me.testAccount && !me.deactivated); }
   function showTestInList() { return meIsTest(); }
+  /* 상단 '지금 누구로 로그인했는지' 띠 + 휴면이면 상태·다시 활동하기 (2026-10-31 — 베타 시험 때 어느 계정인지·휴면인지 화면에서 안 보였음) */
+  function whoBarHtml(state) {
+    var box = 'margin:8px auto 0;max-width:720px;padding:8px 12px;border-radius:10px;font-size:0.9rem;line-height:1.45;border:1px solid ';
+    if (isAdminUnlocked && !currentUser) return '<div style="' + box + 'var(--line);background:var(--accent-soft);color:var(--ink);">👑 <b>관리자</b>로 로그인 중</div>';
+    if (!currentUser) return '';
+    var auth = myAuthEntry(state) || {};
+    var act = findMyEntry(state) || auth;
+    var name = auth.nickname || currentUser.nickname || '';
+    var uid = formatUid(auth) || '';
+    var line = (isMatchmakerEntry(auth) ? '🧑‍💼' : '🙋') + ' <b>' + escapeHtml(name) + '</b>님으로 로그인 중' + (uid ? ' <span style="color:var(--muted);">· ' + escapeHtml(uid) + '</span>' : '') +
+      (act.id && auth.id && act.id !== auth.id && !act.ownerSelf ? ' · 지금 <b>' + escapeHtml(act.nickname || '') + '</b> 프로필로 활동 중' : '') +
+      ((state.pendingEntries || []).some(function (e) { return e.id === currentUser.id; }) ? ' · ⏳ 승인 대기 중' : '');
+    if (act.deactivated) {
+      var rest = restingSelf(act);
+      return '<div style="' + box + 'var(--gold);background:var(--gold-soft);color:var(--ink);">' + line +
+        '<div style="margin-top:4px;">' + (rest ? '💤 <b>잠시 쉬는 중</b>' : '🗄 <b>휴면(보관) 중</b>') + ' — 다른 회원에게 내 프로필이 안 보이고, 사진·대화 신청과 채팅 보내기는 멈춰 있어요.' +
+        (rest ? ' <button type="button" class="card-btn approve" data-action="self-reactivate" data-id="' + escapeHtml(act.id) + '" style="flex:none;padding:3px 10px;margin-left:4px;">♻️ 다시 활동하기</button>'
+              : ' 다시 활동하려면 상단 <b>💬 Q&amp;A</b>로 관리자에게 말씀해 주세요.') + '</div></div>';
+    }
+    return '<div style="' + box + 'var(--line);background:var(--card, #fff);color:var(--ink);">' + line + '</div>';
+  }
   /* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 본인이 [다시 활동하기]로 바로 복귀. 휴면은 모두 로그인 되고 명단·요청·채팅 보내기만 멈춤 (2026-10-31). 관리자 보관·탈퇴 보관 복귀는 관리자만 */
   function restingSelf(e) { return !!(e && e.deactivated && e.deactivatedVia === 'deactivate-request'); }
   /* 명단 노출 판정: 보관 계정은 항상 숨김 · 테스트는 테스트 로그인끼리만 · 나머지 일반 */
@@ -6057,7 +6078,9 @@
     }
     /* 같은 주선자 소속(형제)끼리는 사진·대화 요청 불가 — 임시 PIN으로 직접 로그인한 경우도 포함 */
     var sibling = !!(viewer && viewer.managedBy && entry.managedBy && viewer.managedBy === entry.managedBy && viewer.id !== entry.id);
-    var reqBtns = mineOrManaged ? '' : (entry.deactivated
+    var reqBtns = mineOrManaged ? '' : (viewer && viewer.deactivated && !isAdminUnlocked
+      ? '<span class="card-btn" style="background:#f1f3f4;color:#5f6368;cursor:default;border-color:#e0e0e0;">' + (restingSelf(viewer) ? '💤 쉬는 중이라 신청할 수 없어요' : '🗄 휴면 중이라 신청할 수 없어요') + '</span>'
+      : entry.deactivated
       ? '<span class="card-btn" style="background:#f1f3f4;color:#5f6368;cursor:default;border-color:#e0e0e0;">💤 휴면 중인 회원이에요</span>'
       : (sibling
         ? '<span style="color:var(--muted);font-size:0.82rem;align-self:center;">같은 주선자 소속이에요</span>'
@@ -9842,6 +9865,7 @@
                 : '<button type="button" class="admin-link" id="user-login">' + ICON_LOCK + ' 로그인</button>')) +
         '</div>' +
       '</div></div>' +
+      whoBarHtml(state) +
       heldBanner +
       liveBanner +
       ((NOTIF_ENABLED && currentUser && !memberNotifActive())
