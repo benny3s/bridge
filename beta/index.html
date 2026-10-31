@@ -1136,7 +1136,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-31-509';
+  var APP_VERSION = '2026-11-01-511';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1373,7 +1373,7 @@
     return '<div style="' + box + 'var(--line);background:var(--card, #fff);color:var(--ink);">' + line + '</div>';
   }
   /* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 본인이 [다시 활동하기]로 바로 복귀. 휴면은 모두 로그인 되고 명단·요청·채팅 보내기만 멈춤 (2026-10-31). 관리자 보관·탈퇴 보관 복귀는 관리자만 */
-  function restingSelf(e) { return !!(e && e.deactivated && e.deactivatedVia === 'deactivate-request'); }
+  function restingSelf(e) { return !!(e && e.deactivated && e.deactivatedVia !== 'delete-request'); }   /* 2026-11-01: 잠시 쉬기·관리자 보관 하나로 — 탈퇴 보관만 제외 */
   /* 명단 노출 판정: 보관 계정은 항상 숨김 · 테스트는 테스트 로그인끼리만 · 나머지 일반 */
   function listMemberVisible(e) {
     if (e.isMatchmaker) return false;
@@ -4746,7 +4746,7 @@
     if (!text || !meId || !otherId) return Promise.resolve();
     /* 보관(휴면) 계정에게는 채팅 전송 불가 — 로그인도 못 하고 푸시도 가면 안 됨 (서버도 다시 확인) */
     var otherE = ((currentState && currentState.entries) || []).find(function (x) { return x.id === otherId; });
-    if (otherE && otherE.deactivated) return Promise.reject(new Error('상대가 지금 휴면(보관) 중이라 메시지를 보낼 수 없어요.'));
+    if (otherE && otherE.deactivated) return Promise.reject(new Error('상대가 지금 쉬는 중이라 메시지를 보낼 수 없어요.'));
     /* 서버가 권한(내 프로필·주선자, 대화 수락 여부) 확인 후 대화방에 저장하고 상대에게 알림 */
     return callFn('chatAction', { op: 'send', as: meId, other: otherId, text: text }).then(function (r) {
       var m = r && r.data && r.data.msg; var key = dmPairKey(meId, otherId);
@@ -11582,7 +11582,7 @@
     var target = state.entries.find(function (e) { return e.id === toId; });
     if (!target) return;
     /* 보관(휴면) 계정에는 요청 불가 — 명단엔 숨겨지지만 요청함·채팅 등 다른 경로의 카드에서 들어올 수 있음 */
-    if (target.deactivated) return modalNotice('안내', (target.nickname || '이 회원') + '님은 지금 휴면(보관) 중이라 요청할 수 없어요.');
+    if (target.deactivated) return modalNotice('안내', (target.nickname || '이 회원') + '님은 지금 쉬는 중이라 요청할 수 없어요.');
     var isPhoto = type === 'photo';
     var typeLabel = isPhoto ? '사진 보기' : '대화 신청';
     var actionText = isPhoto ? '사진 보기 요청' : '대화 신청';
@@ -12257,7 +12257,7 @@
     var isPhoto = (req.type || 'contact') === 'photo';
     var to = (state.entries || []).find(function (e) { return e.id === req.toId; });
     var toName = to ? to.nickname : '상대방';
-    if (to && to.deactivated) return modalNotice('안내', toName + '님은 지금 휴면(보관) 중이라 다시 요청할 수 없어요.');
+    if (to && to.deactivated) return modalNotice('안내', toName + '님은 지금 쉬는 중이라 다시 요청할 수 없어요.');
     var feedback = st === 'held' ? (req.holdMessage || '') : (req.rejectMessage || '');
     var feedbackHtml = feedback
       ? '<div class="mine-note" style="background:var(--gold-soft);color:var(--ink);">' + escapeHtml(toName) + '님의 메시지<br>"' + escapeHtml(feedback) + '"</div>'
