@@ -1163,9 +1163,11 @@ const REMIND_2_MS = 72 * 60 * 60 * 1000; /* 3일 */
 const REMIND_3_MS = 7 * 24 * 60 * 60 * 1000; /* 7일 — 답이 없으면 자동 마감 (2026-11-01, 예전엔 관리자 메시지 1회) */
 /* 받는 사람 한 명이 답 안 한 신청을 이만큼 갖고 있으면 새 신청을 잠시 막음 (2026-11-01 Benny: 여자 회원 쏠림·지침 줄이기) */
 const REQ_INBOX_CAP = 5;
-/* 7일 자동 마감은 이 시각부터 셈 (2026-11-01 Benny: 처음 켤 때 예전 신청 약 150건이 한꺼번에 마감되면 놀람) — 예전 신청은 11-09 00시(KST)부터 마감. 화면 '⌛ N일 남음'도 같은 값 */
+/* 자동 마감을 켠 시각 (11-02 00시 KST). 그 전 신청은 '원래 7일' 과 '켠 뒤 3일(11-05 00시)' 중 늦은 쪽에 마감
+   (2026-11-01 Benny: '7일 길다, 기존 것들은 3일로' — 오래된 건 11-05, 덜 된 건 원래 7일에서 남은 만큼). 화면 '⌛ N일 남음'도 같은 식 */
 const REQ_EXPIRE_FROM_MS = Date.parse('2026-11-01T15:00:00Z');
-const reqExpireAtMs = (r) => Math.max(r && r.submittedAt ? new Date(r.submittedAt).getTime() : 0, REQ_EXPIRE_FROM_MS) + REMIND_3_MS;
+const REQ_OLD_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
+const reqExpireAtMs = (r) => Math.max((r && r.submittedAt ? new Date(r.submittedAt).getTime() : 0) + REMIND_3_MS, REQ_EXPIRE_FROM_MS + REQ_OLD_GRACE_MS);
 
 /* 신청서가 40분 넘게 AI 심사(승인·보류·관리자 확인) 없이 있으면 관리자에게 한 번 — PC 꺼짐·PC 프로그램 오류·서버 오류 모두 잡음.
    이미 알린 신청은 adminOnly/_aiWatch 에 적어 둠 (state 는 회원 누구나 읽으니 거기엔 안 씀) */

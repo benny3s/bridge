@@ -23,7 +23,7 @@ const R='R'.repeat(20),A2='Q'.repeat(20),N='N'.repeat(20);
 let pass=0,fail=0;const ok=(c,msg)=>{if(c){pass++;console.log('  OK',msg);}else{fail++;console.log('  FAIL',msg);}};
 const mctx=(uid,token)=>({auth:uid?{uid,token:token||{}}:null,rawRequest:{headers:{'user-agent':'Mozilla/5.0 (Linux; Android 14) Chrome/150','x-forwarded-for':'1.2.3.4'},ip:'1.2.3.4'}});
 const ago=(d)=>new Date(Date.now()-d*86400000).toISOString();
-// 첫 마감 예고(11-02 00시 KST 부터 7일), 이후 7일 자동 마감·쉬는 회원 마감·2주 쉬기 알림·답 대기 5건 막기 (2026-11-01 v516)
+// 첫 마감(예전 신청 = 원래 7일과 11-05 00시 KST 중 늦은 쪽), 이후 7일 자동 마감·쉬는 회원 마감·2주 쉬기 알림·답 대기 5건 막기 (2026-11-01 v516)
 let FAKE_NOW = 0; const _realNow = Date.now; Date.now = () => FAKE_NOW || _realNow();
 const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
 (async()=>{
@@ -40,11 +40,11 @@ const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
     {id:'r2',type:'photo',fromId:B,toId:Z,note:'안녕하세요 반가워요',submittedAt:agoF(8)},
     {id:'r3',type:'photo',fromId:M,toId:Z,note:'안녕하세요 반가워요',submittedAt:agoF(2)},
     {id:'r4',type:'contact',fromId:M,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(2)}]}}});
-  // ① 올린 날(11-01): 8일 된 신청도 바로 마감하지 않음 — 11-09 00시(KST)까지 예고
+  // ① 올린 날(11-01): 8일 된 신청도 바로 마감하지 않음 — 11-05 00시(KST)까지
   FAKE_NOW = Date.parse('2026-11-01T12:00:00Z'); DB = seed();
   await m.remindPending.run();
   let st=DB.app.state, R=(id)=>st.dateRequests.find(r=>r.id===id), E=(id)=>st.entries.find(e=>e.id===id);
-  ok(!R('r1').expired && !R('r2').expired,'올린 날엔 8일 된 신청도 그대로 (첫 마감은 11-09부터)');
+  ok(!R('r1').expired && !R('r2').expired,'올린 날엔 8일 된 신청도 그대로 (첫 마감은 11-05부터)');
   ok(!E(O).returnNudged,'한 달 전 옛 쉬기는 갑자기 깨우지 않음');
   // ② 11-20: 그 뒤 신청은 7일 지나면 마감
   FAKE_NOW = Date.parse('2026-11-20T12:00:00Z'); DB = seed();
@@ -57,10 +57,18 @@ const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
   ok(E(Z).returnNudged===true,'쉰 지 2주 된 회원 → 돌아오라는 알림 표시');
   ok(!E('Y'.repeat(20)).returnNudged,'2주 안 된 회원 → 아직 알림 없음');
   ok(!E(O).returnNudged,'옛 쉬기(2주가 11-02 전에 끝남) → 알림 없음');
-  // ③ 11-09 00시 KST 지나면 예전 신청도 마감
-  FAKE_NOW = Date.parse('2026-11-08T15:30:00Z'); DB = seed(); DB.app.state.dateRequests[0].submittedAt='2026-10-20T00:00:00Z';
+  // ③ 예전 신청: 오래된 건 11-05 00시(KST), 덜 된 건 원래 7일 (2026-11-01 Benny: '기존 것들은 3일로')
+  const seedOld = () => { const d = seed(); d.app.state.dateRequests[0].submittedAt='2026-10-20T00:00:00Z'; d.app.state.dateRequests[3].submittedAt='2026-10-31T00:00:00Z'; return d; };
+  FAKE_NOW = Date.parse('2026-11-04T14:30:00Z'); DB = seedOld();
   await m.remindPending.run(); st=DB.app.state;
-  ok(R('r1').expired,'예전 신청은 11-09 00시(KST) 지나면 마감');
+  ok(!R('r1').expired,'10-20 신청 → 11-05 00시 전엔 그대로');
+  FAKE_NOW = Date.parse('2026-11-04T15:30:00Z'); DB = seedOld();
+  await m.remindPending.run(); st=DB.app.state;
+  ok(R('r1').expired,'10-20 신청 → 11-05 00시(KST) 지나면 마감 (켠 뒤 3일)');
+  ok(!R('r4').expired,'10-31 신청(켤 때 2일 안 됨) → 11-05엔 그대로');
+  FAKE_NOW = Date.parse('2026-11-07T00:30:00Z'); DB = seedOld();
+  await m.remindPending.run(); st=DB.app.state;
+  ok(R('r4').expired,'10-31 신청 → 원래 7일(11-07) 지나면 마감');
   FAKE_NOW = 0;
   // 답 대기 5건이면 새 신청 막기
   DB = seed(); st=DB.app.state;
