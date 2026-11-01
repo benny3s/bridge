@@ -1150,7 +1150,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-01-523';
+  var APP_VERSION = '2026-11-01-525';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -5546,7 +5546,14 @@
     return st === 'approved' ? '승인됨' : st === 'rejected' ? '거절됨' : st === 'held' ? '보류 중' : st === 'user_approved' ? '본인 승인' : '대기중';
   }
   var REQ_INBOX_CAP = 5;   /* 서버 reqCreate 와 같은 값 — 받는 사람이 답 안 한 신청이 이만큼이면 새 신청을 잠시 막음 (2026-11-01) */
-  function inboxWaiting(state, id) { return (state.dateRequests || []).filter(function (r) { return r.toId === id && reqStatus(r) === 'pending'; }).length; }
+  /* 신청함 5건 = 사람 기준 (서버 inboxFull 과 같게, 2026-11-01): 주선자 친구 프로필은 주선자 한 사람, 이미 기다리는 사람(나)은 막지 않음 */
+  function inboxFullFor(state, id, viewerId) {
+    var ents = state.entries || [];
+    var personOf = function (x) { var e = ents.find(function (y) { return y.id === x; }); return (e && e.managedBy) || x; };
+    var people = {}, n = 0;
+    (state.dateRequests || []).forEach(function (r) { if (r.toId === id && reqStatus(r) === 'pending') { var k = personOf(r.fromId); if (!people[k]) { people[k] = 1; n++; } } });
+    return !(viewerId && people[personOf(viewerId)]) && n >= REQ_INBOX_CAP;
+  }
   /* 답 없는 신청은 7일 뒤 자동 마감 — 이 시각 전 신청은 '원래 7일' 과 '이 시각 + 3일' 중 늦은 쪽 (서버 functions reqExpireAtMs 와 같게) */
   var REQ_EXPIRE_FROM = Date.parse('2026-11-01T15:00:00Z');
   /* 보류된 가입 신청 정리 시각 = max(보류 + 30일, 11-09 00시) (서버 heldCloseAtMs 와 같게) */
@@ -5971,7 +5978,7 @@
     var _pendChip = function (label) { return '<span class="card-btn" style="background:var(--card);color:var(--muted);cursor:default;border-color:var(--line);">' + label + '</span>'; };
     var _rejChip = function (label) { return '<span class="card-btn" style="background:#f6e9e7;color:#c5221f;cursor:default;border-color:#e0a3a0;">' + label + '</span>'; };
     var canSeePhoto = !!(viewer && pCount > 0 && canViewPhotoOf(state, viewer.id, entry.id));
-    var _busy = !!(viewer && !isAdminUnlocked && viewer.id !== entry.id && inboxWaiting(state, entry.id) >= REQ_INBOX_CAP);
+    var _busy = !!(viewer && !isAdminUnlocked && viewer.id !== entry.id && inboxFullFor(state, entry.id, viewer.id));
     var _busyBtn = '<button type="button" class="card-btn" data-action="busy-suggest" data-id="' + escapeHtml(entry.id) + '" style="background:var(--card);color:var(--muted);border-color:var(--line);">📮 답장 대기 중 · 다른 분 보기</button>';
     var photoBtn;
     if (canSeePhoto) photoBtn = '<button type="button" class="card-btn approve" data-action="gallery" data-id="' + escapeHtml(entry.id) + '">📷 사진 볼 수 있어요</button>';
