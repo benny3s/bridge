@@ -1,5 +1,5 @@
 // 실행: cd functions && node ../tools/test-admin/reqtest.js ../functions/index.js (가짜 DB, 네트워크 없음)
-// 신청 7일 자동 마감·쉬는 회원 마감·쉬기 기간 알림·답 대기 5건 막기 시험 (2026-11-01)
+// 신청 자동 마감(첫 마감 예고)·쉬는 회원 마감·2주 쉬기 알림·답 대기 5건 막기 시험 (2026-11-01 v516)
 const fs=require('fs'),path=require('path'),Module=require('module'),crypto=require('crypto');
 process.env.NUM_ENC_KEY=crypto.randomBytes(32).toString('hex');
 let DB={}; let revoked=0; const alerts=[];
@@ -23,33 +23,52 @@ const R='R'.repeat(20),A2='Q'.repeat(20),N='N'.repeat(20);
 let pass=0,fail=0;const ok=(c,msg)=>{if(c){pass++;console.log('  OK',msg);}else{fail++;console.log('  FAIL',msg);}};
 const mctx=(uid,token)=>({auth:uid?{uid,token:token||{}}:null,rawRequest:{headers:{'user-agent':'Mozilla/5.0 (Linux; Android 14) Chrome/150','x-forwarded-for':'1.2.3.4'},ip:'1.2.3.4'}});
 const ago=(d)=>new Date(Date.now()-d*86400000).toISOString();
+// 첫 마감 예고(11-02 00시 KST 부터 7일), 이후 7일 자동 마감·쉬는 회원 마감·2주 쉬기 알림·답 대기 5건 막기 (2026-11-01 v516)
+let FAKE_NOW = 0; const _realNow = Date.now; Date.now = () => FAKE_NOW || _realNow();
+const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
 (async()=>{
-  const A='A'.repeat(20),B='B'.repeat(20),Z='Z'.repeat(20),M='M'.repeat(20),F=['F1','F2','F3','F4','F5'].map(x=>x.repeat(10));
-  DB={app:{state:{entries:[
+  const A='A'.repeat(20),B='B'.repeat(20),Z='Z'.repeat(20),M='M'.repeat(20),O='O'.repeat(20),F=['F1','F2','F3','F4','F5'].map(x=>x.repeat(10));
+  const seed = () => ({app:{state:{entries:[
     {id:A,nickname:'활동여',gender:'female',pinSet:true},
-    {id:Z,nickname:'쉬는여',gender:'female',deactivated:true,deactivatedVia:'deactivate-request',deactivatedAt:ago(10),returnAt:ago(1),pinSet:true},
+    {id:Z,nickname:'쉬는여',gender:'female',deactivated:true,deactivatedVia:'deactivate-request',deactivatedAt:agoF(15),returnAt:agoF(1),pinSet:true},
     {id:'Y'.repeat(20),nickname:'쉬는여2',gender:'female',deactivated:true,deactivatedVia:'deactivate-request',returnAt:new Date(Date.now()+5*86400000).toISOString()},
-    {id:B,nickname:'남1',gender:'male',pinSet:true,submittedAt:ago(3)},
+    {id:O,nickname:'옛쉬기',gender:'female',deactivated:true,deactivatedVia:'deactivate-request',deactivatedAt:'2026-09-20T00:00:00Z'},
+    {id:B,nickname:'남1',gender:'male',pinSet:true,submittedAt:agoF(3)},
     {id:M,nickname:'남2',gender:'male',pinSet:true}].concat(F.map((f,i)=>({id:f,nickname:'남f'+i,gender:'male'}))),
    dateRequests:[
-    {id:'r1',type:'photo',fromId:B,toId:A,note:'안녕하세요 반가워요',submittedAt:ago(8)},
-    {id:'r2',type:'photo',fromId:B,toId:Z,note:'안녕하세요 반가워요',submittedAt:ago(8)},
-    {id:'r3',type:'photo',fromId:M,toId:Z,note:'안녕하세요 반가워요',submittedAt:ago(2)},
-    {id:'r4',type:'contact',fromId:M,toId:A,note:'안녕하세요 반가워요',submittedAt:ago(2)}]}}};
+    {id:'r1',type:'photo',fromId:B,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(8)},
+    {id:'r2',type:'photo',fromId:B,toId:Z,note:'안녕하세요 반가워요',submittedAt:agoF(8)},
+    {id:'r3',type:'photo',fromId:M,toId:Z,note:'안녕하세요 반가워요',submittedAt:agoF(2)},
+    {id:'r4',type:'contact',fromId:M,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(2)}]}}});
+  // ① 올린 날(11-01): 8일 된 신청도 바로 마감하지 않음 — 11-09 00시(KST)까지 예고
+  FAKE_NOW = Date.parse('2026-11-01T12:00:00Z'); DB = seed();
   await m.remindPending.run();
-  const st=DB.app.state, R=(id)=>st.dateRequests.find(r=>r.id===id), E=(id)=>st.entries.find(e=>e.id===id);
+  let st=DB.app.state, R=(id)=>st.dateRequests.find(r=>r.id===id), E=(id)=>st.entries.find(e=>e.id===id);
+  ok(!R('r1').expired && !R('r2').expired,'올린 날엔 8일 된 신청도 그대로 (첫 마감은 11-09부터)');
+  ok(!E(O).returnNudged,'한 달 전 옛 쉬기는 갑자기 깨우지 않음');
+  // ② 11-20: 그 뒤 신청은 7일 지나면 마감
+  FAKE_NOW = Date.parse('2026-11-20T12:00:00Z'); DB = seed();
+  await m.remindPending.run();
+  st=DB.app.state;
   ok(R('r1').expired && R('r1').rejected && !R('r1').expiredWhy,'활동 회원이 8일 답 안 한 신청 → 자동 마감');
   ok(R('r2').expired && R('r2').expiredWhy==='resting','쉬는 회원이 받은 8일 된 신청 → 쉬는 중이라 마감');
   ok(!R('r3').expired && !R('r3').remind1Sent,'쉬는 회원이 받은 2일 된 신청 → 그대로, 독촉 없음');
   ok(R('r4').remind1Sent && !R('r4').expired,'활동 회원 2일 된 신청 → 독촉 1회 표시');
-  ok(E(Z).returnNudged===true,'쉬기 기간 지난 회원 → 돌아오라는 알림 표시');
-  ok(!E('Y'.repeat(20)).returnNudged,'쉬기 기간 남은 회원 → 아직 알림 없음');
+  ok(E(Z).returnNudged===true,'쉰 지 2주 된 회원 → 돌아오라는 알림 표시');
+  ok(!E('Y'.repeat(20)).returnNudged,'2주 안 된 회원 → 아직 알림 없음');
+  ok(!E(O).returnNudged,'옛 쉬기(2주가 11-02 전에 끝남) → 알림 없음');
+  // ③ 11-09 00시 KST 지나면 예전 신청도 마감
+  FAKE_NOW = Date.parse('2026-11-08T15:30:00Z'); DB = seed(); DB.app.state.dateRequests[0].submittedAt='2026-10-20T00:00:00Z';
+  await m.remindPending.run(); st=DB.app.state;
+  ok(R('r1').expired,'예전 신청은 11-09 00시(KST) 지나면 마감');
+  FAKE_NOW = 0;
   // 답 대기 5건이면 새 신청 막기
-  st.dateRequests=F.map((f,i)=>({id:'c'+i,type:'photo',fromId:f,toId:A,note:'안녕하세요 반가워요',submittedAt:ago(1)}));
+  DB = seed(); st=DB.app.state;
+  st.dateRequests=F.map((f,i)=>({id:'c'+i,type:'photo',fromId:f,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1)}));
   let err=null; try{await m.chatAction.run({op:"reqCreate",as:M,to:A,type:'contact',note:'안녕하세요 반가워요 잘 부탁해요'},mctx(M,{m:1}));}catch(e){err=e;}
   ok(err && err.code==='resource-exhausted' && /답장을 기다리는 신청이 많아요/.test(err.message),'답 대기 5건인 회원에게 새 신청 → 막힘'+(err?' ('+err.code+')':' — 안 막힘'));
-  st.dateRequests=st.dateRequests.slice(0,4); err=null; let r=null;
-  try{r=await m.chatAction.run({op:"reqCreate",as:M,to:A,type:'contact',note:'안녕하세요 반가워요 잘 부탁해요'},mctx(M,{m:1}));}catch(e){err=e;}
+  st.dateRequests=st.dateRequests.slice(0,4); err=null;
+  try{await m.chatAction.run({op:"reqCreate",as:M,to:A,type:'contact',note:'안녕하세요 반가워요 잘 부탁해요'},mctx(M,{m:1}));}catch(e){err=e;}
   ok(!err,'답 대기 4건이면 새 신청 됨'+(err?' — '+err.message:''));
   console.log('\n'+pass+' OK, '+fail+' FAIL'); process.exit(fail?1:0);
 })();

@@ -1163,6 +1163,27 @@ const REMIND_2_MS = 72 * 60 * 60 * 1000; /* 3일 */
 const REMIND_3_MS = 7 * 24 * 60 * 60 * 1000; /* 7일 — 답이 없으면 자동 마감 (2026-11-01, 예전엔 관리자 메시지 1회) */
 /* 받는 사람 한 명이 답 안 한 신청을 이만큼 갖고 있으면 새 신청을 잠시 막음 (2026-11-01 Benny: 여자 회원 쏠림·지침 줄이기) */
 const REQ_INBOX_CAP = 5;
+/* 7일 자동 마감은 이 시각부터 셈 (2026-11-01 Benny: 처음 켤 때 예전 신청 약 150건이 한꺼번에 마감되면 놀람) — 예전 신청은 11-09 00시(KST)부터 마감. 화면 '⌛ N일 남음'도 같은 값 */
+const REQ_EXPIRE_FROM_MS = Date.parse('2026-11-01T15:00:00Z');
+const reqExpireAtMs = (r) => Math.max(r && r.submittedAt ? new Date(r.submittedAt).getTime() : 0, REQ_EXPIRE_FROM_MS) + REMIND_3_MS;
+
+/* 신청서가 40분 넘게 AI 심사(승인·보류·관리자 확인) 없이 있으면 관리자에게 한 번 — PC 꺼짐·PC 프로그램 오류·서버 오류 모두 잡음.
+   이미 알린 신청은 adminOnly/_aiWatch 에 적어 둠 (state 는 회원 누구나 읽으니 거기엔 안 씀) */
+async function aiStallCheck() {
+  const st = (await db.doc('app/state').get()).data() || {};
+  const now = Date.now();
+  const stuck = (st.pendingEntries || []).filter((p) => p && p.id && !p.heldReason && !p.rejectedAt && !p.aiAuditedAt && !p.aiRiskHeld &&
+    p.submittedAt && now - new Date(p.submittedAt).getTime() > 40 * 60000);
+  if (!stuck.length) return;
+  const ref = db.doc('adminOnly/_aiWatch');
+  const told = ((await ref.get()).data() || {}).told || {};
+  const fresh = stuck.filter((p) => told[p.id] !== p.submittedAt);
+  if (!fresh.length) return;
+  fresh.forEach((p) => { told[p.id] = p.submittedAt; });
+  Object.keys(told).forEach((id) => { if (!stuck.some((p) => p.id === id)) delete told[id]; });
+  await ref.set({ told, at: new Date().toISOString() });
+  await sendToAdmin('🤖 AI 심사가 멈춘 것 같아요', fresh.map((p) => p.nickname || '신청자').join(', ') + '님 신청서가 40분 넘게 자동 심사 없이 기다려요. PC 관제판이 켜져 있는지 보고, 급하면 직접 승인해 주세요.', { route: 'admin' }).catch(() => {});
+}
 
 exports.remindPending = functions
   .region('asia-northeast3')
@@ -1188,8 +1209,9 @@ exports.remindPending = functions
         const t = r.submittedAt ? new Date(r.submittedAt).getTime() : 0;
         if (!t) return r;
         const age = now - t;
+        const due = now >= reqExpireAtMs(r);
         /* 받는 사람이 쉬는 중이어도 7일 지나면 마감 (2026-11-01: 예전엔 끝없이 '대기중'으로 남아 보낸 사람이 계속 기다림) */
-        if (age >= REMIND_3_MS && toE && toE.deactivated) {
+        if (due && toE && toE.deactivated) {
           changed = true;
           return Object.assign({}, r, { rejected: true, held: false, expired: true, expiredWhy: 'resting', rejectedBy: 'auto', decidedAt: new Date().toISOString(),
             rejectMessage: '상대가 지금 쉬는 중이라 자동으로 마감됐어요. 다른 분께도 신청해 보세요 🙂', remind1Sent: true, remind2Sent: true, remind3Sent: true });
@@ -1200,7 +1222,7 @@ exports.remindPending = functions
         const fromNick = nameOf(entries, r.fromId);
         /* 7일+ 무응답: 자동 마감 (2026-11-01 Benny: '답 없는 신청은 7일 뒤 자동으로 끝내기') — 거절처럼 닫히되 expired 로 구분,
            보낸 사람 화면엔 '⌛ 답 없이 마감'. 예전의 관리자 독촉 메시지(받는 사람을 더 지치게 함)는 뺌 */
-        if (age >= REMIND_3_MS) {
+        if (due) {
           changed = true;
           return Object.assign({}, r, { rejected: true, held: false, expired: true, rejectedBy: 'auto', decidedAt: new Date().toISOString(),
             rejectMessage: '7일 동안 답이 없어 자동으로 마감됐어요. 다른 분께도 신청해 보세요 🙂', remind1Sent: true, remind2Sent: true, remind3Sent: true });
@@ -1221,8 +1243,9 @@ exports.remindPending = functions
       const nudges = [];
       let entriesNext = null;
       entries.forEach((e, i) => {
-        if (!e || !e.deactivated || !restingSelf(e) || !e.returnAt || e.returnNudged) return;
-        if (new Date(e.returnAt).getTime() > now) return;
+        if (!e || !e.deactivated || !restingSelf(e) || e.returnNudged || e.deactivatedVia !== 'deactivate-request') return;
+        const backAt = e.returnAt ? new Date(e.returnAt).getTime() : (e.deactivatedAt ? new Date(e.deactivatedAt).getTime() + 14 * 86400000 : 0);
+        if (!backAt || backAt > now || backAt < REQ_EXPIRE_FROM_MS) return;   /* 2주가 이번 판(11-02) 전에 끝난 옛 쉬기는 갑자기 깨우지 않음 */
         const since = e.deactivatedAt || e.returnAt;
         const fresh = entries.filter((x) => x && x.gender && e.gender && x.gender !== e.gender && !x.deactivated && !x.isMatchmaker && !x.testAccount && (x.submittedAt || '') > since).length;
         nudges.push({ id: e.id, mm: e.managedBy || null, fresh });
@@ -1240,12 +1263,13 @@ exports.remindPending = functions
       await appendMemberMsgs(result.newMsgs.map((m) => Object.assign({ auto: true }, m)), result.entries).catch((e) => console.error('remind msgs', e));
     }
     if (result && result.nudges && result.nudges.length) {
-      await Promise.all(result.nudges.map((n) => sendTo(n.mm || n.id, '💤 쉬는 기간이 끝났어요',
+      await Promise.all(result.nudges.map((n) => sendTo(n.mm || n.id, '💤 쉰 지 2주가 됐어요',
         (n.fresh ? '쉬는 동안 새 회원 ' + n.fresh + '명이 들어왔어요. ' : '') + '다시 활동해 볼까요? ⚙️ 내 계정 → [♻️ 다시 활동하기]', { route: 'mine' }).catch(() => {})));
     }
     if (result && result.sends.length) {
       await Promise.all(result.sends.map((s) => notifyRecipient(result.entries, s.toId, s.title, s.body, { route: 'mine', focusId: s.reqId || '' })));
     }
+    await aiStallCheck().catch((e) => console.error('aiStallCheck', e));
     await purgeDeletedSecrets().catch((e) => console.error('purgeDeletedSecrets', e));
     await flushStaleTriage().catch((e) => console.error('flushStaleTriage', e));   /* AI 판단 못 받은 경고는 그냥 푸시 */
     /* 연락처 자동 가림은 중단(2026-10-27): '카톡·인스타' 단어만으로 일반 대화까지 가리고 지난 대화를 소급해 덮어씀 → 새 방식(안전 전달 버튼·실제 번호만) 나올 때까지 끔 */
@@ -4025,9 +4049,11 @@ exports.aiConcierge = functions
       /* AI 가 승인이라고 해도 서버가 신청 기록(signups)으로 외부 공격 신호를 먼저 확인 (2026-10-27, Benny: 'AI 가 외부 공격인지 판단해 보류').
          규칙은 코드로 — 신청서 글로 AI 를 속여도 이 확인은 못 넘음. 신호가 있으면 승인 대신 관리자 확인 대기(신청자에겐 평소처럼 '심사 중') */
       const riskMap = {};
+      /* 여기선 state 를 따로 읽어야 함 (2026-11-01: pc_sync_pull 의 st 를 썼다가 ReferenceError → AI 승인이 통째로 실패) */
+      const stA = Object.keys(approveMap).length ? ((await db.doc('app/state').get()).data() || {}) : {};
       for (const id of Object.keys(approveMap)) {
-        const pp = (st.pendingEntries || []).find((x) => x && x.id === id);
-        if (proxyByLiveMember(pp, st)) continue;
+        const pp = (stA.pendingEntries || []).find((x) => x && x.id === id);
+        if (proxyByLiveMember(pp, stA)) continue;
         const why = await signupRisk(id).catch(() => ['신청 기록 확인 실패']);
         if (why.length) { riskMap[id] = why; delete approveMap[id]; }
       }
