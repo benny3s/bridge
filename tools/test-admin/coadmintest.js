@@ -43,5 +43,13 @@ process.env.PC_SYNC_KEY='k'.repeat(40);
   ok(inE(P3),'대신 신청(활동 주선자) → 신청 기록 없어도 승인');
   ok(P(P4) && P(P4).aiRiskHeld && !inE(P4),'해외 접속 → 승인 대신 관리자 확인');
   ok(st.logs.some(l=>/신청 자동 승인/.test(l.detail)),'활동 기록에 자동 승인 남음');
+  // AI 심사가 40분 넘게 안 돌면 관리자에게 한 번 (adminOnly/_aiWatch 에 기록)
+  const S1='S1'.repeat(10);
+  st.pendingEntries.push({id:S1,nickname:'멈춘신청',gender:'female',submittedAt:ago(0.05)});
+  await m.remindPending.run();
+  const w1=JSON.stringify(((DB.adminOnly||{})._aiWatch||{}).told||{});
+  ok(/S1S1/.test(w1),'40분+ 심사 없는 신청 → 관리자 알림 기록');
+  await m.remindPending.run();
+  ok(JSON.stringify(((DB.adminOnly||{})._aiWatch||{}).told||{})===w1,'같은 신청은 두 번 알리지 않음');
   console.log('\n'+pass+' OK, '+fail+' FAIL'); process.exit(fail?1:0);
 })();
