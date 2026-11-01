@@ -1150,7 +1150,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-01-521';
+  var APP_VERSION = '2026-11-01-523';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1161,6 +1161,7 @@
 
   var ROOT_NAME = '베니';
   var listFilter = 'all';
+  var listNewOnly = false;   /* 🆕 이번 주(7일) 새로 들어온 분만 — 성별 거르기와 함께 씀 (2026-11-01 마감 안내 카드) */
   /* ── 만나고 싶은 지역 (2026-10-09 Benny: 지방 친구부터 늘리기) ──
      entry.meetZones = 이 회원이 나오는 지역 채널. 없으면 전체 지역(2026-10-13 Benny: 기본은 지금처럼 전부, 필요한 사람만 관리자가 지정).
      회원은 프로필 설정 없이 '베니브릿지' 옆 채널 버튼으로 보고 싶은 지역만 켜고 끔(기기에 기억, 다 켜면 전체 지역).
@@ -5548,6 +5549,9 @@
   function inboxWaiting(state, id) { return (state.dateRequests || []).filter(function (r) { return r.toId === id && reqStatus(r) === 'pending'; }).length; }
   /* 답 없는 신청은 7일 뒤 자동 마감 — 이 시각 전 신청은 '원래 7일' 과 '이 시각 + 3일' 중 늦은 쪽 (서버 functions reqExpireAtMs 와 같게) */
   var REQ_EXPIRE_FROM = Date.parse('2026-11-01T15:00:00Z');
+  /* 보류된 가입 신청 정리 시각 = max(보류 + 30일, 11-09 00시) (서버 heldCloseAtMs 와 같게) */
+  function heldCloseAt(p) { return Math.max((Date.parse((p && (p.heldAt || p.submittedAt)) || 0) || 0) + 30 * 86400000, REQ_EXPIRE_FROM + 7 * 86400000); }
+  function mdText(t) { var d = new Date(t); return (d.getMonth() + 1) + '/' + d.getDate(); }
   function reqLeftText(r) {
     if (!r || !r.submittedAt) return '';
     var left = Math.max((Date.parse(r.submittedAt) || 0) + 7 * 86400000, REQ_EXPIRE_FROM + 3 * 86400000) - Date.now();
@@ -6068,6 +6072,7 @@
       if (!isPermFilter && zoneMode === 'sel' && e.id !== me.id && !zonesOverlap(zonesOf(e), _zm.sel)) return false;
       if (!myZones && isAdminUnlocked && adminZone !== 'all' && zonesOf(e).indexOf(adminZone) < 0) return false;
       if (isAdminUnlocked && accessFilter !== 'all' && accessBucket(e) !== accessFilter) return false; /* 관리자 접속 필터 */
+      if (listNewOnly && !(e.submittedAt && Date.now() - Date.parse(e.submittedAt) < 7 * 86400000)) return false;
       if (listFilter === 'male' || listFilter === 'female') return e.gender === listFilter;
       if (listFilter === 'photo') return me && e.id !== me.id && canViewPhotoOf(state, me.id, e.id);
       if (listFilter === 'contact') return me && e.id !== me.id && canViewContactOf(state, me.id, e.id);
@@ -6095,7 +6100,7 @@
       });
     }
     /* 다른 회원이 접속할 때마다 카드 순서가 바뀌어 엉뚱한 버튼이 눌리지 않게 — 명단 탭에 들어오거나 정렬·필터가 바뀔 때만 다시 정렬 (2026-10-15) */
-    var _ok = [listFilter, ageSort, listOrder, String(zoneView), String(currentUser && currentUser.id), String(actingAs), String(isAdminUnlocked), adminZone,
+    var _ok = [listFilter, String(listNewOnly), ageSort, listOrder, String(zoneView), String(currentUser && currentUser.id), String(actingAs), String(isAdminUnlocked), adminZone,
       String(typeof accessFilter !== 'undefined' ? accessFilter : ''), String((typeof myHiddenIds !== 'undefined' && myHiddenIds) ? myHiddenIds.length : 0)].join('|');
     if (_listOrder && _listOrder.key === _ok) {
       var _pos = {}; _listOrder.ids.forEach(function (id, i) { _pos[id] = i; });
@@ -6146,7 +6151,8 @@
       (listView === 'compact' ? '🖼 사진보기' : '☰ 간단히') + '</button>';
     var acqBtn = me ? '<button type="button" class="view-toggle" id="acq-open" style="margin-left:6px;">🙈 지인 필터' + (acqCounts.filter ? ' <span style="opacity:0.85;">' + acqCounts.filter + '</span>' : '') + '</button>' : '';
     var permBtns = me
-      ? '<button type="button" class="filter-btn" data-filter="photo" aria-pressed="' + (listFilter === 'photo') + '" title="내가 사진을 볼 수 있는 사람">📷</button>' +
+      ? '<button type="button" class="filter-btn" data-filter="new" aria-pressed="' + listNewOnly + '" title="이번 주(7일) 새로 들어온 분만">🆕</button>' +
+        '<button type="button" class="filter-btn" data-filter="photo" aria-pressed="' + (listFilter === 'photo') + '" title="내가 사진을 볼 수 있는 사람">📷</button>' +
         '<button type="button" class="filter-btn" data-filter="contact" aria-pressed="' + (listFilter === 'contact') + '" title="채팅 연결된 사람">💬</button>'
       : '';
     var ageOn = (ageSort === 'asc' || ageSort === 'desc');
@@ -8645,7 +8651,8 @@
       (approvalTotal ? (pendingItems + delReqItems + deacReqItems) : '<p class="sub">대기 중인 신청이 없어요.</p>'), false, 'pending');
     var heldSection = adminFold('📌 보류 중', heldPending.length,
       '<p class="sub">보완을 요청(보류)해둔 신청·회원이에요. 로그인은 되고 보류 사유도 보이지만, 명단엔 안 보여요. 본인이 프로필을 고쳐 <b>재제출하면 자동으로 "승인 대기"로</b> 올라와요.</p>' +
-      (heldPending.length ? heldItems : '<p class="sub">보류 중인 신청이 없어요.</p>'), false, 'held');
+      (heldPending.length ? '<p class="sub" style="margin:0 0 6px;">⌛ 30일 동안 보완이 없으면 자동 정리 (7일 전 본인에게 알림): ' +
+        heldPending.map(function (e) { return escapeHtml(e.nickname || '') + ' ' + mdText(heldCloseAt(e)); }).join(' · ') + '</p>' + heldItems : '<p class="sub">보류 중인 신청이 없어요.</p>'), false, 'held');
     /* 승인 후 프로필을 수정한 회원 → 관리자가 한 번 검토 */
     var editRevList = (state.entries || []).filter(function (e) { return e.editReviewAt && !e.deactivated; })
       .sort(function (a, b) { return (b.editReviewAt || '').localeCompare(a.editReviewAt || ''); });
@@ -9653,7 +9660,7 @@
     /* 보류(보완 요청)된 신청자에게 모든 탭 상단에 눈에 띄는 안내 배너 */
     var myPendNow = currentUser ? findMyPending(state) : null;
     var heldBanner = (myPendNow && myPendNow.heldReason)
-      ? '<div class="live-banner" data-tab="mine" style="cursor:pointer;background:#fce8e6;border-color:#e0a3a0;color:#8a2a24;">📌 신청 보류: ' + escapeHtml(myPendNow.heldReason) + ' <b>· 눌러서 수정·재제출</b></div>'
+      ? '<div class="live-banner" data-tab="mine" style="cursor:pointer;background:#fce8e6;border-color:#e0a3a0;color:#8a2a24;">📌 신청 보류: ' + escapeHtml(myPendNow.heldReason) + ' <b>· 눌러서 수정·재제출</b> <small>(' + mdText(heldCloseAt(myPendNow)) + '까지 고치지 않으면 신청서가 정리돼요)</small></div>'
       : '';
     var tabs =
       '<button type="button" class="tab-btn" data-tab="form" role="tab" aria-selected="' + (activeTab === 'form') + '">신청서 작성</button>' +
@@ -9934,6 +9941,27 @@
     try { var items = body.querySelectorAll('.admin-msg-item'); for (var i = 0; i < items.length; i++) if (openMsgFolds[items[i].getAttribute('data-eid')]) items[i].open = true; } catch (e) {}
   }
   document.addEventListener('toggle', function (e) { var d = e.target; if (d && d.open && d.getAttribute && d.getAttribute('data-lazy')) fillLazyFold(d); }, true);
+  /* ⌛ 답 없이 마감된 내 신청 안내 — 새로 마감된 게 있으면 앱을 열 때 한 번 (2026-11-01 Benny: 11-05 첫 마감 때 보낸 사람이 그냥 잊히지 않게, 푸시는 안 씀) */
+  var _expCardShown = false;
+  function maybeExpiredCard(state) {
+    if (_expCardShown || isAdminUnlocked || !currentUser || !state || state._public || document.querySelector('.modal-overlay')) return;
+    var me = findMyEntry(state); if (!me || me.deactivated) return;
+    var key = 'bb_expSeen_' + me.id, seen = '';
+    try { seen = localStorage.getItem(key) || ''; } catch (e) {}
+    var mine = (state.dateRequests || []).filter(function (r) { return r && r.fromId === me.id && r.expired && (r.decidedAt || '') > seen && (r.hiddenBy || []).indexOf(me.id) < 0; });
+    if (!mine.length) return;
+    _expCardShown = true;
+    var last = mine.reduce(function (m, r) { return (r.decidedAt || '') > m ? r.decidedAt : m; }, seen);
+    try { localStorage.setItem(key, last); } catch (e) {}
+    var opp = me.gender === 'male' ? 'female' : me.gender === 'female' ? 'male' : '';
+    var fresh = profileEntries(state).filter(function (e) { return listMemberVisible(e) && e.id !== me.id && (!opp || e.gender === opp) && e.submittedAt && Date.now() - Date.parse(e.submittedAt) < 7 * 86400000; }).length;
+    var ov = openModal('<h3>⌛ 답 없이 마감된 신청 ' + mine.length + '건</h3>' +
+      '<p class="modal-msg">오래 답이 없어 자동으로 마감됐어요. 바쁘거나 앱을 잘 안 보는 분도 많으니 마음 쓰지 마세요 🙂' +
+        (fresh ? '<br>이번 주 새로 들어온 분이 <b>' + fresh + '명</b> 있어요.' : '<br>다른 분께도 신청해 보세요.') + '</p>' +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="exp-close">닫기</button><button type="button" class="card-btn primary" id="exp-go">' + (fresh ? '🆕 새로 온 분 보기' : '명단 보기') + '</button></div>');
+    ov.querySelector('#exp-close').addEventListener('click', function () { closeModal(ov); });
+    ov.querySelector('#exp-go').addEventListener('click', function () { closeModal(ov); listNewOnly = !!fresh; activeTab = 'list'; paint(currentState); });
+  }
   function paint(state) {
     _permIdx = null;   /* 권한 색인은 그릴 때마다 새로 (화면에서 바로 바꾼 요청도 반영) */
     overlayAdminPriv(state); /* 서버에서 새로 받은 state 로 그릴 때도 관리자 전용 값 유지 */
@@ -9965,6 +9993,7 @@
     try { adjustSwitcherClip(); } catch (e) {} /* 전환창 친구 2줄 초과 시 접기 */
     try { updateCharCounts(); } catch (e) {} /* 자기소개 등 글자수 카운터 */
     try { applyFoldState(); } catch (e) {}
+    if (!_expCardShown) setTimeout(function () { try { maybeExpiredCard(currentState); } catch (e) {} }, 1500);
     maybeRestoreDraft();
   }
 
@@ -13324,6 +13353,8 @@
         listFilter = (listFilter === 'male') ? 'female' : (listFilter === 'female' ? 'all' : 'male');
       } else if (f === 'age') { /* 나이 버튼: 오름차순 → 내림차순 → 해제 반복 */
         ageSort = (ageSort === 'none') ? 'asc' : (ageSort === 'asc' ? 'desc' : 'none');
+      } else if (f === 'new') { /* 🆕 새로 온 분: 다시 누르면 해제 */
+        listNewOnly = !listNewOnly;
       } else if (f === 'photo' || f === 'contact') { /* 사진·대화 필터: 다시 누르면 해제 */
         listFilter = (listFilter === f) ? 'all' : f;
       } else {
