@@ -128,7 +128,24 @@
   .masthead p { margin: 6px 0 0; color: var(--paper); opacity: 0.72; font-size: 0.92rem; }
   .masthead-sub { margin: 6px 0 0; color: var(--paper); opacity: 0.72; font-size: 0.92rem; line-height: 1.5; }
   .masthead-note { margin: 4px 0 0; color: var(--gold); opacity: 0.92; font-size: 0.82rem; line-height: 1.45; }
+  .leave-mm { background: var(--gold-soft); border: 1px solid var(--gold); border-radius: 10px; padding: 10px 12px; font-size: 0.86rem; line-height: 1.5; margin: 4px 0 10px; color: var(--ink); }
+  .leave-lbl { display: block; font-weight: 600; margin: 6px 0 2px; } .leave-lbl span { color: var(--muted); font-weight: 400; }
+  .leave-stars { display: flex; gap: 2px; margin: 0 0 8px; } .leave-stars button { font-size: 1.9rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--gold); padding: 2px 4px; }
   .adm-head { display: grid; gap: 10px; margin-bottom: 14px; }
+  .seen-sum { background: var(--gold-soft); border-radius: 10px; padding: 8px 11px; font-size: 0.88rem; line-height: 1.5; margin: 0 0 8px; }
+  .seen-filters { display: flex; gap: 5px; flex-wrap: wrap; margin: 0 0 8px; } .seen-filters .filter-btn { padding: 4px 10px; font-size: 0.82rem; min-height: 0; }
+  .seen-row { border-bottom: 1px solid var(--line); padding: 8px 2px; }
+  .seen-l1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+  .seen-uid { color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+  .seen-nick { cursor: pointer; text-decoration: underline dotted; }
+  .seen-l2 { color: var(--muted); font-size: 0.82rem; margin-top: 2px; overflow-wrap: anywhere; }
+  .seen-l3 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 0.8rem; margin-top: 4px; }
+  .seen-link { cursor: pointer; text-decoration: underline dotted; }
+  .seen-mini { font: inherit; font-size: 0.78rem; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); cursor: pointer; }
+  .seen-test { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); } .seen-test input { width: 15px; height: 15px; accent-color: var(--accent); }
+  .adm-group { margin: 18px 0 6px; font-size: 1rem; display: flex; align-items: baseline; gap: 8px; }
+  .adm-group small { color: var(--muted); font-weight: 400; font-size: 0.8rem; }
+  .adm-calm { color: #137333; font-size: 0.86rem; margin: 2px 0 8px; }
   .adm-tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
   .adm-tools .card-btn { flex: none; width: 100%; padding: 10px 12px; font-size: 0.9rem; }
   .adm-more > summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; padding: 2px 0 8px; }
@@ -1104,7 +1121,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-10-31-506';
+  var APP_VERSION = '2026-11-01-518';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1335,12 +1352,13 @@
       return '<div style="' + box + 'var(--gold);background:var(--gold-soft);color:var(--ink);">' + line +
         '<div style="margin-top:4px;">' + (rest ? '💤 <b>잠시 쉬는 중</b>' : '🗄 <b>휴면(보관) 중</b>') + ' — 다른 회원에게 내 프로필이 안 보이고, 사진·대화 신청과 채팅 보내기는 멈춰 있어요.' +
         (rest ? ' <button type="button" class="card-btn approve" data-action="self-reactivate" data-id="' + escapeHtml(act.id) + '" style="flex:none;padding:3px 10px;margin-left:4px;">♻️ 다시 활동하기</button>'
-              : ' 다시 활동하려면 상단 <b>💬 Q&amp;A</b>로 관리자에게 말씀해 주세요.') + '</div></div>';
+              : ' 다시 활동하려면 상단 <b>💬 Q&amp;A</b>로 관리자에게 말씀해 주세요.') +
+        ' <button type="button" class="card-btn" data-action="leave-sheet" style="flex:none;padding:3px 10px;margin-left:4px;">⭐ 의견 · 🤝 주선자로 남기</button>' + '</div></div>';
     }
     return '<div style="' + box + 'var(--line);background:var(--card, #fff);color:var(--ink);">' + line + '</div>';
   }
   /* 💤 본인이 '잠시 쉬기'로 들어간 휴면 — 본인이 [다시 활동하기]로 바로 복귀. 휴면은 모두 로그인 되고 명단·요청·채팅 보내기만 멈춤 (2026-10-31). 관리자 보관·탈퇴 보관 복귀는 관리자만 */
-  function restingSelf(e) { return !!(e && e.deactivated && e.deactivatedVia === 'deactivate-request'); }
+  function restingSelf(e) { return !!(e && e.deactivated && e.deactivatedVia !== 'delete-request'); }   /* 2026-11-01: 잠시 쉬기·관리자 보관 하나로 — 탈퇴 보관만 제외 */
   /* 명단 노출 판정: 보관 계정은 항상 숨김 · 테스트는 테스트 로그인끼리만 · 나머지 일반 */
   function listMemberVisible(e) {
     if (e.isMatchmaker) return false;
@@ -1355,8 +1373,8 @@
   var decryptedNames = {};   /* 관리자 검색용 복호화 실명 캐시 (id → 실명). 관리자 잠금 시 초기화 */
   var decryptedRequests = {};
   /* 관리자 표 정렬/필터 상태 */
-  var adminSeenSort = { col: 'uid', dir: 'desc' };   /* 최근 접속·권한 표 (기본: 고유번호 내림차순) */
-  var adminSeenType = 'all';                          /* 회원 명단 계정 유형 필터: all|general|mm|managed */
+  var adminSeenSort = { col: 'join', dir: 'desc' };  /* 회원 명단 정렬 (기본: 최근 가입 → 새로 온 사람이 맨 위) */
+  var adminSeenType = 'active';                       /* 회원 명단 거르기: active|new|male|female|quiet|resting|mm|test|all */
   var seenSearch = '';                                /* 회원 명단 검색어(고유번호·닉네임) */
   var mmSearch = '';                                  /* 주선자 탭 검색어(주선자·친구 닉네임/고유번호) */
   var adminLogSort = { col: 'time', dir: 'desc' };   /* 활동 기록 표 (기본: 시간 내림차순) */
@@ -2020,7 +2038,7 @@
         items.push({ icon: '📝', text: (e.nickname || '누군가') + '님 신청서 (승인 대기)', route: 'admin', focusId: e.id, key: k });
       });
       var qmap = {}, qlatest = {};
-      (state.messages || []).forEach(function (m) { if (m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin) { qmap[m.entryId] = (qmap[m.entryId] || 0) + 1; if ((m.at || '') > (qlatest[m.entryId] || '')) qlatest[m.entryId] = (m.at || ''); } });
+      (state.messages || []).forEach(function (m) { if (amUnreadMsg(m)) { qmap[m.entryId] = (qmap[m.entryId] || 0) + 1; if ((m.at || '') > (qlatest[m.entryId] || '')) qlatest[m.entryId] = (m.at || ''); } });
       Object.keys(qmap).forEach(function (eid) {
         var k = 'qa:' + eid + ':' + (qlatest[eid] || '');
         if (aSeen.indexOf(k) >= 0) return;
@@ -2042,7 +2060,7 @@
           var k1 = 'in:' + r.id;
           if (mSeen.indexOf(k1) < 0) add({ icon: isP ? '📷' : '💌', text: pre + nick(r.fromId) + '님이 ' + (isP ? '사진' : '대화') + ' 요청을 보냈어요', route: 'mine', focusId: r.id, key: k1 });
         }
-        if (r.fromId === me.id && (r.decidedAt || '') > seen) {
+        if (r.fromId === me.id && (r.decidedAt || '') > seen && !r.expired) {   /* 7일 자동 마감은 새 소식에 '거절'로 띄우지 않음 */
           var st = reqStatus(r), lbl = st === 'approved' ? '승인했어요 🎉' : st === 'rejected' ? '거절했어요' : st === 'held' ? '보류했어요' : '응답했어요';
           var k2 = 'dec:' + r.id + ':' + st;
           if (mSeen.indexOf(k2) < 0) add({ icon: st === 'approved' ? '✅' : st === 'rejected' ? '⛔' : '📌', text: pre + nick(r.toId) + '님이 ' + (isP ? '사진' : '대화') + ' 요청을 ' + lbl, route: 'mine', focusId: r.id, key: k2 });
@@ -2114,9 +2132,18 @@
       });
     }).catch(function () {});
   }
+  /* 관리자가 읽음 누른 시각 (이 기기 화면만) — 서버가 회원 문서를 하나씩 고치는 동안(수십 초) 다시 반짝이지 않게 (2026-11-01 Benny: '자꾸 눌러야 꺼짐') */
+  var _amReadLocal = {};
+  function amUnreadMsg(m) {
+    if (!m || m.from !== 'user' || m.hiddenByAdmin || m.readByAdmin) return false;
+    var t = _amReadLocal[m.entryId] || '', all = _amReadLocal['*'] || '';
+    return !((t && (m.at || '') <= t) || (all && (m.at || '') <= all));
+  }
+  function amMarkLocal(eid) { _amReadLocal[eid || '*'] = new Date().toISOString(); if (currentState) paint(currentState); }
   /* 관리자: 안 읽은 문의(Q&A) 전부 읽음 처리 */
   function markAllAdminMsgRead() {
     if (!isAdminUnlocked) return;
+    amMarkLocal('*');
     callFn('msgAction', { op: 'adminRead' }).catch(function () {});   /* B-2: 서버가 회원 문서마다 읽음 표시, 화면은 구독으로 갱신 */
   }
   /* 새 소식 팝업 — 항목별 "보기"(이동+그 항목 읽음) + "모두 읽음" + 알림 설정.
@@ -4251,6 +4278,7 @@
     });
   }
 
+  var _loginPinFails = {};   /* 이 기기에서 계정별 PIN 틀린 횟수 (재설정 권하기용) */
   function handleLogin(opts) {
     var state = currentState;
     prewarmLogin('memberLogin');   /* PIN 입력하는 동안 로그인 서버를 깨워 둠 (콜드 스타트 3~5초 숨김) */
@@ -4267,7 +4295,12 @@
         return switchDataForAuth().then(function () { return true; });
       }, function (e) {
         hideBusy();
-        modalNotice('로그인 실패', isAuthRejection(e) ? authErrMsg(e) : '서버 연결이 불안정해요. 잠시 후 다시 시도해주세요.');
+        var pinBad = isAuthRejection(e) && /PIN/.test(authErrMsg(e));
+        if (pinBad) _loginPinFails[entry.id] = (_loginPinFails[entry.id] || 0) + 1;
+        if (pinBad && (_loginPinFails[entry.id] >= 2 || (e && e.code) !== 'permission-denied')) {
+          modalConfirm('PIN이 맞지 않아요', authErrMsg(e) + '\n\nPIN이 기억나지 않으면 관리자에게 새 PIN을 받을 수 있어요. 가입 때 등록한 번호로 임시 PIN을 문자로 보내 드려요.', '🔑 PIN 재설정 요청', 'primary')
+            .then(function (go) { if (go) openPinResetModal(entry.id); });
+        } else modalNotice('로그인 실패', isAuthRejection(e) ? authErrMsg(e) : '서버 연결이 불안정해요. 잠시 후 다시 시도해주세요.');
         return null;
       }).then(function (ok) {
         hideBusy();
@@ -4644,7 +4677,7 @@
     if (!text || !meId || !otherId) return Promise.resolve();
     /* 보관(휴면) 계정에게는 채팅 전송 불가 — 로그인도 못 하고 푸시도 가면 안 됨 (서버도 다시 확인) */
     var otherE = ((currentState && currentState.entries) || []).find(function (x) { return x.id === otherId; });
-    if (otherE && otherE.deactivated) return Promise.reject(new Error('상대가 지금 휴면(보관) 중이라 메시지를 보낼 수 없어요.'));
+    if (otherE && otherE.deactivated) return Promise.reject(new Error('상대가 지금 쉬는 중이라 메시지를 보낼 수 없어요.'));
     /* 서버가 권한(내 프로필·주선자, 대화 수락 여부) 확인 후 대화방에 저장하고 상대에게 알림 */
     return callFn('chatAction', { op: 'send', as: meId, other: otherId, text: text }).then(function (r) {
       var m = r && r.data && r.data.msg; var key = dmPairKey(meId, otherId);
@@ -5334,7 +5367,7 @@
     return inc + out + msg + (noChat ? 0 : chatUnreadTotal(state, me));   /* noChat: mineSeenAt 판단용 (채팅은 대화방 읽음으로 따로 정리) */
   }
   function adminMsgUnread(state) {
-    return (state.messages || []).filter(function (m) { return m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin; }).length;
+    return (state.messages || []).filter(amUnreadMsg).length;
   }
   function markMineSeen() {
     if (!currentUser) return;
@@ -5352,8 +5385,9 @@
   /* 관리자가 특정 회원 대화를 펼치면 그 회원의 메시지를 읽음 처리 */
   function markAdminUserRead(eid) {
     if (!isAdminUnlocked) return;
-    var has = (currentState.messages || []).some(function (m) { return m.entryId === eid && m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin; });
+    var has = (currentState.messages || []).some(function (m) { return m.entryId === eid && amUnreadMsg(m); });
     if (!has) return;
+    amMarkLocal(eid);
     callFn('msgAction', { op: 'adminRead', entryId: eid }).catch(function () {});   /* B-2 */
   }
   /* 하루 경계를 한국시간(KST, UTC+9) 기준으로 계산 (UTC로 하면 KST 오전 9시 이전 접속이 전날로 잡혀 누락됨) */
@@ -5412,12 +5446,25 @@
   function statusLabel(st) {
     return st === 'approved' ? '승인됨' : st === 'rejected' ? '거절됨' : st === 'held' ? '보류 중' : st === 'user_approved' ? '본인 승인' : '대기중';
   }
-  function statusChip(st) {
+  var REQ_INBOX_CAP = 5;   /* 서버 reqCreate 와 같은 값 — 받는 사람이 답 안 한 신청이 이만큼이면 새 신청을 잠시 막음 (2026-11-01) */
+  function inboxWaiting(state, id) { return (state.dateRequests || []).filter(function (r) { return r.toId === id && reqStatus(r) === 'pending'; }).length; }
+  /* 답 없는 신청은 7일 뒤 자동 마감 — 이 시각 전 신청은 이 시각부터 셈 (서버 functions REQ_EXPIRE_FROM_MS 와 같게) */
+  var REQ_EXPIRE_FROM = Date.parse('2026-11-01T15:00:00Z');
+  function reqLeftText(r) {
+    if (!r || !r.submittedAt) return '';
+    var left = Math.max(Date.parse(r.submittedAt) || 0, REQ_EXPIRE_FROM) + 7 * 86400000 - Date.now();
+    if (left <= 0) return '곧 마감';
+    if (left < 86400000) return '오늘 마감';
+    return Math.ceil(left / 86400000) + '일 남음';
+  }
+  function statusChip(st, r) {
+    if (r && r.expired) return '<span class="chip" style="background:#f1f3f4;color:#5f6368;">⌛ 답 없이 마감</span>';
     if (st === 'approved') return '<span class="chip" style="background:#e6f4ea;color:#137333;">승인됨</span>';
     if (st === 'rejected') return '<span class="chip" style="background:#fce8e6;color:#c5221f;">거절됨</span>';
     if (st === 'held') return '<span class="chip" style="background:#fef7e0;color:#b06000;">보류 중</span>';
     if (st === 'user_approved') return '<span class="chip" style="background:#fef7e0;color:#b06000;">본인 승인 · 관리자 확인 중</span>';
-    return '<span class="chip" style="background:#f1f3f4;color:#5f6368;">대기중</span>';
+    var lt = reqLeftText(r);
+    return '<span class="chip" style="background:#f1f3f4;color:#5f6368;"' + (lt ? ' title="답이 없으면 7일 뒤 자동 마감돼요 (거절 아님)"' : '') + '>대기중' + (lt ? ' · ⌛ ' + lt : '') + '</span>';
   }
   /* 답장 메시지 입력 모달 (승인/보류/거절 공통). OK=문자열('' 가능), 취소=null */
   /* chips(선택): 한 번 눌러 고르는 문구 목록 → 누르면 입력칸에 채워짐(수정 가능) */
@@ -5822,13 +5869,16 @@
     var _pendChip = function (label) { return '<span class="card-btn" style="background:var(--card);color:var(--muted);cursor:default;border-color:var(--line);">' + label + '</span>'; };
     var _rejChip = function (label) { return '<span class="card-btn" style="background:#f6e9e7;color:#c5221f;cursor:default;border-color:#e0a3a0;">' + label + '</span>'; };
     var canSeePhoto = !!(viewer && pCount > 0 && canViewPhotoOf(state, viewer.id, entry.id));
+    var _busy = !!(viewer && !isAdminUnlocked && viewer.id !== entry.id && inboxWaiting(state, entry.id) >= REQ_INBOX_CAP);
+    var _busyBtn = '<button type="button" class="card-btn" data-action="busy-suggest" data-id="' + escapeHtml(entry.id) + '" style="background:var(--card);color:var(--muted);border-color:var(--line);">📮 답장 대기 중 · 다른 분 보기</button>';
     var photoBtn;
     if (canSeePhoto) photoBtn = '<button type="button" class="card-btn approve" data-action="gallery" data-id="' + escapeHtml(entry.id) + '">📷 사진 볼 수 있어요</button>';
     else {
       var _pr = viewer ? myLatestReqTo(state, viewer.id, entry.id, 'photo') : null;
       var _ps = _pr ? reqStatus(_pr) : null;
       if (_ps === 'pending' || _ps === 'held' || _ps === 'user_approved') photoBtn = _pendChip('📷 요청 대기중');
-      else if (_ps === 'rejected') photoBtn = _rejChip('📷 거절됨');
+      else if (_ps === 'rejected') photoBtn = _pr.expired ? _pendChip('📷 답 없이 마감') : _rejChip('📷 거절됨');
+      else if (_busy) photoBtn = _busyBtn;
       else photoBtn = '<button type="button" class="card-btn orange" data-action="request-photo" data-id="' + escapeHtml(entry.id) + '">📷 사진 요청</button>';
     }
     /* 대화 신청(구 번호 요청): 성사되면 앱 내 채팅. 이미 성사면 "채팅하기" */
@@ -5839,7 +5889,8 @@
       var _cr = viewer ? myLatestReqTo(state, viewer.id, entry.id, 'contact') : null;
       var _cs = _cr ? reqStatus(_cr) : null;
       if (_cs === 'pending' || _cs === 'held' || _cs === 'user_approved') dateBtn = _pendChip('💌 대화 대기중');
-      else if (_cs === 'rejected') dateBtn = _rejChip('💌 거절됨');
+      else if (_cs === 'rejected') dateBtn = _cr.expired ? _pendChip('💌 답 없이 마감') : _rejChip('💌 거절됨');
+      else if (_busy) dateBtn = _busyBtn;
       else dateBtn = '<button type="button" class="card-btn primary" data-action="request-contact" data-id="' + escapeHtml(entry.id) + '">💌 대화 신청</button>';
     }
     /* 같은 주선자 소속(형제)끼리는 사진·대화 요청 불가 — 임시 PIN으로 직접 로그인한 경우도 포함 */
@@ -6689,6 +6740,7 @@
     var replyMsg = '';
     if (st === 'approved' && r.approveMessage) replyMsg = '<div class="mine-note">답장: ' + escapeHtml(r.approveMessage) + '</div>';
     else if (st === 'held' && r.holdMessage) replyMsg = '<div class="mine-note">보류 메시지: ' + escapeHtml(r.holdMessage) + '</div>';
+    else if (st === 'rejected' && r.expired) replyMsg = '<div class="mine-note">⌛ ' + (r.expiredWhy === 'resting' ? '상대가 지금 쉬는 중이라' : '7일 동안 답이 없어') + ' 자동으로 마감됐어요. 거절된 건 아니에요 — 다른 분께도 신청해 보세요.</div>';
     else if (st === 'rejected' && r.rejectMessage) replyMsg = '<div class="mine-note reject">거절 메시지: ' + escapeHtml(r.rejectMessage) + '</div>';
     /* 주선자가 친구 대신 응답한 경우 → 요청자에게 안내 (답장이 "친구…"로 보여도 뜬금없지 않게) */
     if (!incoming && r.decidedViaMm) replyMsg += '<div class="mine-note" style="background:var(--gold-soft);border:1px solid var(--gold);border-radius:8px;color:var(--gold);">🤝 이 프로필은 <b>주선자가 대신 관리</b>해요. 위 답장은 주선자가 전한 거예요.</div>';
@@ -6731,7 +6783,7 @@
           '<div class="chat-av md" style="background:' + avatarColor(otherId) + ';">' + escapeHtml(initials(other ? other.nickname : '?')) + '</div>' +
           '<span class="req-mid"><span class="req-sum-who">' + escapeHtml(otherLabel) + '</span>' +
             '<span class="req-sub">' + (isPhoto ? '📷 사진 요청' : '💌 대화 요청') + ' · ' + escapeHtml(fmtDate(r.submittedAt)) + (other && other.deactivated ? ' · 💤 상대 휴면 중' : '') + '</span></span>' +
-          statusChip(st) +
+          statusChip(st, r) +
         '</summary>' +
         '<div class="req-fold-body">' + body + '</div>' +
       '</details>'
@@ -7848,7 +7900,7 @@
     var pendNew = pending.filter(function (p) { return !p.heldReason && !p.rejectedAt; }).length;
     var pendHeld = pending.filter(function (p) { return !!p.heldReason; }).length;
     var editWait = entries.filter(function (e) { return e.editReviewAt && !e.deactivated; }).length;
-    var unreadQna = msgs.filter(function (m) { return m && m.from === 'user' && !m.readByAdmin && !m.hiddenByAdmin; }).length;
+    var unreadQna = msgs.filter(amUnreadMsg).length;
 
     /* 2) 최근 7일(오늘 포함 7일) vs 직전 7일(8~14일 전) 동향 비교 */
     var cand = entries.filter(function (e) { return !e.isMatchmaker; });
@@ -8558,6 +8610,7 @@
               '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> <span class="chip" style="background:var(--gold-soft);color:var(--gold);">🗄 보관</span>' + viaChip + sentChip,
               '<div class="p-meta">' + genderLabel(e.gender) + ' · ' + escapeHtml(e.region || '') + (e.deactivatedAt ? ' · 보관: ' + fmtDate(e.deactivatedAt) : '') + '</div>' +
               (e.deactivatedReason ? '<div class="p-meta" style="color:var(--ink);">사유: "' + escapeHtml(e.deactivatedReason) + '"</div>' : '') +
+              ((e.leaveRating || e.leaveNote) ? '<div class="p-meta" style="color:var(--gold);">' + (e.leaveRating ? '⭐ 만족도 ' + e.leaveRating + '/5' : '💬 의견') + (e.leaveNote ? ' — "' + escapeHtml(e.leaveNote) + '"' : '') + '</div>' : '') +
               sentNote +
               '<div class="pending-actions">' +
                 '<button type="button" class="card-btn" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">👤 프로필</button>' +
@@ -8647,7 +8700,7 @@
       if (st === 'approved') {
         actionBtns = manageBtns;
       } else if (st === 'rejected') {
-        actionBtns = '<span class="chip" style="background:#f1f3f4;color:#5f6368;">' + (r.rejectedBy === 'user' ? '본인 거절' : '관리자 거절') + '</span>' + manageBtns;
+        actionBtns = '<span class="chip" style="background:#f1f3f4;color:#5f6368;">' + (r.expired ? '⌛ 7일 자동 마감' : r.rejectedBy === 'user' ? '본인 거절' : '관리자 거절') + '</span>' + manageBtns;
       } else {
         actionBtns = decideBtns + manageBtns;
       }
@@ -8798,119 +8851,88 @@
       '</div>';
     var reqSearchBox = '<input type="text" id="admin-req-search" value="' + escapeHtml(adminReqSearch) + '" placeholder="🔍 닉네임 · 고유번호 검색" autocomplete="off" style="width:100%;box-sizing:border-box;margin:0 0 10px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;font-size:0.92rem;font-family:inherit;">';
 
-    /* 회원 명단 (트리): 로그인 계정(주선자/일반)이 최상위, 그 아래 관리 프로필(본인/친구) */
-    /* e(이 사람)가 볼 수 있는 사진/번호 수 (e가 "보는 주체") */
+    /* 👥 회원 명단 (2026-11-01 Benny: '회원 명단 파악이 힘들다') — 맨 위 숫자가 곧 거르기 버튼, 줄마다 성별·나이·지역·가입·접속·받은 신청.
+       기본 = 활동 중 회원을 최근 가입 순으로 (새로 온 사람이 맨 위). 대리 프로필은 '↳ ○○ 소개'로 한 줄에 */
     var _allIds = {}; allEntries.forEach(function (x) { _allIds[x.id] = true; });
     function permCounts(e) {   /* 색인으로 바로 셈 (예전: 회원마다 전체 회원×전체 요청) */
       var idx = permIndex(state), cnt = function (m) { return m ? Object.keys(m).filter(function (id) { return id !== e.id && _allIds[id]; }).length : 0; };
       return { photoN: cnt(idx.photo[e.id]), contactN: cnt(idx.contact[e.id]) };
     }
-    var childrenByMgr = {};
-    allEntries.forEach(function (e) { if (e.managedBy) { (childrenByMgr[e.managedBy] = childrenByMgr[e.managedBy] || []).push(e); } });
-    var tops = allEntries.filter(function (e) { return !e.managedBy; }).map(function (e) {
-      var pc = permCounts(e); return { e: e, photoN: pc.photoN, contactN: pc.contactN };
-    });
-    var sc = adminSeenSort, sdir = sc.dir === 'asc' ? 1 : -1;
-    tops.sort(function (a, b) {
+    var _sNow = Date.now(), _sWeek = 7 * 86400000, _gotN = {}, _waitN = {}, _kids = {};
+    (state.dateRequests || []).forEach(function (r) { if (!r || !r.toId) return; _gotN[r.toId] = (_gotN[r.toId] || 0) + 1; if (reqStatus(r) === 'pending') _waitN[r.toId] = (_waitN[r.toId] || 0) + 1; });
+    allEntries.forEach(function (e) { if (e.managedBy) _kids[e.managedBy] = (_kids[e.managedBy] || 0) + 1; });
+    function seenKind(e) { return isMatchmakerEntry(e) ? 'mm' : e.testAccount ? 'test' : e.deactivated ? 'resting' : 'active'; }
+    function seenNew(e) { return seenKind(e) === 'active' && e.submittedAt && _sNow - Date.parse(e.submittedAt) < _sWeek; }
+    function seenQuiet(e) { return seenKind(e) === 'active' && !seenNew(e) && (!e.lastSeenAt || _sNow - Date.parse(e.lastSeenAt) > _sWeek); }
+    var _sAct = allEntries.filter(function (e) { return seenKind(e) === 'active'; });
+    var _sN = {
+      active: _sAct.length, 'new': allEntries.filter(seenNew).length, quiet: allEntries.filter(seenQuiet).length,
+      male: _sAct.filter(function (e) { return e.gender === 'male'; }).length, female: _sAct.filter(function (e) { return e.gender === 'female'; }).length,
+      resting: allEntries.filter(function (e) { return seenKind(e) === 'resting'; }).length, mm: allEntries.filter(function (e) { return seenKind(e) === 'mm'; }).length,
+      test: allEntries.filter(function (e) { return seenKind(e) === 'test'; }).length, all: allEntries.length
+    };
+    var _sVisited = _sAct.filter(function (e) { return e.lastSeenAt && _sNow - Date.parse(e.lastSeenAt) <= _sWeek; }).length;
+    var SEEN_F = [['active', '활동 중'], ['new', '🆕 이번 주'], ['male', '남'], ['female', '여'], ['quiet', '🌙 7일+ 안 옴'], ['resting', '💤 쉬는 중'], ['mm', '🤝 주선자'], ['test', '🧪'], ['all', '전체']];
+    if (!SEEN_F.some(function (f) { return f[0] === adminSeenType; })) adminSeenType = 'active';
+    function seenPass(e) {
+      var k = seenKind(e), f = adminSeenType;
+      if (f === 'all') return true;
+      if (f === 'male' || f === 'female') return k === 'active' && e.gender === f;
+      if (f === 'new') return seenNew(e);
+      if (f === 'quiet') return seenQuiet(e);
+      return k === f;
+    }
+    var _sc = adminSeenSort, _sdir = _sc.dir === 'asc' ? 1 : -1;
+    var seenList = allEntries.filter(seenPass).map(function (e) { var pc = permCounts(e); return { e: e, photoN: pc.photoN, contactN: pc.contactN }; });
+    seenList.sort(function (a, b) {
       var r = 0;
-      if (sc.col === 'uid') r = (a.e.serial || 0) - (b.e.serial || 0);
-      else if (sc.col === 'seen') r = (a.e.lastSeenAt || '').localeCompare(b.e.lastSeenAt || '');
-      else if (sc.col === 'photo') r = a.photoN - b.photoN;
-      else if (sc.col === 'contact') r = a.contactN - b.contactN;
+      if (_sc.col === 'join') r = (a.e.submittedAt || '').localeCompare(b.e.submittedAt || '');
+      else if (_sc.col === 'seen') r = (a.e.lastSeenAt || '').localeCompare(b.e.lastSeenAt || '');
+      else if (_sc.col === 'got') r = (_waitN[a.e.id] || 0) - (_waitN[b.e.id] || 0) || (_gotN[a.e.id] || 0) - (_gotN[b.e.id] || 0);
+      else r = (a.e.serial || 0) - (b.e.serial || 0);
       if (r === 0) r = (a.e.serial || 0) - (b.e.serial || 0);
-      return r * sdir;
+      return r * _sdir;
     });
-    function permCell(e, count, kind) {
-      if (isMatchmakerEntry(e)) return '<td style="text-align:center;color:var(--muted);">—</td>'; /* 순수 주선자는 소개팅 당사자 아님 */
-      if (kind !== 'photo') { /* 채팅(연락처) 칸: 몇 명 적용 중인지 숫자만 (클릭하면 관리) */
-        return '<td style="text-align:center;"><button type="button" class="card-btn" data-action="perm-contact" data-id="' + escapeHtml(e.id) + '" style="flex:none;padding:3px 12px;">' + count + '</button></td>';
-      }
-      return '<td style="text-align:center;"><button type="button" class="card-btn" data-action="perm-photo" data-id="' + escapeHtml(e.id) + '" style="flex:none;padding:3px 9px;">📷 ' + count + '</button></td>';
+    function seenMD(iso) { var d = iso ? new Date(iso) : null; return d && !isNaN(d) ? (d.getMonth() + 1) + '/' + d.getDate() : '—'; }
+    function seenRow(d) {
+      var e = d.e, k = seenKind(e), mmE = e.managedBy ? allEntries.find(function (x) { return x.id === e.managedBy; }) : null;
+      var badge = seenNew(e) ? '<span class="chip" style="background:#e8f0fe;color:#1a73e8;">🆕 새로</span>'
+        : k === 'resting' ? '<span class="chip">💤 쉬는 중</span>' : seenQuiet(e) ? '<span class="chip">🌙 조용</span>'
+        : k === 'mm' ? (_kids[e.id] ? '<span class="chip">소개 ' + _kids[e.id] + '명</span>' : '') : k === 'test' ? '<span class="chip">🧪 테스트</span>' : '';
+      var who = [e.gender === 'male' ? '남' : e.gender === 'female' ? '여' : '', e.birthYear ? String(e.birthYear).slice(2) + '년생' : '', e.region || '', e.workplace || '']
+        .filter(Boolean).map(escapeHtml).join(' · ');
+      var blob = ((formatUid(e) || '') + ' ' + (e.nickname || '') + ' ' + (e.region || '') + ' ' + (mmE ? mmE.nickname : '') + ' ' + (decryptedNames[e.id] || '') + ' ' + (decryptedContacts[e.id] || '')).toLowerCase();
+      var dater = k !== 'mm';
+      return '<div class="seen-row" data-seensearch="' + escapeHtml(blob) + '">' +
+        '<div class="seen-l1"><span class="seen-uid">' + escapeHtml(formatUid(e) || '—') + '</span> ' +
+          '<b class="seen-nick" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">' + escapeHtml(e.nickname || '(이름 없음)') + '</b> ' + badge + ' ' + levelBadge(e, state) + '</div>' +
+        (who || mmE ? '<div class="seen-l2">' + who + (mmE ? (who ? ' · ' : '') + '↳ ' + escapeHtml(mmE.nickname || '') + ' 소개' : '') + '</div>' : '') +
+        '<div class="seen-l3">' +
+          '<span>가입 ' + seenMD(e.submittedAt) + '</span>' +
+          (e.managedBy ? '' : '<span class="seen-link" data-action="log-filter" data-nick="' + escapeHtml(e.nickname) + '" title="눌러서 이 사람 활동 기록">접속 ' + escapeHtml(e.lastSeenAt ? relTimeShort(e.lastSeenAt) : '기록 없음') + '</span>') +
+          (dater ? '<span' + (_waitN[e.id] >= 3 ? ' style="color:var(--accent);font-weight:700;"' : '') + '>📥 받은 ' + (_gotN[e.id] || 0) + (_waitN[e.id] ? ' · 대기 ' + _waitN[e.id] : '') + '</span>' : '') +
+          (dater ? '<button type="button" class="seen-mini" data-action="perm-photo" data-id="' + escapeHtml(e.id) + '" title="이 사람이 볼 수 있는 사진">📷 ' + d.photoN + '</button>' +
+            '<button type="button" class="seen-mini" data-action="perm-contact" data-id="' + escapeHtml(e.id) + '" title="이 사람이 대화할 수 있는 사람">💬 ' + d.contactN + '</button>' : '') +
+          (e.acqFilterCount ? '<span title="지인 필터">🙈 ' + e.acqFilterCount + '</span>' : '') +
+          (dater && !e.deactivated ? '<label class="seen-test" title="테스트 계정 (명단·통계에서 빠짐)"><input type="checkbox" data-testtoggle="' + escapeHtml(e.id) + '"' + (e.testAccount ? ' checked' : '') + '>🧪</label>' : '') +
+        '</div></div>';
     }
-    function nameCell(e, indent) {
-      return '<td data-action="card-detail" data-id="' + escapeHtml(e.id) + '" style="cursor:pointer;' + (indent ? 'padding-left:18px;' : '') + '">' +
-        (indent ? '<span style="color:var(--muted);">↳ </span>' : '') +
-        '<div style="font-variant-numeric:tabular-nums;color:var(--muted);font-size:0.78rem;display:inline;">' + escapeHtml(formatUid(e) || '—') + (e.testAccount ? ' 🧪' : '') + '</div>' +
-        '<div style="text-decoration:underline dotted;">' + escapeHtml(e.nickname) + '</div>' +
-        '<div style="margin-top:3px;">' + levelBadge(e, state) + '</div>' +
-        '</td>';
+    function seenSortBtn(col, label) {
+      var on = _sc.col === col;
+      return '<button type="button" class="card-btn' + (on ? ' primary' : '') + '" data-action="seen-sort" data-col="' + col + '" style="flex:none;padding:4px 10px;font-size:0.8rem;">' + label + (on ? (_sc.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</button>';
     }
-    /* 접속 칸 = 클릭하면 아래 활동 기록을 그 닉네임으로 필터링 (날짜/기록없음 자체를 누름).
-       sub(대리 프로필)은 자체 활동 기록이 없으므로 클릭 없이 "—"만 표시. */
-    function seenCell(e) {
-      var dateTxt = e.lastSeenAt ? new Date(e.lastSeenAt).toLocaleString('ko-KR') : '기록 없음';
-      return '<td class="seen-date" data-action="log-filter" data-nick="' + escapeHtml(e.nickname) + '" title="눌러서 이 사람 활동 기록 보기"' +
-        ' style="cursor:pointer;text-decoration:underline dotted;">' + escapeHtml(dateTxt) + '</td>';
-    }
-    /* 지인 필터 적용 수(숫자만). 매칭 대상은 비공개, 개수만 CF가 entry.acqFilterCount에 저장 */
-    function acqCell(e) {
-      if (isMatchmakerEntry(e)) return '<td style="text-align:center;color:var(--muted);">—</td>';
-      var n = e.acqFilterCount || 0;
-      return '<td style="text-align:center;' + (n ? 'font-weight:700;color:var(--accent);' : 'color:var(--muted);') + '">' + n + '</td>';
-    }
-    /* 테스트 체크박스 (관리자가 직접 지정/해제). 순수 주선자 계정은 대상 아님. 보관 계정은 상호배타로 비활성화 */
-    function testCell(e) {
-      if (isMatchmakerEntry(e)) return '<td style="text-align:center;color:var(--muted);">—</td>';
-      if (e.deactivated) return '<td style="text-align:center;"><input type="checkbox" disabled title="보관 계정은 테스트로 지정할 수 없어요" style="width:17px;height:17px;opacity:.4;cursor:not-allowed;"></td>';
-      return '<td style="text-align:center;"><input type="checkbox" data-testtoggle="' + escapeHtml(e.id) + '"' + (e.testAccount ? ' checked' : '') + ' style="width:17px;height:17px;accent-color:var(--accent);cursor:pointer;"></td>';
-    }
-    /* 계정 유형 분류: 일반(general) / 주선자(mm) / 주선자 관리 프로필(managed=대리·본인) */
-    var acctType = function (e) { return e.isMatchmaker ? 'mm' : (e.managedBy ? 'managed' : 'general'); };
-    /* 정렬 비교자 ({e,photoN,contactN}) — 트리/평면 목록 공통 (필터 걸어도 정렬 동작) */
-    function seenCmp(a, b) {
-      var r = 0;
-      if (sc.col === 'uid') r = (a.e.serial || 0) - (b.e.serial || 0);
-      else if (sc.col === 'seen') r = (a.e.lastSeenAt || '').localeCompare(b.e.lastSeenAt || '');
-      else if (sc.col === 'photo') r = a.photoN - b.photoN;
-      else if (sc.col === 'contact') r = a.contactN - b.contactN;
-      if (r === 0) r = (a.e.serial || 0) - (b.e.serial || 0);
-      return r * sdir;
-    }
-    function seenRow(e, indent) {
-      var pc = permCounts(e);
-      /* 관리자 표: 고유번호·닉네임 + (관리자 전용) 복호화 실명·전화로도 검색 */
-      var blob = ((formatUid(e) || '') + ' ' + (e.nickname || '') + ' ' + (decryptedNames[e.id] || '') + ' ' + (decryptedContacts[e.id] || '')).toLowerCase();
-      return '<tr' + (indent ? ' style="background:rgba(0,0,0,0.02);"' : '') + ' data-seensearch="' + escapeHtml(blob) + '">' +
-        nameCell(e, indent) +
-        (indent ? '<td class="seen-date" style="color:var(--muted);">—</td>' : seenCell(e)) +
-        permCell(e, pc.photoN, 'photo') + permCell(e, pc.contactN, 'contact') + acqCell(e) + testCell(e) + '</tr>';
-    }
-    var seenRows;
-    if (adminSeenType === 'all' || adminSeenType === 'mm') {
-      /* 전체·주선자: 상위 계정 + 그 아래 관리 프로필(본인·친구)을 트리로. 주선자 필터는 주선자 트리만 */
-      var topList = tops.filter(function (d) { return adminSeenType === 'all' || d.e.isMatchmaker; });
-      seenRows = topList.map(function (d) {
-        var e = d.e;
-        var row = seenRow(e, false);
-        var kids = (childrenByMgr[e.id] || []).slice().sort(function (a, b) { return (b.ownerSelf ? 1 : 0) - (a.ownerSelf ? 1 : 0); });
-        row += kids.map(function (c) { return seenRow(c, true); }).join('');
-        return row;
-      }).join('') || '<tr><td colspan="6" style="color:var(--muted);text-align:center;padding:14px;">해당 유형의 회원이 없어요.</td></tr>';
-    } else {
-      /* 일반/관리 프로필: 트리 없이 평면 목록 (adminSeenSort 정렬 적용 — 필터 걸어도 헤더 정렬 동작) */
-      var flat = allEntries.filter(function (e) { return acctType(e) === adminSeenType; })
-        .map(function (e) { var pc = permCounts(e); return { e: e, photoN: pc.photoN, contactN: pc.contactN }; });
-      flat.sort(seenCmp);
-      seenRows = flat.map(function (d) { return seenRow(d.e, false); }).join('') || '<tr><td colspan="6" style="color:var(--muted);text-align:center;padding:14px;">해당 유형의 회원이 없어요.</td></tr>';
-    }
-    var typeFilterBtns = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 10px;">' +
-      [['all', '전체'], ['general', '일반 회원'], ['mm', '주선자']].map(function (f) {
+    var seenSearchBox = '<input type="text" id="seen-search" value="' + escapeHtml(seenSearch) + '" placeholder="🔍 고유번호 · 닉네임 · 지역 · 이름 · 전화 검색" style="width:100%;box-sizing:border-box;margin:0 0 8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;font:inherit;background:var(--paper);color:var(--ink);">';
+    var seenSection = adminFold('👥 회원 명단', _sN.active,
+      '<div class="seen-sum">활동 <b>' + _sN.active + '</b>명 (남 ' + _sN.male + ' · 여 ' + _sN.female + ') · 이번 주 새로 <b>' + _sN['new'] + '</b> · 7일 안 접속 ' + _sVisited + ' · 쉬는 중 ' + _sN.resting + ' · 주선자 ' + _sN.mm + '</div>' +
+      '<div class="seen-filters">' + SEEN_F.map(function (f) {
         var on = adminSeenType === f[0];
-        return '<button type="button" class="filter-btn" data-action="seen-type" data-type="' + f[0] + '" aria-pressed="' + on + '">' + f[1] + '</button>';
-      }).join('') + '</div>';
-    function seenTh(col, label) {
-      return '<th data-action="seen-sort" data-col="' + col + '" style="cursor:pointer;user-select:none;white-space:nowrap;">' + label + sortArrow(adminSeenSort, col) + '</th>';
-    }
-    var seenSearchBox = '<input type="text" id="seen-search" value="' + escapeHtml(seenSearch) + '" placeholder="🔍 고유번호 · 닉네임 · 이름 · 전화 검색" style="width:100%;box-sizing:border-box;margin:0 0 8px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;font-size:0.92rem;font-family:inherit;">';
-    var seenSection = adminFold('👥 회원 명단', tops.length,
-      '<p class="sub">닉네임(고유번호) 클릭 = 프로필 · <b>접속 시간 클릭 = 그 사람 활동 기록</b> · 📷/💬 = <b>이 사람이 볼 수 있는</b> 사진·채팅 수(클릭해서 관리) · 맨 오른쪽 <b>테스트</b> 체크로 테스트 계정 지정.</p>' +
-      typeFilterBtns +
+        return '<button type="button" class="filter-btn" data-action="seen-type" data-type="' + f[0] + '" aria-pressed="' + on + '">' + f[1] + ' <b>' + _sN[f[0]] + '</b></button>';
+      }).join('') + '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 8px;"><span class="sub" style="font-weight:700;">정렬</span>' +
+        seenSortBtn('join', '가입') + seenSortBtn('seen', '접속') + seenSortBtn('got', '받은 대기') + seenSortBtn('uid', '고유번호') + '</div>' +
       seenSearchBox +
-      (tops.length
-        ? '<div class="admin-table-wrap"><table class="seen-table"><thead><tr>' +
-            seenTh('uid', '닉네임') + seenTh('seen', '접속') + seenTh('photo', '📷 사진') + seenTh('contact', '💬 채팅') + '<th style="white-space:nowrap;">🙈 필터</th>' + '<th style="white-space:nowrap;">🧪 테스트</th>' +
-          '</tr></thead><tbody>' + seenRows + '</tbody></table></div>'
-        : '<p class="sub">등록된 사람이 없어요.</p>'), false, 'seen');
+      '<p class="sub" style="margin:0 0 6px;">닉네임 → 프로필 · 접속 → 활동 기록 · 📷💬 → 볼 수 있는 사진·대화 · 📥 대기 3건+ 빨강</p>' +
+      (seenList.length ? '<div id="seen-list">' + seenList.map(seenRow).join('') + '</div>' : '<p class="sub">해당하는 회원이 없어요.</p>'), true, 'seen');
 
     /* 서버 용량 */
     var capSection = capacityHtml(state);
@@ -9002,7 +9024,7 @@
       if (m.hiddenByAdmin) return;
       (msgByEntry[m.entryId] = msgByEntry[m.entryId] || []).push(m);
     });
-    function amUnreadOf(eid) { return msgByEntry[eid].filter(function (m) { return m.from === 'user' && !m.readByAdmin; }).length; }
+    function amUnreadOf(eid) { return msgByEntry[eid].filter(amUnreadMsg).length; }
     /* 최근 활동 = 자동 안내를 뺀 마지막 메시지 기준 (재촉 문자가 순서를 흔들지 않게) */
     function amLastAtOf(eid) { var a = msgByEntry[eid].filter(function (m) { return !isAutoMsg(m); }); if (!a.length) a = msgByEntry[eid]; return a.reduce(function (x, m) { return (m.at || '') > x ? (m.at || '') : x; }, ''); }
     /* 실제 대화 = 회원이 한 번이라도 썼거나 내가 직접 쓴 메시지가 있음. 아니면 '자동 안내만' */
@@ -9051,7 +9073,7 @@
         '</div>' +
       '</details>';
     }).join('');
-    var adminMsgUnreadTotal = (state.messages || []).filter(function (m) { return m.from === 'user' && !m.hiddenByAdmin && !m.readByAdmin; }).length;
+    var adminMsgUnreadTotal = (state.messages || []).filter(amUnreadMsg).length;
     var adminMsgTitle = '💬 관리자 메시지' + (adminMsgUnreadTotal ? ' <span class="blink-soft" style="background:var(--accent);color:#fff;border-radius:999px;padding:1px 9px;font-size:0.74rem;font-weight:700;margin-left:6px;">🔔 새 ' + adminMsgUnreadTotal + '</span>' : '');
     var amBtn = function (k, label, n) { return '<button type="button" class="card-btn' + (_amFilter === k ? ' primary' : '') + '" data-action="am-filter" data-id="' + k + '" style="flex:none;padding:3px 10px;font-size:0.8rem;">' + label + ' ' + n + '</button>'; };
     var adminMsgSection = adminFold(adminMsgTitle, amTalkIds.length,
@@ -9332,10 +9354,35 @@
         (quickBar ? '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + quickBar + '</div>' : '') +
         headerBtns +
       '</div>' +
-        adminAiIntelBoardHtml(state) +
-        order.map(function (k) { return secHtml[k] || ''; }).join('') +
+        adminGroupsHtml(order, secHtml, {
+          security: _secOpenN, pending: pendingCountForBar, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,
+          held: heldPending.length, editrev: editRevList.length, reports: repRooms.length
+        }, adminAiIntelBoardHtml(state)) +
       '</div>'
     );
+  }
+
+  /* 관리자 탭 세 묶음 (2026-11-01 Benny: '관리자탭 불친절') — 🔔 지금 할 일은 건수 있는 칸만, 👥 회원(명단 펼침), 📊 기록·설정.
+     묶음 안 순서는 ✏️ 섹션 순서 그대로. todoN 에 없는 할 일 칸(PIN 요청)은 접힌 제목의 건수로 판단 */
+  var SEC_GROUP = { security: 'todo', pending: 'todo', pinreset: 'todo', reports: 'todo', held: 'todo', stale: 'todo', editrev: 'todo', adminmsg: 'todo',
+    seen: 'mem', deaclist: 'mem', active: 'mem', connlog: 'mem', couple: 'mem', dellog: 'mem', usage: 'rec', cap: 'rec', log: 'rec' };
+  function adminGroupsHtml(order, secHtml, todoN, aiBoard) {
+    var g = { todo: [], mem: [], rec: [] }, quiet = [];
+    var head = function (k) { var m = /class="pending-count">(\d+)</.exec(secHtml[k] || ''); return m ? +m[1] : 0; };
+    order.forEach(function (k) {
+      var grp = SEC_GROUP[k] || 'rec', html = secHtml[k] || '';
+      if (!html) return;
+      if (grp === 'todo') {
+        var n = (k in todoN) ? todoN[k] : head(k);
+        if (!n) { quiet.push((SEC_NAMES[k] || k).replace(/^\S+\s/, '')); return; }
+      }
+      if (k === 'seen') g.mem.unshift(html); else g[grp].push(html);
+    });
+    return '<h3 class="adm-group">🔔 지금 할 일 <small>' + (g.todo.length ? g.todo.length + '가지' : '') + '</small></h3>' +
+      (g.todo.length ? g.todo.join('') : '<p class="adm-calm">✅ 지금 처리할 일이 없어요.</p>') +
+      (quiet.length ? '<p class="sub" style="margin:2px 0 6px;">비어 있음: ' + escapeHtml(quiet.join(' · ')) + '</p>' : '') +
+      '<h3 class="adm-group">👥 회원</h3>' + g.mem.join('') +
+      '<h3 class="adm-group">📊 기록 · 설정</h3>' + (aiBoard || '') + g.rec.join('');
   }
 
   /* ---- 서버 용량 ---- */
@@ -9697,7 +9744,7 @@
   function applySeenSearch() {
     var q = (seenSearch || '').toLowerCase().replace(/\s+/g, ' ').trim();
     var tokens = q ? q.split(' ') : [];
-    var rows = document.querySelectorAll('.seen-table tr[data-seensearch]');
+    var rows = document.querySelectorAll('#seen-list [data-seensearch]');
     for (var i = 0; i < rows.length; i++) {
       var blob = rows[i].getAttribute('data-seensearch') || '';
       rows[i].style.display = tokens.every(function (t) { return blob.indexOf(t) >= 0; }) ? '' : 'none';
@@ -10610,14 +10657,18 @@
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
     if (entry.deleteRequested) { modalNotice('안내', '이미 삭제 요청됐어요. 관리자 확인 중이에요.'); return; }
-    modalMessage('🗑 탈퇴하기', entry.nickname + '님 프로필 삭제(탈퇴)를 요청할까요? 이유를 짧게 남겨 주세요. 요청하면 바로 명단에서 숨겨지고, 관리자 확인 후 완전히 지워져요. 프로필을 따로 지우지 않으셔도 돼요.\n(잠깐 쉬고 싶은 거라면 \'💤 잠시 쉬기\'로 명단에서만 숨길 수도 있어요)', '탈퇴 요청', 'danger', '예: 좋은 인연을 만났어요 / 개인 사정', true).then(function (reason) {
-      if (reason === null || reason === undefined) return;
+    openLeaveSheet({ title: '🗑 탈퇴하기', okLabel: '탈퇴 요청', okClass: 'danger', requireReason: true, selfAccount: !!currentUser && currentUser.id === id && !entry.managedBy,
+      msg: escapeHtml(entry.nickname) + '님 프로필 삭제(탈퇴)를 요청할까요? 요청하면 바로 명단에서 숨겨지고, 관리자 확인 후 완전히 지워져요. 이유를 짧게 남겨 주세요.<br>(잠깐 쉬고 싶은 거라면 \'💤 잠시 쉬기\'로 명단에서만 숨길 수도 있어요)',
+      placeholder: '예: 좋은 인연을 만났어요 / 개인 사정' }).then(function (res) {
+      if (!res) return;
+      if (res.mmOnly) { leaveAsMatchmakerOnly(res); return; }
+      var reason = res.reason + ratingTag(res.rating);
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
           var entries = (s.entries || []).map(function (e) {
             if (e.id !== id) return e;
-            var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString(); c.deleteReason = reason; return c;
+            var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString(); c.deleteReason = reason; if (res.rating) c.leaveRating = res.rating; return c;
           });
           tx.update(stateRef, { entries: entries });
         });
@@ -10626,7 +10677,7 @@
         notifyAdmin('🗑 삭제 요청', entry.nickname + '님이 프로필 삭제를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        modalNotice('탈퇴 요청 접수', '명단에서 바로 숨겨졌고, 관리자 확인 후 완전히 삭제돼요. 그 전엔 ⚙️ 내 계정에서 취소할 수 있어요.');
+        leaveThanks('탈퇴 요청 접수', '명단에서 바로 숨겨졌고, 관리자 확인 후 완전히 삭제돼요. 그 전엔 ⚙️ 내 계정에서 취소할 수 있어요. 그동안 함께해 주셔서 고마웠어요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
@@ -11064,32 +11115,131 @@
   }
 
   /* ── 비활성화(보관) 흐름 — 본인이 요청 → 관리자 승인 시 보관(테스트 계정) 처리 ── */
+  /* 💤 쉬기 · 🗑 탈퇴 · 🗄 휴면 공통 창 (2026-10-31 Benny: '앱 만족 별점, 주변 친구 소개 부탁, 굳이 쉬지 않아도 주선자 계정이 되면 프로필 지우고 안 보인다고 안내')
+     resolve: {reason, rating} · {mmOnly:true, reason, rating}(주선자로만 남기) · null(닫기). 별점은 선택 */
+  function ratingTag(r) { return r ? ' · 만족도 ⭐' + r : ''; }
+  function openLeaveSheet(o) {
+    return new Promise(function (resolve) {
+      var me = myAuthEntry(currentState);
+      var canMm = !!(o.selfAccount && me && !isMatchmakerEntry(me) && !me.managedBy && !me.deleteRequested);
+      var ov = openModal(
+        '<h3>' + o.title + '</h3>' +
+        '<p class="modal-msg">' + o.msg + '</p>' +
+        (canMm ? '<div class="leave-mm"><b>💡 ' + (o.mmLead || '쉬거나 탈퇴하지 않아도 돼요') + '</b><br>주선자 계정으로만 남으면 내 소개팅 프로필(사진·소개·직장 등)은 지워지고 회원 명단에도 보이지 않아요. 계정은 남아서 좋은 친구를 대신 소개할 수 있어요.' +
+          '<button type="button" class="card-btn" id="lv-mm" style="width:100%;margin-top:8px;">🤝 주선자로만 남기</button></div>' : '') +
+        '<label class="leave-lbl">베니브릿지 어떠셨어요? <span>(별점, 선택)</span></label>' +
+        '<div class="leave-stars" id="lv-stars">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" data-star="' + n + '" aria-label="' + n + '점">☆</button>'; }).join('') + '</div>' +
+        '<textarea class="modal-input" id="lv-reason" rows="3" maxlength="200" placeholder="' + escapeHtml(o.placeholder || '하고 싶은 말 (선택)') + '"></textarea>' +
+        '<p class="modal-msg" id="lv-warn" style="color:var(--accent);font-size:0.82rem;margin:4px 0 0;" hidden></p>' +
+        '<div class="modal-actions"><button type="button" class="card-btn" id="lv-cancel">닫기</button><button type="button" class="card-btn ' + (o.okClass || 'primary') + '" id="lv-ok">' + o.okLabel + '</button></div>'
+      );
+      var rating = 0, starsEl = ov.querySelector('#lv-stars'), ta = ov.querySelector('#lv-reason'), warn = ov.querySelector('#lv-warn');
+      function drawStars() { starsEl.querySelectorAll('[data-star]').forEach(function (b) { var on = +b.getAttribute('data-star') <= rating; b.textContent = on ? '★' : '☆'; b.classList.toggle('on', on); }); }
+      starsEl.addEventListener('click', function (e) { var b = e.target.closest('[data-star]'); if (!b) return; var n = +b.getAttribute('data-star'); rating = (rating === n ? 0 : n); drawStars(); });
+      function done(v) { closeModal(ov); resolve(v); }
+      ov.querySelector('#lv-cancel').addEventListener('click', function () { done(null); });
+      var mmBtn = ov.querySelector('#lv-mm');
+      if (mmBtn) mmBtn.addEventListener('click', function () { done({ mmOnly: true, rating: rating, reason: (ta.value || '').trim() }); });
+      ov.querySelector('#lv-ok').addEventListener('click', function () {
+        var reason = (ta.value || '').trim();
+        if (o.requireReason && !reason) { warn.textContent = '이유를 짧게 남겨 주세요.'; warn.hidden = false; return; }
+        if (o.requireSomething && !reason && !rating) { warn.textContent = '별점이나 하고 싶은 말을 남겨 주세요.'; warn.hidden = false; return; }
+        done({ reason: reason, rating: rating });
+      });
+    });
+  }
+  /* 끝난 뒤 감사 + 친구 소개 부탁 (아는 사람 소개로만 들어오는 곳이라) */
+  function leaveThanks(title, msg) {
+    var ov = openModal('<h3>' + title + '</h3><p class="modal-msg">' + msg + '</p>' +
+      '<div class="leave-mm" style="text-align:center;">🙏 베니브릿지가 괜찮으셨다면 <b>주변의 좋은 친구</b>에게 소개해 주세요. 아는 사람 소개로만 들어오는 곳이라 한 분의 소개가 큰 힘이 돼요.' +
+        '<button type="button" class="card-btn primary" id="lv-share" style="width:100%;margin-top:8px;">🔗 친구에게 소개하기</button></div>' +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="lv-close">닫기</button></div>');
+    ov.querySelector('#lv-share').addEventListener('click', function () { closeModal(ov); handleShare(); });
+    ov.querySelector('#lv-close').addEventListener('click', function () { closeModal(ov); });
+  }
+  /* 🤝 주선자로만 남기 = 주선자 계정으로 전환(convertToMatchmakerTx) + 내 소개팅 프로필(이제 '본인' 프로필) 삭제 요청 → 명단에서 바로 숨고 관리자 확인 후 삭제 */
+  function leaveAsMatchmakerOnly(res) {
+    var me = myAuthEntry(currentState); if (!me) return;
+    var oldId = me.id, nick = me.nickname || '회원';
+    modalConfirm('🤝 주선자로만 남기', '내 소개팅 프로필(사진·소개·직장 등)은 회원 명단에서 바로 내려가고, 관리자 확인 후 완전히 지워져요. 로그인 PIN은 그대로이고, 주선자 계정으로 친구를 대신 소개할 수 있어요. 진행할까요?', '주선자로만 남기', 'primary').then(function (ok) {
+      if (!ok) return;
+      convertToMatchmakerTx().then(function () {
+        return db.runTransaction(function (tx) {
+          return tx.get(stateRef).then(function (doc) {
+            var s = doc.data();
+            tx.update(stateRef, { entries: (s.entries || []).map(function (e) {
+              if (e.id !== oldId) return e;
+              var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString();
+              c.deleteReason = '주선자로만 남기 (내 프로필 삭제)' + (res.reason ? ' · ' + res.reason : '') + ratingTag(res.rating);
+              if (res.rating) c.leaveRating = res.rating;
+              return c;
+            }) });
+          });
+        });
+      }).then(function () {
+        appendLog('request', nick, '주선자로만 남기 (내 프로필 삭제 요청)' + ratingTag(res.rating));
+        notifyAdmin('🤝 주선자로만 남기', nick + '님이 주선자 계정만 남기고 소개팅 프로필 삭제를 요청했어요.' + ratingTag(res.rating) + (res.reason ? ' (' + res.reason + ')' : ''));
+        return refreshNow();
+      }).then(function () {
+        activeTab = 'mine'; paint(currentState);
+        leaveThanks('주선자 계정이 되었어요 🤝', '내 소개팅 프로필은 명단에서 내려갔고, 관리자 확인 후 완전히 지워져요. 이제 주선자 홈에서 친구를 대신 소개할 수 있어요.');
+      }).catch(function (err) { modalNotice('오류', '실패: ' + ((err && err.message) || err)); });
+    });
+  }
+  /* 🗄 휴면 중인 회원: 별점·의견 남기기 + 주선자로만 남기 (상단 띠의 버튼) */
+  function openDormantSheet() {
+    var me = myAuthEntry(currentState); if (!me || !me.deactivated) return;
+    openLeaveSheet({ title: restingSelf(me) ? '💤 잠시 쉬는 중이에요' : '🗄 휴면 중이에요', okLabel: '보내기', selfAccount: true, requireSomething: true,
+      mmLead: '소개팅은 쉬어도 주선자로 함께할 수 있어요',
+      msg: '지금은 다른 회원에게 내 프로필이 보이지 않아요. 그동안 베니브릿지가 어떠셨는지 알려 주시면 더 좋은 곳으로 다듬을게요.' }).then(function (res) {
+      if (!res) return;
+      if (res.mmOnly) { leaveAsMatchmakerOnly(res); return; }
+      db.runTransaction(function (tx) {
+        return tx.get(stateRef).then(function (doc) {
+          var s = doc.data();
+          tx.update(stateRef, { entries: (s.entries || []).map(function (e) {
+            if (e.id !== me.id) return e;
+            var c = JSON.parse(JSON.stringify(e)); if (res.rating) c.leaveRating = res.rating; c.leaveNote = res.reason || ''; c.leaveNoteAt = new Date().toISOString(); return c;
+          }) });
+        });
+      }).then(function () {
+        notifyAdmin('⭐ 휴면 회원 의견', (me.nickname || '회원') + '님' + ratingTag(res.rating) + (res.reason ? ' — ' + res.reason : ''));
+        leaveThanks('고마워요 🙏', '남겨 주신 이야기는 관리자에게 잘 전달했어요.');
+      }).catch(function (err) { modalNotice('오류', '전송 실패: ' + ((err && err.message) || err)); });
+    });
+  }
   function handleDeactivate(id) {
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
     if (!(currentUser && (currentUser.id === id || iManageTarget(currentState, id)))) {
       return modalNotice('안내', '본인(또는 내가 소개한 친구) 프로필만 비활성화할 수 있어요.');
     }
-    if (entry.deactivateRequested) { modalNotice('안내', '이미 잠시 쉬기를 요청했어요. 관리자 확인 중이에요.'); return; }
-    modalMessage('💤 잠시 쉬기',
-      '소개팅을 잠시 쉬는 동안 다른 회원에게 내 프로필이 보이지 않아요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있고, 언제든 ⚙️ 내 계정의 [다시 활동하기]로 돌아올 수 있어요. 이유를 짧게 남겨 주세요.',
-      '잠시 쉬기 요청', 'primary', '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요', true).then(function (reason) {
-      if (reason === null || reason === undefined) return;
+    if (entry.deactivated) { modalNotice('안내', '이미 쉬는 중이에요.'); return; }
+    openLeaveSheet({ title: '💤 잠시 쉬기', okLabel: '잠시 쉬기', requireReason: true, selfAccount: currentUser.id === id && !entry.managedBy,
+      msg: '소개팅을 잠시 쉬는 동안 다른 회원에게 내 프로필이 보이지 않아요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있고, 언제든 ⚙️ 내 계정의 [다시 활동하기]로 돌아올 수 있어요. 이유를 짧게 남겨 주세요.',
+      placeholder: '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요' }).then(function (res) {
+      if (!res) return;
+      if (res.mmOnly) { leaveAsMatchmakerOnly(res); return; }
+      var reason = res.reason + ratingTag(res.rating);
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
           var entries = (s.entries || []).map(function (e) {
             if (e.id !== id) return e;
-            var c = JSON.parse(JSON.stringify(e)); c.deactivateRequested = true; c.deactivateReqAt = new Date().toISOString(); c.deactivateReason = reason; return c;
+            /* 2026-11-01 Benny: 잠시 쉬기는 관리자 승인 없이 바로 */
+            var c = JSON.parse(JSON.stringify(e)); c.deactivated = true; c.deactivatedVia = 'deactivate-request'; c.deactivatedAt = new Date().toISOString(); c.deactivatedReason = reason;
+            delete c.deactivateRequested; delete c.deactivateReqAt; delete c.deactivateReason; if (res.rating) c.leaveRating = res.rating;
+            delete c.returnNudged; c.returnAt = new Date(Date.now() + 14 * 86400000).toISOString();   /* 2주 뒤 서버가 '다시 활동해 볼까요?' 한 번 (고르기는 뺌 11-01) */
+            return c;
           });
           tx.update(stateRef, { entries: entries });
         });
       }).then(function () {
-        appendLog('request', entry.nickname, '프로필 비활성화(보관) 요청 · ' + reason);
+        appendLog('request', entry.nickname, '잠시 쉬기 · ' + reason);
         notifyAdmin('🗄 비활성화 요청', entry.nickname + '님이 프로필 비활성화(보관)를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        modalNotice('요청 접수', '관리자 확인 후 보관 상태로 전환돼요. 그때까지는 명단에 남아 있어요.');
+        leaveThanks('잠시 쉬는 중 💤', '지금부터 다른 회원에게 내 프로필이 보이지 않아요. 2주 뒤에 새 소식과 함께 한 번 알려 드릴게요. 돌아오고 싶을 땐 언제든 ⚙️ 내 계정의 [♻️ 다시 활동하기]를 누르면 돼요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
@@ -11376,7 +11526,7 @@
     var target = state.entries.find(function (e) { return e.id === toId; });
     if (!target) return;
     /* 보관(휴면) 계정에는 요청 불가 — 명단엔 숨겨지지만 요청함·채팅 등 다른 경로의 카드에서 들어올 수 있음 */
-    if (target.deactivated) return modalNotice('안내', (target.nickname || '이 회원') + '님은 지금 휴면(보관) 중이라 요청할 수 없어요.');
+    if (target.deactivated) return modalNotice('안내', (target.nickname || '이 회원') + '님은 지금 쉬는 중이라 요청할 수 없어요.');
     var isPhoto = type === 'photo';
     var typeLabel = isPhoto ? '사진 보기' : '대화 신청';
     var actionText = isPhoto ? '사진 보기 요청' : '대화 신청';
@@ -11967,6 +12117,30 @@
     '자기소개를 조금 더 알려주실 수 있을까요?',
     '조금 더 생각해 볼 시간이 필요해요. 곧 답드릴게요!'
   ];
+  /* 📮 답장 대기가 많은 분 대신: 아직 신청을 많이 못 받았고 나와 주고받은 적 없는 이성 회원 (새로 온 순) */
+  function openFreshSuggest(busyId) {
+    var state = currentState, me = findMyEntry(state);
+    if (!me) return;
+    var busy = (state.entries || []).find(function (e) { return e.id === busyId; });
+    var talked = {};
+    (state.dateRequests || []).forEach(function (r) { if (r.fromId === me.id) talked[r.toId] = 1; if (r.toId === me.id) talked[r.fromId] = 1; });
+    var recv = {};
+    (state.dateRequests || []).forEach(function (r) { if (reqStatus(r) === 'pending') recv[r.toId] = (recv[r.toId] || 0) + 1; });
+    var list = (state.entries || []).filter(function (e) {
+      return e.id !== me.id && e.gender && e.gender !== me.gender && !e.deactivated && !e.testAccount && !e.isMatchmaker && !e.deleteRequested && !talked[e.id]
+        && (recv[e.id] || 0) < REQ_INBOX_CAP && !(me.managedBy && e.managedBy === me.managedBy);
+    }).sort(function (a, b) { return ((recv[a.id] || 0) - (recv[b.id] || 0)) || String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')); }).slice(0, 6);
+    var rows = list.map(function (e) {
+      var age = e.birthYear ? (String(e.birthYear).slice(2) + '년생') : '';
+      return '<button type="button" class="acct-row" data-sug="' + escapeHtml(e.id) + '"><span class="acct-ic">' + ((recv[e.id] || 0) ? '🙂' : '🆕') + '</span><span class="acct-tx"><b>' + escapeHtml(e.nickname || '') + '</b><small>' + escapeHtml([age, e.region || ''].filter(Boolean).join(' · ')) + '</small></span><span class="acct-go">›</span></button>';
+    }).join('');
+    var ov = openModal('<h3>📮 답장 대기가 많아요</h3>' +
+      '<p class="modal-msg">' + escapeHtml((busy && busy.nickname) || '이 분') + '님은 지금 답을 기다리는 신청이 ' + REQ_INBOX_CAP + '건 넘게 있어서, 답장할 때까지 새 신청을 잠시 받지 않아요. (7일 지나면 자동 정리돼요)</p>' +
+      (rows ? '<p class="modal-msg" style="font-weight:600;margin:8px 0 4px;">아직 신청을 많이 못 받은 분들이에요</p><div class="acct-list">' + rows + '</div>' : '<p class="modal-msg">지금 추천할 분이 없어요. 새로 들어오는 분을 기다려 주세요 🙂</p>') +
+      '<div class="modal-actions"><button type="button" class="card-btn" id="sug-close">닫기</button></div>');
+    ov.querySelector('#sug-close').addEventListener('click', function () { closeModal(ov); });
+    ov.addEventListener('click', function (e) { var b = e.target.closest && e.target.closest('[data-sug]'); if (!b) return; closeModal(ov); handleCardDetail(b.getAttribute('data-sug')); });
+  }
   function handleUserRejectRequest(id) {
     var state = currentState;
     var me = findMyEntry(state);
@@ -12051,7 +12225,7 @@
     var isPhoto = (req.type || 'contact') === 'photo';
     var to = (state.entries || []).find(function (e) { return e.id === req.toId; });
     var toName = to ? to.nickname : '상대방';
-    if (to && to.deactivated) return modalNotice('안내', toName + '님은 지금 휴면(보관) 중이라 다시 요청할 수 없어요.');
+    if (to && to.deactivated) return modalNotice('안내', toName + '님은 지금 쉬는 중이라 다시 요청할 수 없어요.');
     var feedback = st === 'held' ? (req.holdMessage || '') : (req.rejectMessage || '');
     var feedbackHtml = feedback
       ? '<div class="mine-note" style="background:var(--gold-soft);color:var(--ink);">' + escapeHtml(toName) + '님의 메시지<br>"' + escapeHtml(feedback) + '"</div>'
@@ -12951,7 +13125,7 @@
       var meid = msgDetails.getAttribute('data-eid');
       var willOpen = !msgDetails.open; /* 네이티브 토글은 이 핸들러 뒤에 일어남 */
       openMsgFolds[meid] = willOpen;
-      if (willOpen) markAdminUserRead(meid);
+      markAdminUserRead(meid);   /* 안 읽은 건 처음부터 펼쳐져 있어 첫 누름이 '닫기' — 그때도 읽음으로 (11-01: 두 번 눌러야 꺼지던 원인) */
       /* return 하지 않음 → details 기본 토글 진행 */
     }
     /* 관리자 섹션 폴딩 열림 상태 기억 (리페인트·새로고침 후 유지) */
@@ -13142,6 +13316,8 @@
       else if (action === 'set-status') handleSetAccountStatus(id, actionBtn.getAttribute('data-status'));
       else if (action === 'reactivate') handleReactivate(id);
       else if (action === 'self-reactivate') handleSelfReactivate(id);
+      else if (action === 'leave-sheet') openDormantSheet();
+      else if (action === 'busy-suggest') openFreshSuggest(id);
       else if (action === 'edit-reviewed') handleEditReviewed(id);
       else if (action === 'notify-connected') showConnectedMembers(id);
       else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
@@ -13272,7 +13448,7 @@
       else if (action === 'perm-photo') { if (isAdminUnlocked) openPermPopup(id, 'photo'); }
       else if (action === 'perm-contact') { if (isAdminUnlocked) openPermPopup(id, 'contact'); }
       else if (action === 'seen-sort') { toggleSort(adminSeenSort, actionBtn.getAttribute('data-col'), 'desc'); paint(currentState); }
-      else if (action === 'seen-type') { adminSeenType = actionBtn.getAttribute('data-type') || 'all'; paint(currentState); }
+      else if (action === 'seen-type') { adminSeenType = actionBtn.getAttribute('data-type') || 'active'; paint(currentState); }
       else if (action === 'log-filter') {
         adminLogFilterNick = actionBtn.getAttribute('data-nick') || ''; /* 완전일치 필터 */
         adminLogFilterActor = ''; adminLogFilterTime = ''; adminLogFilterDetail = '';
