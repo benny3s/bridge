@@ -80,5 +80,23 @@ const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
   st.dateRequests=st.dateRequests.slice(0,4); err=null;
   try{await m.chatAction.run({op:"reqCreate",as:M,to:A,type:'contact',note:'안녕하세요 반가워요 잘 부탁해요'},mctx(M,{m:1}));}catch(e){err=e;}
   ok(!err,'답 대기 4건이면 새 신청 됨'+(err?' — '+err.message:''));
+  // 사람 기준: 이미 사진 신청으로 기다리는 사람이 대화 신청을 더 보내도 됨 (다른 4명 + 나 = 5명)
+  DB = seed(); st=DB.app.state;
+  st.dateRequests=F.slice(0,4).map((f,i)=>({id:'c'+i,type:'photo',fromId:f,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1)})).concat([{id:'cm',type:'photo',fromId:M,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1)}]);
+  err=null; try{await m.chatAction.run({op:"reqCreate",as:M,to:A,type:'contact',note:'안녕하세요 반가워요 잘 부탁해요'},mctx(M,{m:1}));}catch(e){err=e;}
+  ok(!err,'이미 기다리는 사람의 두 번째 신청(사진→대화)은 막지 않음'+(err?' — '+err.message:''));
+  // 주선자 친구 프로필 3개 + 같은 친구 대화 신청 + 1명 = 5건이지만 2명 → 새 사람 신청 됨
+  DB = seed(); st=DB.app.state;
+  const K='K'.repeat(20), X=['X1','X2','X3'].map(x=>x.repeat(10));
+  st.entries.push({id:K,nickname:'주선자',isMatchmaker:true,gender:'male'}); X.forEach((x,i)=>st.entries.push({id:x,nickname:'친구'+i,gender:'male',managedBy:K}));
+  st.dateRequests=X.map((x,i)=>({id:'x'+i,type:'photo',fromId:x,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1)})).concat([
+    {id:'x9',type:'contact',fromId:X[0],toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1)},{id:'f0',type:'photo',fromId:F[0],toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1)}]);
+  err=null; try{await m.chatAction.run({op:"reqCreate",as:M,to:A,type:'contact',note:'안녕하세요 반가워요 잘 부탁해요'},mctx(M,{m:1}));}catch(e){err=e;}
+  ok(!err,'주선자 친구 프로필 여럿은 한 사람으로 셈 → 신청함이 막히지 않음'+(err?' — '+err.message:''));
+  // 다시 보내기도 5명 꽉 차면 막힘
+  DB = seed(); st=DB.app.state;
+  st.dateRequests=F.map((f,i)=>({id:'c'+i,type:'photo',fromId:f,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1)})).concat([{id:'rm',type:'photo',fromId:M,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(9),rejected:true,expired:true,decidedAt:agoF(1)}]);
+  err=null; try{await m.chatAction.run({op:'reqReapply',as:M,id:'rm',note:'다시 부탁드려요 반가워요 잘 부탁해요'},mctx(M,{m:1}));}catch(e){err=e;}
+  ok(err && /기다리는 신청이 많아요/.test(err.message),'신청함이 5명으로 꽉 차면 다시 보내기도 막힘'+(err?'':' — 안 막힘'));
   console.log('\n'+pass+' OK, '+fail+' FAIL'); process.exit(fail?1:0);
 })();

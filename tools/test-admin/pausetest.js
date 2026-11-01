@@ -26,12 +26,16 @@ const mctx=(uid,token)=>({auth:uid?{uid,token:token||{}}:null,rawRequest:{header
   DB={app:{state:{entries:[
     {id:R,nickname:'쉬는중',deactivated:true,deactivatedVia:'deactivate-request',pinSet:true},
     {id:A2,nickname:'관리자보관',deactivated:true,deactivatedVia:'admin',pinSet:true},
-    {id:N,nickname:'보통',pinSet:true}]}},secrets:{[R]:{pinAuth:pa},[A2]:{pinAuth:pa},[N]:{pinAuth:pa}}};
+    {id:N,nickname:'보통',pinSet:true},
+    {id:'W'.repeat(20),nickname:'탈퇴보관',deactivated:true,deactivatedVia:'delete-request',pinSet:true},
+    {id:'D'.repeat(20),nickname:'탈퇴요청중',deleteRequested:true,pinSet:true}]}},secrets:{[R]:{pinAuth:pa},[A2]:{pinAuth:pa},[N]:{pinAuth:pa},['W'.repeat(20)]:{pinAuth:pa},['D'.repeat(20)]:{pinAuth:pa}}};
   const tryLogin=async(id,pin)=>{try{const r=await m.memberLogin.run({entryId:id,pin:pin||'7391'},mctx(null));return {ok:true,r};}catch(e){return {ok:false,e};}};
   let x=await tryLogin(R); ok(x.ok && JSON.parse(x.r.token).uid===R,'잠시 쉬기 회원 로그인 됨'+(x.ok?'':' — '+x.e.message));
   x=await tryLogin(R,'0007'); ok(!x.ok && x.e.code==='permission-denied','잠시 쉬기 회원도 PIN 틀리면 거부');
   x=await tryLogin(A2); ok(x.ok,'관리자 보관 계정도 로그인 됨'+(x.ok?'':' — '+x.e.message));
   x=await tryLogin(N); ok(x.ok,'보통 회원 로그인 됨'+(x.ok?'':' — '+x.e.message));
+  x=await tryLogin('W'.repeat(20)); ok(!x.ok && /탈퇴/.test(x.e.message),'탈퇴로 보관된 계정은 로그인 막힘'+(x.ok?' — 로그인됨':''));
+  x=await tryLogin('D'.repeat(20)); ok(x.ok,'탈퇴 요청 중인 회원은 로그인 됨(취소하려고)'+(x.ok?'':' — '+x.e.message));
   // 공개 요약(onStateChange 가 만드는 app/public) 의 로그인 목록·티저
   const st=DB.app.state; const before={data:()=>({})}, after={data:()=>clone(st)};
   try{await m.onStateChange.run({before,after},{params:{}});}catch(e){console.log('  (onStateChange err)',e.message);}
@@ -39,6 +43,8 @@ const mctx=(uid,token)=>({auth:uid?{uid,token:token||{}}:null,rawRequest:{header
   const dir=JSON.stringify(pub.loginDir||pub.login||pub);
   ok(dir.includes(R),'공개 로그인 목록에 쉬는 회원 있음');
   ok(dir.includes(A2),'공개 로그인 목록에 관리자 보관 회원도 있음');
+  ok(!dir.includes('탈퇴보관') && !dir.includes('W'.repeat(20)),'공개 로그인 목록에 탈퇴 보관 계정 없음');
+  ok(!dir.includes('탈퇴요청중'),'공개 로그인 목록에 탈퇴 요청 중인 계정 없음');
   ok(!JSON.stringify(pub.teaser||[]).includes('관리자보관'),'티저엔 관리자 보관 회원 없음');
   ok(!JSON.stringify(pub.teaser||[]).includes('쉬는중'),'티저(명단 미리보기)엔 쉬는 회원 없음');
   console.log('\n'+pass+' OK, '+fail+' FAIL'); process.exit(fail?1:0);
