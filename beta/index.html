@@ -135,7 +135,7 @@
   .leave-stars { display: flex; gap: 2px; margin: 0 0 8px; } .leave-stars button { font-size: 1.9rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--gold); padding: 2px 4px; }
   .adm-head { display: grid; gap: 10px; margin-bottom: 14px; }
   .seen-sum { background: var(--gold-soft); border-radius: 10px; padding: 8px 11px; font-size: 0.88rem; line-height: 1.5; margin: 0 0 8px; }
-  .seen-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; }
+  .seen-filters { display: flex; gap: 5px; flex-wrap: wrap; margin: 0 0 8px; } .seen-filters .filter-btn { padding: 4px 10px; font-size: 0.82rem; min-height: 0; }
   .seen-row { border-bottom: 1px solid var(--line); padding: 8px 2px; }
   .seen-l1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
   .seen-uid { color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
@@ -1150,7 +1150,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-01-517';
+  var APP_VERSION = '2026-11-01-519';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -8996,7 +8996,7 @@
       var e = d.e, k = seenKind(e), mmE = e.managedBy ? allEntries.find(function (x) { return x.id === e.managedBy; }) : null;
       var badge = seenNew(e) ? '<span class="chip" style="background:#e8f0fe;color:#1a73e8;">🆕 새로</span>'
         : k === 'resting' ? '<span class="chip">💤 쉬는 중</span>' : seenQuiet(e) ? '<span class="chip">🌙 조용</span>'
-        : k === 'mm' ? '<span class="chip">🤝 주선자' + (_kids[e.id] ? ' · 소개 ' + _kids[e.id] : '') + '</span>' : k === 'test' ? '<span class="chip">🧪 테스트</span>' : '';
+        : k === 'mm' ? (_kids[e.id] ? '<span class="chip">소개 ' + _kids[e.id] + '명</span>' : '') : k === 'test' ? '<span class="chip">🧪 테스트</span>' : '';
       var who = [e.gender === 'male' ? '남' : e.gender === 'female' ? '여' : '', e.birthYear ? String(e.birthYear).slice(2) + '년생' : '', e.region || '', e.workplace || '']
         .filter(Boolean).map(escapeHtml).join(' · ');
       var blob = ((formatUid(e) || '') + ' ' + (e.nickname || '') + ' ' + (e.region || '') + ' ' + (mmE ? mmE.nickname : '') + ' ' + (decryptedNames[e.id] || '') + ' ' + (decryptedContacts[e.id] || '')).toLowerCase();
@@ -9029,7 +9029,7 @@
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 8px;"><span class="sub" style="font-weight:700;">정렬</span>' +
         seenSortBtn('join', '가입') + seenSortBtn('seen', '접속') + seenSortBtn('got', '받은 대기') + seenSortBtn('uid', '고유번호') + '</div>' +
       seenSearchBox +
-      '<p class="sub" style="margin:0 0 6px;">닉네임 = 프로필 · 접속 = 그 사람 활동 기록 · 📷/💬 = 이 사람이 볼 수 있는 사진·대화 (눌러서 관리) · 📥 = 받은 신청(대기 3건+ 빨강)</p>' +
+      '<p class="sub" style="margin:0 0 6px;">닉네임 → 프로필 · 접속 → 활동 기록 · 📷💬 → 볼 수 있는 사진·대화 · 📥 대기 3건+ 빨강</p>' +
       (seenList.length ? '<div id="seen-list">' + seenList.map(seenRow).join('') + '</div>' : '<p class="sub">해당하는 회원이 없어요.</p>'), true, 'seen');
 
     /* 서버 용량 */
@@ -9452,11 +9452,10 @@
         (quickBar ? '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + quickBar + '</div>' : '') +
         headerBtns +
       '</div>' +
-        adminAiIntelBoardHtml(state) +
         adminGroupsHtml(order, secHtml, {
           security: _secOpenN, pending: pendingCountForBar, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,
           held: heldPending.length, editrev: editRevList.length, reports: repRooms.length
-        }) +
+        }, adminAiIntelBoardHtml(state)) +
       '</div>'
     );
   }
@@ -9465,7 +9464,7 @@
      묶음 안 순서는 ✏️ 섹션 순서 그대로. todoN 에 없는 할 일 칸(PIN 요청)은 접힌 제목의 건수로 판단 */
   var SEC_GROUP = { security: 'todo', pending: 'todo', pinreset: 'todo', reports: 'todo', held: 'todo', stale: 'todo', editrev: 'todo', adminmsg: 'todo',
     seen: 'mem', deaclist: 'mem', active: 'mem', connlog: 'mem', couple: 'mem', dellog: 'mem', usage: 'rec', cap: 'rec', log: 'rec' };
-  function adminGroupsHtml(order, secHtml, todoN) {
+  function adminGroupsHtml(order, secHtml, todoN, aiBoard) {
     var g = { todo: [], mem: [], rec: [] }, quiet = [];
     var head = function (k) { var m = /class="pending-count">(\d+)</.exec(secHtml[k] || ''); return m ? +m[1] : 0; };
     order.forEach(function (k) {
@@ -9481,7 +9480,7 @@
       (g.todo.length ? g.todo.join('') : '<p class="adm-calm">✅ 지금 처리할 일이 없어요.</p>') +
       (quiet.length ? '<p class="sub" style="margin:2px 0 6px;">비어 있음: ' + escapeHtml(quiet.join(' · ')) + '</p>' : '') +
       '<h3 class="adm-group">👥 회원</h3>' + g.mem.join('') +
-      '<h3 class="adm-group">📊 기록 · 설정</h3>' + g.rec.join('');
+      '<h3 class="adm-group">📊 기록 · 설정</h3>' + (aiBoard || '') + g.rec.join('');
   }
 
   /* ---- 서버 용량 ---- */
@@ -13282,7 +13281,7 @@
       var meid = msgDetails.getAttribute('data-eid');
       var willOpen = !msgDetails.open; /* 네이티브 토글은 이 핸들러 뒤에 일어남 */
       openMsgFolds[meid] = willOpen;
-      if (willOpen) markAdminUserRead(meid);
+      markAdminUserRead(meid);   /* 안 읽은 건 처음부터 펼쳐져 있어 첫 누름이 '닫기' — 그때도 읽음으로 (11-01: 두 번 눌러야 꺼지던 원인) */
       /* return 하지 않음 → details 기본 토글 진행 */
     }
     /* 관리자 섹션 폴딩 열림 상태 기억 (리페인트·새로고침 후 유지) */
