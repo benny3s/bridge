@@ -2193,7 +2193,8 @@ async function memberReqAction(op, data, context) {
         const to = entries.find((e) => e.id === req.toId);
         need(to && !to.deactivated, nick(req.toId) + '님은 지금 쉬는 중이라 다시 요청할 수 없어요.');
         c.note = clip(data.note, 200);
-        ['held', 'holdMessage', 'heldBy', 'rejected', 'rejectMessage', 'rejectedBy', 'approved', 'userApproved', 'approveMessage', 'decidedAt', 'revealedContact', 'toContact'].forEach((k) => { delete c[k]; });
+        ['held', 'holdMessage', 'heldBy', 'rejected', 'rejectMessage', 'rejectedBy', 'approved', 'userApproved', 'approveMessage', 'decidedAt', 'revealedContact', 'toContact',
+          'expired', 'expiredWhy', 'remind1Sent', 'remind2Sent', 'remind3Sent'].forEach((k) => { delete c[k]; });   /* 자동 마감 표시·독촉 표시도 (11-01: 다시 보내도 '답 없이 마감'으로 남던 것) */
         c.submittedAt = now; c.reappliedAt = now;
         log = kind(req) + ' 요청 재신청 → ' + nick(req.toId);
       } else if (op === 'reqCancel') {                /* 보낸 사람이 취소 = 삭제 */
