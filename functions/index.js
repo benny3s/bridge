@@ -3830,9 +3830,11 @@ exports.aiConcierge = functions
       /* AI 가 승인이라고 해도 서버가 신청 기록(signups)으로 외부 공격 신호를 먼저 확인 (2026-10-27, Benny: 'AI 가 외부 공격인지 판단해 보류').
          규칙은 코드로 — 신청서 글로 AI 를 속여도 이 확인은 못 넘음. 신호가 있으면 승인 대신 관리자 확인 대기(신청자에겐 평소처럼 '심사 중') */
       const riskMap = {};
+      /* 여기선 state 를 따로 읽어야 함 (2026-11-01: pc_sync_pull 의 st 를 썼다가 ReferenceError → AI 승인이 통째로 실패) */
+      const stA = Object.keys(approveMap).length ? ((await db.doc('app/state').get()).data() || {}) : {};
       for (const id of Object.keys(approveMap)) {
-        const pp = (st.pendingEntries || []).find((x) => x && x.id === id);
-        if (proxyByLiveMember(pp, st)) continue;
+        const pp = (stA.pendingEntries || []).find((x) => x && x.id === id);
+        if (proxyByLiveMember(pp, stA)) continue;
         const why = await signupRisk(id).catch(() => ['신청 기록 확인 실패']);
         if (why.length) { riskMap[id] = why; delete approveMap[id]; }
       }
