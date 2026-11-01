@@ -988,6 +988,11 @@ const REQ_INBOX_CAP = 5;
 const REQ_EXPIRE_FROM_MS = Date.parse('2026-11-01T15:00:00Z');
 const REQ_OLD_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
 const reqExpireAtMs = (r) => Math.max((r && r.submittedAt ? new Date(r.submittedAt).getTime() : 0) + REMIND_3_MS, REQ_EXPIRE_FROM_MS + REQ_OLD_GRACE_MS);
+/* 📌 보류(보완 요청)된 가입 신청은 30일 동안 고치지 않으면 정리 = 관리자 [거절(삭제)]과 같음 (2026-11-01 Benny).
+   정리 7일 전에 본인에게 한 번 알림(낮 9~21시만). 이미 오래 보류돼 있던 신청은 켠 날(11-02)부터 7일 뒤(11-09 00시) — 화면 heldCloseAt 같은 식 */
+const HELD_CLOSE_MS = 30 * 24 * 60 * 60 * 1000;
+const HELD_WARN_MS = 7 * 24 * 60 * 60 * 1000;
+const heldCloseAtMs = (p) => Math.max((Date.parse((p && (p.heldAt || p.submittedAt)) || 0) || 0) + HELD_CLOSE_MS, REQ_EXPIRE_FROM_MS + HELD_WARN_MS);
 
 /* 신청서가 40분 넘게 AI 심사(승인·보류·관리자 확인) 없이 있으면 관리자에게 한 번 — PC 꺼짐·PC 프로그램 오류·서버 오류 모두 잡음.
    이미 알린 신청은 adminOnly/_aiWatch 에 적어 둠 (state 는 회원 누구나 읽으니 거기엔 안 씀) */
@@ -1074,12 +1079,37 @@ exports.remindPending = functions
         entriesNext = entriesNext || entries.slice();
         entriesNext[i] = Object.assign({}, e, { returnNudged: true });
       });
+      /* 📌 보류된 가입 신청 30일 정리 (위 heldCloseAtMs) */
+      const kstH = new Date(now + 9 * 3600000).getUTCHours();
+      const heldWarn = [], heldGone = [];
+      (state.pendingEntries || []).forEach((p) => {
+        if (!p || !p.id || !p.heldReason) return;
+        const closeAt = heldCloseAtMs(p);
+        if (now >= closeAt) { heldGone.push({ id: p.id, nickname: p.nickname || '' }); return; }
+        const warned = p.heldWarnAt && p.heldWarnAt >= (p.heldAt || p.submittedAt || '');   /* 다시 보류되면 다시 알림 */
+        if (!warned && now >= closeAt - HELD_WARN_MS && kstH >= 9 && kstH < 21) heldWarn.push({ id: p.id, closeAt });
+      });
       const upd = {};
+      if (heldGone.length || heldWarn.length) {
+        const nowIso = new Date(now).toISOString();
+        const gone = new Set(heldGone.map((x) => x.id)), warn = new Set(heldWarn.map((x) => x.id));
+        upd.pendingEntries = (state.pendingEntries || []).filter((p) => !(p && gone.has(p.id)))
+          .map((p) => (p && warn.has(p.id) ? Object.assign({}, p, { heldWarnAt: nowIso }) : p));
+        if (heldGone.length) upd.logs = (state.logs || []).concat(heldGone.map((x) => logItem('admin', '자동 정리', '보류 30일 동안 보완 없어 신청 정리 · ' + x.nickname)));
+      }
       if (changed) upd.dateRequests = updated;
       if (entriesNext) upd.entries = entriesNext;
       if (Object.keys(upd).length) tx.update(ref, upd);
-      return { entries, sends, newMsgs, nudges };
+      return { entries, sends, newMsgs, nudges, heldWarn, heldGone };
     });
+    if (result && result.heldGone && result.heldGone.length) {
+      await Promise.all(result.heldGone.map((x) => Promise.resolve().then(() => db.collection('photos').doc(x.id).delete()).catch(() => {})));   /* 관리자 거절과 같이 사진도 (금고는 onStateChange 가 삭제 표시) */
+    }
+    if (result && result.heldWarn && result.heldWarn.length) {
+      const md = (t) => { const d = new Date(t + 9 * 3600000); return (d.getUTCMonth() + 1) + '/' + d.getUTCDate(); };
+      await Promise.all(result.heldWarn.map((x) => sendTo(x.id, '📝 신청서 보완 안내',
+        '보완을 요청드린 신청서가 아직 그대로예요. ' + md(x.closeAt) + '까지 고치지 않으면 신청서가 정리돼요. 언제든 다시 신청할 수 있어요.', { route: 'mine' }).catch(() => {})));
+    }
     /* 7일 안내 메시지는 그 회원 메시지 문서로 (B-2) — 요청 표시(remind3Sent)가 저장된 뒤에 */
     if (result && result.newMsgs && result.newMsgs.length) {
       await appendMemberMsgs(result.newMsgs.map((m) => Object.assign({ auto: true }, m)), result.entries).catch((e) => console.error('remind msgs', e));
