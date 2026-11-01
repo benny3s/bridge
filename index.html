@@ -6049,11 +6049,14 @@
         (ordered.length ? '' : '<br>아직 없어요 — 마음에 드는 분에게 적극적으로 ' + kind + ' 보기 요청을 해보세요! 💪') +
         '</div>';
     }
+    if (listNewOnly && !isPermFilter) {
+      guide = '<div class="readonly-note">🆕 이번 주(7일) 새로 들어온 분' + (ordered.length ? '만 보고 있어요 · ' + ordered.length + '명' : '이 아직 없어요') + '. 🆕 새로를 다시 누르면 전체를 봐요.</div>';
+    }
     var viewToggle = teaser ? '' : '<button type="button" class="view-toggle' + (listView === 'compact' ? ' on' : '') + '" data-viewtoggle="1">' +
       (listView === 'compact' ? '🖼 사진보기' : '☰ 간단히') + '</button>';
     var acqBtn = me ? '<button type="button" class="view-toggle" id="acq-open" style="margin-left:6px;">🙈 지인 필터' + (acqCounts.filter ? ' <span style="opacity:0.85;">' + acqCounts.filter + '</span>' : '') + '</button>' : '';
     var permBtns = me
-      ? '<button type="button" class="filter-btn" data-filter="new" aria-pressed="' + listNewOnly + '" title="이번 주(7일) 새로 들어온 분만">🆕</button>' +
+      ? '<button type="button" class="filter-btn" data-filter="new" aria-pressed="' + listNewOnly + '" title="이번 주(7일) 새로 들어온 분만">🆕 새로</button>' +
         '<button type="button" class="filter-btn" data-filter="photo" aria-pressed="' + (listFilter === 'photo') + '" title="내가 사진을 볼 수 있는 사람">📷</button>' +
         '<button type="button" class="filter-btn" data-filter="contact" aria-pressed="' + (listFilter === 'contact') + '" title="채팅 연결된 사람">💬</button>'
       : '';
