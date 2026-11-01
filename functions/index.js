@@ -252,6 +252,9 @@ exports.memberLogin = functions
       throw new HttpsError('not-found', '계정을 찾을 수 없어요.');
     }
     /* 휴면(보관) 계정도 로그인은 허용 (2026-10-31) — 명단·티저에서 숨기고 요청·채팅 보내기만 막음. 직접 복귀는 restingSelf(탈퇴 보관 빼고 모두) */
+    if (entry.deactivated && entry.deactivatedVia === 'delete-request') {   /* 탈퇴로 보관된 계정은 로그인 안 됨 (2026-11-01 외부 검토) */
+      throw new HttpsError('failed-precondition', '탈퇴 요청으로 정리된 계정이에요. 다시 쓰시려면 관리자에게 문의해 주세요.');
+    }
     if (entry.managedBy && entry.pinExpiresAt && Date.now() > new Date(entry.pinExpiresAt).getTime()) {
       throw new HttpsError('failed-precondition', '임시 PIN이 만료됐어요. 주선자에게 다시 받아주세요.');
     }
@@ -1163,6 +1166,13 @@ const REMIND_2_MS = 72 * 60 * 60 * 1000; /* 3일 */
 const REMIND_3_MS = 7 * 24 * 60 * 60 * 1000; /* 7일 — 답이 없으면 자동 마감 (2026-11-01, 예전엔 관리자 메시지 1회) */
 /* 받는 사람 한 명이 답 안 한 신청을 이만큼 갖고 있으면 새 신청을 잠시 막음 (2026-11-01 Benny: 여자 회원 쏠림·지침 줄이기) */
 const REQ_INBOX_CAP = 5;
+/* 5건은 '사람' 기준 (2026-11-01 외부 검토: 한 사람이 사진+대화로 두 칸, 주선자가 친구 프로필 여럿으로 한 회원의 신청함을 채워 남의 신청을 막을 수 있었음).
+   주선자 친구 프로필은 주선자 한 사람으로 셈. 이미 기다리는 사람이 또 보내는 건 막지 않음 */
+const inboxFull = (reqs, entries, toId, fromId) => {
+  const personOf = (id) => { const e = entries.find((x) => x && x.id === id); return (e && e.managedBy) || id; };
+  const people = new Set(reqs.filter((r) => r && r.toId === toId && reqStatusOf(r) === 'pending').map((r) => personOf(r.fromId)));
+  return !people.has(personOf(fromId)) && people.size >= REQ_INBOX_CAP;
+};
 /* 자동 마감을 켠 시각 (11-02 00시 KST). 그 전 신청은 '원래 7일' 과 '켠 뒤 3일(11-05 00시)' 중 늦은 쪽에 마감
    (2026-11-01 Benny: '7일 길다, 기존 것들은 3일로' — 오래된 건 11-05, 덜 된 건 원래 7일에서 남은 만큼). 화면 '⌛ N일 남음'도 같은 식 */
 const REQ_EXPIRE_FROM_MS = Date.parse('2026-11-01T15:00:00Z');
@@ -1413,7 +1423,8 @@ function buildPublicView(state) {
   /* 공개 로그인 목록에서 휴면 계정은 빼고, 일반 계정의 'PIN 있음' 표시도 뺌 (2026-10-27 — 10-26 대입 공격이 이 표시로 대상 155명을 골랐음).
      대리(주선자 관리) 계정만 유효한 임시 PIN 이 있을 때 넣음(앱 로그인 창이 그 기준으로 보여 줌). 닉네임 중복은 서버(nickTaken)가 확인 */
   const pinLive = (e) => !!(e.pinAuth || e.pinHash || e.pinSet) && !(e.pinExpiresAt && Date.now() > Date.parse(e.pinExpiresAt));
-  const loginDir = entries.filter((e) => (!e.managedBy || pinLive(e))).map((e) => {
+  /* 쉬는 회원은 로그인해야 해서 넣고, 탈퇴로 보관된 계정·탈퇴 요청 중인 계정은 뺌 (2026-11-01 외부 검토: '바로 숨겨져요' 안내와 달리 닉네임이 손님에게 보였음) */
+  const loginDir = entries.filter((e) => !(e.deactivated && e.deactivatedVia === 'delete-request') && !e.deleteRequested && (!e.managedBy || pinLive(e))).map((e) => {
     const d = dirOf(e, false);
     if (!e.managedBy) delete d.pinOn;
     return d;
@@ -2128,8 +2139,7 @@ async function memberReqAction(op, data, context) {
       need(!dup, dup && reqStatusOf(dup) === 'rejected' ? target.nickname + '님이 이 요청을 거절했어요.' : '이미 ' + target.nickname + '님에게 요청을 보냈어요.');
       const today = kstDayOf(now);
       const sent = reqs.filter((r) => r && r.fromId === me.id && (r.type || 'contact') === type && r.submittedAt && kstDayOf(r.submittedAt) === today).length;
-      const waiting = reqs.filter((r) => r && r.toId === toId && reqStatusOf(r) === 'pending').length;
-      if (waiting >= REQ_INBOX_CAP) throw new HttpsError('resource-exhausted', target.nickname + '님은 지금 답장을 기다리는 신청이 많아요. 며칠 뒤 다시 해 보거나, 아직 신청을 많이 못 받은 분께 먼저 보내 보세요.');
+      if (inboxFull(reqs, entries, toId, me.id)) throw new HttpsError('resource-exhausted', target.nickname + '님은 지금 답장을 기다리는 신청이 많아요. 며칠 뒤 다시 해 보거나, 아직 신청을 많이 못 받은 분께 먼저 보내 보세요.');
       if (sent >= REQ_DAILY_LIMIT) throw new HttpsError('resource-exhausted', '오늘 보낼 수 있는 ' + (type === 'photo' ? '사진 보기 요청' : '대화 신청') + '을 모두 썼어요. 내일 다시 보내 주세요.');
       const nr = { id: nodeCrypto.randomUUID(), type, fromId: me.id, toId, note, submittedAt: now };
       if (viaMm) nr.viaMm = true;
@@ -2222,6 +2232,7 @@ async function memberReqAction(op, data, context) {
         need(isFrom && (st === 'held' || st === 'rejected'));
         const to = entries.find((e) => e.id === req.toId);
         need(to && !to.deactivated, nick(req.toId) + '님은 지금 쉬는 중이라 다시 요청할 수 없어요.');
+        if (inboxFull(reqs, entries, req.toId, me.id)) throw new HttpsError('resource-exhausted', nick(req.toId) + '님은 지금 답장을 기다리는 신청이 많아요. 며칠 뒤 다시 보내 보세요.');
         c.note = clip(data.note, 200);
         ['held', 'holdMessage', 'heldBy', 'rejected', 'rejectMessage', 'rejectedBy', 'approved', 'userApproved', 'approveMessage', 'decidedAt', 'revealedContact', 'toContact',
           'expired', 'expiredWhy', 'remind1Sent', 'remind2Sent', 'remind3Sent'].forEach((k) => { delete c[k]; });   /* 자동 마감 표시·독촉 표시도 (11-01: 다시 보내도 '답 없이 마감'으로 남던 것) */
