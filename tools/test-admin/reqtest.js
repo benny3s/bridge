@@ -66,6 +66,8 @@ const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
   await m.remindPending.run(); st=DB.app.state;
   ok(R('r1').expired,'10-20 신청 → 11-05 00시(KST) 지나면 마감 (켠 뒤 3일)');
   ok(!R('r4').expired,'10-31 신청(켤 때 2일 안 됨) → 11-05엔 그대로');
+  await m.chatAction.run({op:'reqReapply',as:B,id:'r1',note:'다시 부탁드려요 반가워요 잘 부탁해요'},mctx(B,{m:1})); st=DB.app.state;
+  ok(!R('r1').expired && !R('r1').rejected && !R('r1').remind1Sent && !R('r1').expiredWhy,'자동 마감된 신청을 다시 보내면 마감·독촉 표시도 지워짐');
   FAKE_NOW = Date.parse('2026-11-07T00:30:00Z'); DB = seedOld();
   await m.remindPending.run(); st=DB.app.state;
   ok(R('r4').expired,'10-31 신청 → 원래 7일(11-07) 지나면 마감');
