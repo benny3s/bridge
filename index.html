@@ -1121,7 +1121,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-01-518';
+  var APP_VERSION = '2026-11-01-520';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -5448,11 +5448,11 @@
   }
   var REQ_INBOX_CAP = 5;   /* 서버 reqCreate 와 같은 값 — 받는 사람이 답 안 한 신청이 이만큼이면 새 신청을 잠시 막음 (2026-11-01) */
   function inboxWaiting(state, id) { return (state.dateRequests || []).filter(function (r) { return r.toId === id && reqStatus(r) === 'pending'; }).length; }
-  /* 답 없는 신청은 7일 뒤 자동 마감 — 이 시각 전 신청은 이 시각부터 셈 (서버 functions REQ_EXPIRE_FROM_MS 와 같게) */
+  /* 답 없는 신청은 7일 뒤 자동 마감 — 이 시각 전 신청은 '원래 7일' 과 '이 시각 + 3일' 중 늦은 쪽 (서버 functions reqExpireAtMs 와 같게) */
   var REQ_EXPIRE_FROM = Date.parse('2026-11-01T15:00:00Z');
   function reqLeftText(r) {
     if (!r || !r.submittedAt) return '';
-    var left = Math.max(Date.parse(r.submittedAt) || 0, REQ_EXPIRE_FROM) + 7 * 86400000 - Date.now();
+    var left = Math.max((Date.parse(r.submittedAt) || 0) + 7 * 86400000, REQ_EXPIRE_FROM + 3 * 86400000) - Date.now();
     if (left <= 0) return '곧 마감';
     if (left < 86400000) return '오늘 마감';
     return Math.ceil(left / 86400000) + '일 남음';
@@ -8421,7 +8421,7 @@
     );
   }
 
-  function renderAdmin(state) {
+  function renderAdmin(state, view) {
     if (!isAdminUnlocked) {
       return '<div class="admin-panel"><h2>관리자 모드</h2><p class="sub">위쪽 "관리자" 버튼으로 PIN을 입력하면 승인 대기 명단, 실명, 연락처, 알게 된 경로, 대화 신청함을 볼 수 있어요.</p></div>';
     }
@@ -8928,11 +8928,12 @@
         var on = adminSeenType === f[0];
         return '<button type="button" class="filter-btn" data-action="seen-type" data-type="' + f[0] + '" aria-pressed="' + on + '">' + f[1] + ' <b>' + _sN[f[0]] + '</b></button>';
       }).join('') + '</div>' +
+      (adminSeenType === 'mm' ? mmTreeHtml(state) :
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 8px;"><span class="sub" style="font-weight:700;">정렬</span>' +
         seenSortBtn('join', '가입') + seenSortBtn('seen', '접속') + seenSortBtn('got', '받은 대기') + seenSortBtn('uid', '고유번호') + '</div>' +
       seenSearchBox +
       '<p class="sub" style="margin:0 0 6px;">닉네임 → 프로필 · 접속 → 활동 기록 · 📷💬 → 볼 수 있는 사진·대화 · 📥 대기 3건+ 빨강</p>' +
-      (seenList.length ? '<div id="seen-list">' + seenList.map(seenRow).join('') + '</div>' : '<p class="sub">해당하는 회원이 없어요.</p>'), true, 'seen');
+      (seenList.length ? '<div id="seen-list">' + seenList.map(seenRow).join('') + '</div>' : '<p class="sub">해당하는 회원이 없어요.</p>')), true, 'seen');
 
     /* 서버 용량 */
     var capSection = capacityHtml(state);
@@ -9302,6 +9303,7 @@
       cap: capSection, seen: seenSection, log: logSection
     };
     var order = adminSecOrder();
+    if (view === 'mem') return '<div class="admin-panel">' + memberTabHtml(order, secHtml, state) + '</div>';
     /* 맨 위 정리 (2026-10-31 Benny: '버튼 구성이 너무 별로, 사용하기 편하게') — 자주 쓰는 일만 크게, 설정은 접어 둠.
        알림이 꺼졌거나 고장이면 알림 버튼을 위로 꺼냄 */
     var _notifOk = adminNotifActive() && !adminNotifBroken();
@@ -9362,10 +9364,15 @@
     );
   }
 
-  /* 관리자 탭 세 묶음 (2026-11-01 Benny: '관리자탭 불친절') — 🔔 지금 할 일은 건수 있는 칸만, 👥 회원(명단 펼침), 📊 기록·설정.
-     묶음 안 순서는 ✏️ 섹션 순서 그대로. todoN 에 없는 할 일 칸(PIN 요청)은 접힌 제목의 건수로 판단 */
+  /* 관리자 탭 (2026-11-01 Benny: '관리자탭 불친절') — 🔔 지금 할 일은 건수 있는 칸만, 📊 요청 · 기록 · 설정.
+     회원 칸(mem: 명단·보관 계정)은 👥 회원 탭에 (memberTabHtml). 묶음 안 순서는 ✏️ 섹션 순서 그대로. todoN 에 없는 할 일 칸(PIN 요청)은 접힌 제목의 건수로 판단 */
   var SEC_GROUP = { security: 'todo', pending: 'todo', pinreset: 'todo', reports: 'todo', held: 'todo', stale: 'todo', editrev: 'todo', adminmsg: 'todo',
-    seen: 'mem', deaclist: 'mem', active: 'mem', connlog: 'mem', couple: 'mem', dellog: 'mem', usage: 'rec', cap: 'rec', log: 'rec' };
+    seen: 'mem', deaclist: 'mem', active: 'rec', connlog: 'rec', couple: 'rec', dellog: 'rec', usage: 'rec', cap: 'rec', log: 'rec' };
+  function memberTabHtml(order, secHtml, state) {
+    var pend = (state.pendingEntries || []).filter(function (e) { return !e.heldReason; }).length;
+    return (pend ? '<button type="button" class="card-btn primary" data-tab="admin" style="flex:none;margin:0 0 8px;">⏳ 승인 대기 ' + pend + '명 → 관리자 탭</button>' : '') +
+      (secHtml.seen || '') + order.filter(function (k) { return k !== 'seen' && SEC_GROUP[k] === 'mem'; }).map(function (k) { return secHtml[k] || ''; }).join('');
+  }
   function adminGroupsHtml(order, secHtml, todoN, aiBoard) {
     var g = { todo: [], mem: [], rec: [] }, quiet = [];
     var head = function (k) { var m = /class="pending-count">(\d+)</.exec(secHtml[k] || ''); return m ? +m[1] : 0; };
@@ -9376,13 +9383,13 @@
         var n = (k in todoN) ? todoN[k] : head(k);
         if (!n) { quiet.push((SEC_NAMES[k] || k).replace(/^\S+\s/, '')); return; }
       }
-      if (k === 'seen') g.mem.unshift(html); else g[grp].push(html);
+      if (k === 'active') g.rec.unshift(html); else g[grp].push(html);
     });
     return '<h3 class="adm-group">🔔 지금 할 일 <small>' + (g.todo.length ? g.todo.length + '가지' : '') + '</small></h3>' +
       (g.todo.length ? g.todo.join('') : '<p class="adm-calm">✅ 지금 처리할 일이 없어요.</p>') +
       (quiet.length ? '<p class="sub" style="margin:2px 0 6px;">비어 있음: ' + escapeHtml(quiet.join(' · ')) + '</p>' : '') +
-      '<h3 class="adm-group">👥 회원</h3>' + g.mem.join('') +
-      '<h3 class="adm-group">📊 기록 · 설정</h3>' + (aiBoard || '') + g.rec.join('');
+      '<p class="sub" style="margin:14px 0 4px;">👥 회원 명단 · 🤝 주선자 · 🗄 보관 계정은 <button type="button" class="seen-mini" data-tab="mmlist">👥 회원 탭</button>에 있어요.</p>' +
+      '<h3 class="adm-group">📊 요청 · 기록 · 설정</h3>' + (g.rec.length ? g.rec[0] : '') + (aiBoard || '') + g.rec.slice(1).join('');
   }
 
   /* ---- 서버 용량 ---- */
@@ -9454,8 +9461,13 @@
   }
 
   /* 관리자: 주선자 목록 + 각 주선자의 본인/친구 (전환창과 같은 트리, 클릭 시 프로필 팝업) */
+  /* 👥 회원 탭 = 관리자 화면의 회원 칸만 (renderAdmin(state, 'mem')) */
   function renderMatchmakers(state) {
-    if (!isAdminUnlocked) return '<div class="admin-panel"><h2>주선자</h2><p class="sub">관리자 전용이에요.</p></div>';
+    if (!isAdminUnlocked) return '<div class="admin-panel"><h2>회원</h2><p class="sub">관리자 전용이에요.</p></div>';
+    return renderAdmin(state, 'mem');
+  }
+  /* 주선자별 본인·친구 트리 — 회원 명단에서 '🤝 주선자' 를 고르면 줄 목록 대신 이것 */
+  function mmTreeHtml(state) {
     var entries = state.entries || [];
     var mmsAll = entries.filter(function (e) { return e.isMatchmaker; }).sort(function (a, b) { return (b.serial || 0) - (a.serial || 0); });
     function mmHasOwn(mm) { return entries.some(function (e) { return e.managedBy === mm.id && e.ownerSelf; }); }
@@ -9495,11 +9507,8 @@
           '</div>' +
         '</details>';
     }).join('');
-    return '<div class="admin-panel">' +
-        '<div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button type="button" class="card-btn" data-action="fold-all" style="flex:none;">🔁 전체 펼치기·접기</button></div>' +
-        '<h2>🤝 주선자 관리<span class="pending-count">' + mms.length + '</span></h2>' +
-        '<p class="sub">주선자별 본인·친구 트리예요. 이름을 누르면 프로필이 열리고, 🧑‍💼 주선자를 누르면 실명·연락처 상세가 열려요. (계정 상태 변경은 관리자 탭에서)</p>' +
-        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 10px;align-items:center;">' +
+    return '<p class="sub" style="margin:0 0 6px;">주선자 ' + mms.length + '명 · 이름 → 프로필 · 🧑‍💼 → 실명·연락처</p>' +
+        '<div class="seen-filters" style="align-items:center;">' +
           '<button type="button" class="filter-btn" data-action="mm-scope" data-scope="all" aria-pressed="' + (mmScopeFilter === 'all') + '">전체</button>' +
           '<button type="button" class="filter-btn" data-action="mm-scope" data-scope="self" aria-pressed="' + (mmScopeFilter === 'self') + '">🙋 본인</button>' +
           '<button type="button" class="filter-btn" data-action="mm-scope" data-scope="friend" aria-pressed="' + (mmScopeFilter === 'friend') + '">🤝 친구</button>' +
@@ -9507,8 +9516,7 @@
         '</div>' +
         '<input type="text" id="mm-search" value="' + escapeHtml(mmSearch) + '" placeholder="🔍 주선자·친구 닉네임 · 고유번호 검색" style="width:100%;box-sizing:border-box;margin:0 0 10px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;font-size:0.92rem;font-family:inherit;">' +
         pendNote +
-        (mms.length ? cards : '<p class="sub">' + (accessFilter === 'all' && mmScopeFilter === 'all' ? '등록된 주선자가 없어요.' : '해당 조건의 주선자가 없어요.') + '</p>') +
-      '</div>';
+        (mms.length ? cards : '<p class="sub">' + (accessFilterMM === 'all' && mmScopeFilter === 'all' ? '등록된 주선자가 없어요.' : '해당 조건의 주선자가 없어요.') + '</p>');
   }
 
   function renderApp(state) {
@@ -9553,8 +9561,9 @@
       '<button type="button" class="tab-btn" data-tab="form" role="tab" aria-selected="' + (activeTab === 'form') + '">신청서 작성</button>' +
       '<button type="button" class="tab-btn" data-tab="list" role="tab" aria-selected="' + (activeTab === 'list') + '">명단 보기<span class="count">' + (function () { try { var _m = currentUser ? findMyEntry(state) : null; return zoneFilterEntries(state, _m, !!state._public || (!isAdminUnlocked && !myAuthEntry(state)), entries).length; } catch (x) { return entries.length; } })() + '</span></button>';
     if (isAdminUnlocked) {
-      var mmCntTab = (state.entries || []).filter(function (e) { return e.isMatchmaker; }).length;
-      tabs += '<button type="button" class="tab-btn" data-tab="mmlist" role="tab" aria-selected="' + (activeTab === 'mmlist') + '">주선자<span class="count">' + mmCntTab + '</span></button>';
+      /* 👥 회원 탭 (2026-11-01 Benny: '주선자 탭을 회원 탭으로') — 숫자 = 활동 중 회원 (회원 명단 '활동 중' 과 같은 셈) */
+      var memCntTab = (state.entries || []).filter(function (e) { return !isMatchmakerEntry(e) && !e.testAccount && !e.deactivated; }).length;
+      tabs += '<button type="button" class="tab-btn" data-tab="mmlist" role="tab" aria-selected="' + (activeTab === 'mmlist') + '">👥 회원<span class="count">' + memCntTab + '</span></button>';
     }
     if (currentUser) {
       var myEntry = findMyEntry(state);
@@ -9840,7 +9849,7 @@
     }
     var _connFocus = document.activeElement && document.activeElement.id === 'conn-search';
     var _html = renderApp(state);
-    if (activeTab === 'admin' && isAdminUnlocked) { try { _html = lazyAdminFolds(_html); } catch (e) {} }
+    if ((activeTab === 'admin' || activeTab === 'mmlist') && isAdminUnlocked) { try { _html = lazyAdminFolds(_html); } catch (e) {} }
     document.getElementById('app').innerHTML = _html;
     try { applyConnSearch(); if (_connFocus) { var _cs = document.getElementById('conn-search'); if (_cs) { _cs.focus(); _cs.setSelectionRange(_cs.value.length, _cs.value.length); } } } catch (e) {} /* 내 연결 검색 재적용·포커스 유지 */
     try { applyListSearch(); } catch (e) {} /* 검색어가 있으면 재적용 */
