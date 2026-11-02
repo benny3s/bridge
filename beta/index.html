@@ -5581,7 +5581,7 @@
     if (st === 'rejected') return '<span class="chip" style="background:#fce8e6;color:#c5221f;">거절됨</span>';
     if (st === 'held') {
       var hl = holdLeftText(r);
-      return '<span class="chip" style="background:#fef7e0;color:#b06000;"' + (hl ? ' title="결정이 없으면 7일 뒤 자동 마감돼요 (거절 아님)"' : '') + '>' + (r && r.askReveal && !r.fromRevealed ? '📷 사진 공개 부탁' : '보류 중') + (hl ? ' · ⌛ ' + hl : '') + '</span>';
+      return '<span class="chip" style="background:#fef7e0;color:#b06000;"' + (hl ? ' title="결정이 없으면 7일 뒤 자동 마감돼요 (거절 아님)"' : '') + '>' + (r && r.askReveal && !r.fromRevealed ? '📷 공개 부탁' : '보류 중') + (hl ? ' · ⌛ ' + hl : '') + '</span>';
     }
     if (st === 'user_approved') return '<span class="chip" style="background:#fef7e0;color:#b06000;">본인 승인 · 관리자 확인 중</span>';
     var lt = reqLeftText(r);
