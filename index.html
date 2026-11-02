@@ -1121,7 +1121,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-04-531';
+  var APP_VERSION = '2026-11-05-532';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -5537,11 +5537,23 @@
     if (left < 86400000) return '오늘 마감';
     return Math.ceil(left / 86400000) + '일 남음';
   }
+  /* 회원이 보류한 신청도 7일 뒤 자동 마감, 보류 뒤 사진을 공개했으면 공개한 때부터 (서버 functions reqHoldExpireAtMs 와 같게) */
+  var REQ_HOLD_FROM = Date.parse('2026-11-02T15:00:00Z');
+  function holdLeftText(r) {
+    if (!r || r.heldBy !== 'user') return '';
+    var left = Math.max(Math.max(Date.parse(r.decidedAt || r.submittedAt) || 0, Date.parse(r.fromRevealedAt) || 0) + 7 * 86400000, REQ_HOLD_FROM + 7 * 86400000) - Date.now();
+    if (left <= 0) return '곧 마감';
+    if (left < 86400000) return '오늘 마감';
+    return Math.ceil(left / 86400000) + '일 남음';
+  }
   function statusChip(st, r) {
     if (r && r.expired) return '<span class="chip" style="background:#f1f3f4;color:#5f6368;">⌛ 답 없이 마감</span>';
     if (st === 'approved') return '<span class="chip" style="background:#e6f4ea;color:#137333;">승인됨</span>';
     if (st === 'rejected') return '<span class="chip" style="background:#fce8e6;color:#c5221f;">거절됨</span>';
-    if (st === 'held') return '<span class="chip" style="background:#fef7e0;color:#b06000;">보류 중</span>';
+    if (st === 'held') {
+      var hl = holdLeftText(r);
+      return '<span class="chip" style="background:#fef7e0;color:#b06000;"' + (hl ? ' title="결정이 없으면 7일 뒤 자동 마감돼요 (거절 아님)"' : '') + '>' + (r && r.askReveal && !r.fromRevealed ? '📷 공개 부탁' : '보류 중') + (hl ? ' · ⌛ ' + hl : '') + '</span>';
+    }
     if (st === 'user_approved') return '<span class="chip" style="background:#fef7e0;color:#b06000;">본인 승인 · 관리자 확인 중</span>';
     var lt = reqLeftText(r);
     return '<span class="chip" style="background:#f1f3f4;color:#5f6368;"' + (lt ? ' title="답이 없으면 7일 뒤 자동 마감돼요 (거절 아님)"' : '') + '>대기중' + (lt ? ' · ⌛ ' + lt : '') + '</span>';
@@ -6785,7 +6797,11 @@
           '<button type="button" class="card-btn primary" data-action="user-approve" data-id="' + escapeHtml(r.id) + '">승인</button>' +
           '<button type="button" class="card-btn" data-action="user-hold" data-id="' + escapeHtml(r.id) + '">보류</button>' +
           '<button type="button" class="card-btn danger" data-action="user-reject" data-id="' + escapeHtml(r.id) + '">거절</button>' +
-        '</div>';
+        '</div>' +
+        (isPhoto && st === 'pending' && !r.fromRevealed
+          ? '<div class="mine-actions"><button type="button" class="card-btn" data-action="ask-reveal" data-id="' + escapeHtml(r.id) + '">📷 사진 먼저 볼게요</button></div>' +
+            '<div class="mine-note" style="font-size:0.8rem;color:var(--muted);margin-top:6px;">💡 승인하면 내 사진도 바로 열려요. <b>사진 먼저 볼게요</b>를 누르면 내 사진은 닫아 둔 채 상대에게 공개를 부탁해요.</div>'
+          : '');
     } else if (!incoming && st === 'pending') {
       actions =
         '<div class="mine-actions">' +
@@ -6795,7 +6811,7 @@
       /* 보낸 요청이 보류됨 → 정보 담아 다시 요청 가능 */
       actions =
         '<div class="mine-actions">' +
-          '<button type="button" class="card-btn primary" data-action="reapply" data-id="' + escapeHtml(r.id) + '">다시 요청</button>' +
+          (r.askReveal ? '' : '<button type="button" class="card-btn primary" data-action="reapply" data-id="' + escapeHtml(r.id) + '">다시 요청</button>') +
           '<button type="button" class="card-btn" data-action="cancel-sent" data-id="' + escapeHtml(r.id) + '">요청 취소</button>' +
         '</div>';
     } else if (!incoming && st === 'rejected') {
@@ -6824,8 +6840,10 @@
     /* 답장 메시지 표시 */
     var replyMsg = '';
     if (st === 'approved' && r.approveMessage) replyMsg = '<div class="mine-note">답장: ' + escapeHtml(r.approveMessage) + '</div>';
+    else if (st === 'held' && r.askReveal && !r.fromRevealed) replyMsg = '<div class="mine-note" style="background:var(--gold-soft);color:var(--ink);">' + (incoming ? '📷 상대에게 사진 공개를 부탁했어요. 공개하면 알림으로 알려드려요. 7일 안에 결정이 없으면 자동으로 마감돼요.' : '📷 상대가 사진을 먼저 보고 결정하고 싶어 해요. 아래 <b>내 사진 공개</b>를 누르면 바로 전해져요. 7일 안에 공개하지 않으면 자동으로 마감돼요.') + '</div>';
+    else if (st === 'held' && r.askReveal) replyMsg = '<div class="mine-note" style="background:var(--gold-soft);color:var(--ink);">' + (incoming ? '📷 상대가 사진을 공개했어요. 보고 승인이나 거절을 정해 주세요. 7일 안에 결정이 없으면 자동으로 마감돼요.' : '상대가 사진을 보고 결정할 거예요. 7일 안에 결정이 없으면 자동으로 마감돼요.') + '</div>';
     else if (st === 'held' && r.holdMessage) replyMsg = '<div class="mine-note">보류 메시지: ' + escapeHtml(r.holdMessage) + '</div>';
-    else if (st === 'rejected' && r.expired) replyMsg = '<div class="mine-note">⌛ ' + (r.expiredWhy === 'resting' ? '상대가 지금 쉬는 중이라' : '7일 동안 답이 없어') + ' 자동으로 마감됐어요. 거절된 건 아니에요 — 다른 분께도 신청해 보세요.</div>';
+    else if (st === 'rejected' && r.expired) replyMsg = '<div class="mine-note">⌛ ' + (r.expiredWhy === 'resting' ? '상대가 지금 쉬는 중이라' : r.expiredWhy === 'held' ? '보류된 채 7일이 지나' : '7일 동안 답이 없어') + ' 자동으로 마감됐어요. 거절된 건 아니에요 — 다른 분께도 신청해 보세요.</div>';
     else if (st === 'rejected' && r.rejectMessage) replyMsg = '<div class="mine-note reject">거절 메시지: ' + escapeHtml(r.rejectMessage) + '</div>';
     /* 주선자가 친구 대신 응답한 경우 → 요청자에게 안내 (답장이 "친구…"로 보여도 뜬금없지 않게) */
     if (!incoming && r.decidedViaMm) replyMsg += '<div class="mine-note" style="background:var(--gold-soft);border:1px solid var(--gold);border-radius:8px;color:var(--gold);">🤝 이 프로필은 <b>주선자가 대신 관리</b>해요. 위 답장은 주선자가 전한 거예요.</div>';
@@ -6836,10 +6854,10 @@
         ? (r.fromRevealed ? '<div class="mine-note">📷 공개했던 내 사진은 닫혔어요.</div>' : '')
         : r.fromRevealed
         ? '<div class="mine-note" style="color:#137333;">📷 내 사진을 상대에게 공개했어요.</div>'
-        : '<div class="mine-actions"><button type="button" class="card-btn" data-action="reveal-mine" data-id="' + escapeHtml(r.id) + '">📷 내 사진 공개</button></div>';
+        : '<div class="mine-actions"><button type="button" class="card-btn' + (st === 'held' && r.askReveal ? ' primary' : '') + '" data-action="reveal-mine" data-id="' + escapeHtml(r.id) + '">📷 내 사진 공개</button></div>';
     }
     /* 받은 사진 요청: 상대가 자기 사진을 공개함 → 나는 명단에서 그 사람 사진을 볼 수 있음 */
-    if (incoming && isPhoto && r.fromRevealed && st !== 'rejected') {
+    if (incoming && isPhoto && r.fromRevealed && st !== 'rejected' && !(st === 'held' && r.askReveal)) {
       revealMine += '<div class="mine-note" style="color:#137333;">📷 상대도 사진을 공개했어요.</div>';
     }
     /* 대화 신청(구 번호 요청)이 수락됨 → 채팅 버튼 (번호 대신 앱 내 채팅) */
@@ -12111,7 +12129,7 @@
     var req = (currentState.dateRequests || []).find(function (r) { return r.id === id; });
     if (!req || req.fromId !== me.id || (req.type || 'contact') !== 'photo' || req.fromRevealed || req.rejected) return;
     var toName = nickForEntry(currentState, req.toId);
-    modalConfirm('내 사진 공개', escapeHtml(toName) + '님에게 내 사진을 공개할까요? 공개하면 상대가 바로 내 사진을 볼 수 있어요.', '공개', 'primary').then(function (ok) {
+    modalConfirm('내 사진 공개', escapeHtml(toName) + '님에게 내 사진을 공개할까요? 공개하면 상대가 바로 내 사진을 볼 수 있어요. 거절되거나 마감되면 자동으로 닫혀요.', '공개', 'primary').then(function (ok) {
       if (!ok) return;
       reqCall('reqReveal', { as: me.id, id: id }).then(function () {
         return refreshNow();
@@ -12209,7 +12227,7 @@
     var from = (state.entries || []).find(function (e) { return e.id === req.fromId; });
     var fromName = from ? from.nickname : '상대방';
     var msg = (isPhoto
-      ? escapeHtml(fromName) + '님의 사진 요청을 수락할까요? 수락하면 서로 사진을 볼 수 있어요.'
+      ? escapeHtml(fromName) + '님의 사진 요청을 수락할까요? ' + (req.fromRevealed || reqStatus(req) !== 'pending' ? '수락하면 서로 사진을 볼 수 있어요.' : '수락하면 내 사진도 상대에게 바로 열려요. 먼저 보고 싶으면 취소하고 [사진 먼저 볼게요]를 눌러 주세요.')
       : escapeHtml(fromName) + '님의 대화 신청을 수락할까요? 수락하면 앱 안에서 채팅으로 대화할 수 있어요 (번호는 공개되지 않아요).') +
       ' 상대에게 전할 인사를 꼭 남겨주세요 (최소 10자).';
     if (respViaMm) msg = '🤝 주선자로 ' + me.nickname + '님을 대신해 응답하는 중이에요 (상대에게 안내돼요). ' + msg;
@@ -12290,6 +12308,26 @@
     });
   }
 
+  /* 받은 사진 요청: 내 사진은 안 열고 상대에게 공개 부탁 (보류 + askReveal, 서버 reqHold). 수락해 보고 바로 닫는 일을 줄이려고 (2026-11-02) */
+  var ASK_REVEAL_MSG = '사진을 먼저 보고 결정하고 싶어요. 사진을 공개해 주시면 답할게요!';
+  function handleAskReveal(id) {
+    var state = currentState;
+    var me = findMyEntry(state);
+    if (!me) return modalNotice('로그인 필요', '먼저 로그인해주세요.');
+    var req = (state.dateRequests || []).find(function (r) { return r.id === id; });
+    if (!req || req.toId !== me.id || (req.type || 'contact') !== 'photo' || req.fromRevealed || reqStatus(req) !== 'pending') return;
+    var fromName = nickForEntry(state, req.fromId);
+    modalConfirm('사진 먼저 보기', fromName + '님에게 사진을 먼저 보여 달라고 부탁할까요? 내 사진은 열리지 않아요. 7일 안에 결정이 없으면 자동으로 마감돼요.', '부탁하기', 'primary').then(function (ok) {
+      if (!ok) return;
+      return reqCall('reqHold', { as: me.id, id: id, msg: ASK_REVEAL_MSG, askReveal: true }).then(function () {
+        return refreshNow();
+      }).then(function () {
+        modalNotice('부탁했어요', fromName + '님이 사진을 공개하면 알림으로 알려드려요. 사진을 본 뒤 승인이나 거절을 정해 주세요.');
+      }).catch(function (err) {
+        modalNotice('오류', '부탁에 실패했어요: ' + (err.message || err));
+      });
+    });
+  }
   function handleUserHoldRequest(id) {
     var state = currentState;
     var me = findMyEntry(state);
@@ -13531,6 +13569,7 @@
       else if (action === 'cancel-request') handleCancelRequest(id);
       else if (action === 'user-approve') handleUserApproveRequest(id);
       else if (action === 'user-hold') handleUserHoldRequest(id);
+      else if (action === 'ask-reveal') handleAskReveal(id);
       else if (action === 'user-reject') handleUserRejectRequest(id);
       else if (action === 'switch-profile') handleSwitchProfile(id);
       else if (action === 'sub-pin-issue') handleIssueSubPin(id);
@@ -14180,7 +14219,7 @@
           '<li><b>개인 PIN</b> → 강력한 해시(PBKDF2), 유출돼도 원문 복원 불가, 관리자도 열람 불가 <span style="color:var(--muted);">(해킹 방지)</span></li>' +
           '<li><b>실명·전화번호</b> → 암호화 저장, 다른 회원엔 비공개, 관리자만 열람 가능 <span style="color:var(--muted);">(연락 목적)</span></li>' +
           '<li><b>회원 간 채팅</b> → 두 사람(주선자가 관리하는 프로필이면 담당 주선자 포함)만 봐요. 관리자는 <b>신고된 대화만</b> 열람 <span style="color:var(--muted);">(서버 보관, 안전·분쟁 대응 목적)</span></li>' +
-          '<li><b>사진</b>은 사진 요청이 <b>수락</b>되면 서로 공개돼요 (본인이 먼저 공개를 고를 수도 있어요). 전화번호는 서로 공개하지 않고, 대화가 연결되면 <b>앱 안 채팅</b>으로 대화해요.</li>' +
+          '<li><b>사진</b>은 사진 요청이 <b>수락</b>되면 서로 공개돼요 (본인이 먼저 공개를 고를 수도 있고, 받은 분은 <b>사진 먼저 볼게요</b>로 공개를 부탁할 수 있어요). 전화번호는 서로 공개하지 않고, 대화가 연결되면 <b>앱 안 채팅</b>으로 대화해요.</li>' +
           '<li><b>데이터베이스 잠금</b> — 로그인한 회원·관리자만 앱 데이터에 접근할 수 있고, 실명·번호·PIN 은 따로 잠가 둬요.</li>' +
           '<li><b>남의 정보를 바꾸려는 시도</b>는 서버가 감지해 되돌리고 관리자에게 알려요.</li>' +
         '</ul>' +

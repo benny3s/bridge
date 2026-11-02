@@ -1132,7 +1132,7 @@ exports.onStateChange = functions
         const wasApproved = (ps === 'approved' || ps === 'user_approved');
         const isApproved = (ns === 'approved' || ns === 'user_approved');
         if (isApproved && !wasApproved) jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 승인 🎉', nameOf(entries, r.toId) + '님이 요청을 승인했어요', nav));
-        else if (ns === 'held' && ps !== 'held') jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 보류', nameOf(entries, r.toId) + '님이 요청을 보류했어요', nav));
+        else if (ns === 'held' && ps !== 'held') jobs.push(notifyRecipient(entries, r.fromId, r.askReveal ? '📷 사진 공개 부탁' : type + ' 요청 보류', nameOf(entries, r.toId) + (r.askReveal ? '님이 사진을 먼저 보고 결정하고 싶어 해요' : '님이 요청을 보류했어요'), nav));
         else if (ns === 'rejected' && ps !== 'rejected' && !r.expired) jobs.push(notifyRecipient(entries, r.fromId, type + ' 요청 거절', nameOf(entries, r.toId) + '님이 요청을 거절했어요', nav));
         else if (ns === 'pending' && (ps === 'held' || ps === 'rejected')) jobs.push(notifyRecipient(entries, r.toId, type + ' 재요청', nameOf(entries, r.fromId) + '님이 정보를 담아 다시 요청했어요', nav));
       }
@@ -1197,6 +1197,9 @@ const inboxFull = (reqs, entries, toId, fromId) => {
 const REQ_EXPIRE_FROM_MS = Date.parse('2026-11-01T15:00:00Z');
 const REQ_OLD_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
 const reqExpireAtMs = (r) => Math.max((r && r.submittedAt ? new Date(r.submittedAt).getTime() : 0) + REMIND_3_MS, REQ_EXPIRE_FROM_MS + REQ_OLD_GRACE_MS);
+/* 회원이 보류한 신청도 7일 뒤 자동 마감 (2026-11-02: 보류는 끝없이 남아, 먼저 공개한 사진도 안 닫혔음). 보류 뒤 사진을 공개했으면 공개한 때부터 7일, 이 고침 전 보류는 11-10 00시(KST) 뒤. 관리자 보류는 제외 */
+const REQ_HOLD_FROM_MS = Date.parse('2026-11-02T15:00:00Z');
+const reqHoldExpireAtMs = (r) => Math.max(Math.max(Date.parse(r.decidedAt || r.submittedAt || 0) || 0, Date.parse(r.fromRevealedAt || 0) || 0) + REMIND_3_MS, REQ_HOLD_FROM_MS + REMIND_3_MS);
 /* 📌 보류(보완 요청)된 가입 신청은 30일 동안 고치지 않으면 정리 = 관리자 [거절(삭제)]과 같음 (2026-11-01 Benny).
    정리 7일 전에 본인에게 한 번 알림(낮 9~21시만). 이미 오래 보류돼 있던 신청은 켠 날(11-02)부터 7일 뒤(11-09 00시) — 화면 heldCloseAt 같은 식 */
 const HELD_CLOSE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -1240,6 +1243,11 @@ exports.remindPending = functions
       const newMsgs = [];
       let changed = false;
       const updated = reqs.map((r) => {
+        if (reqStatus(r) === 'held' && r.heldBy === 'user' && now >= reqHoldExpireAtMs(r)) {
+          changed = true;
+          return Object.assign({}, r, { rejected: true, held: false, expired: true, expiredWhy: 'held', rejectedBy: 'auto', decidedAt: new Date().toISOString(),
+            rejectMessage: '보류된 채 7일이 지나 자동으로 마감됐어요. 다른 분께도 신청해 보세요 🙂' });
+        }
         if (reqStatus(r) !== 'pending') return r;
         const toE = entryById(entries, r.toId);
         const t = r.submittedAt ? new Date(r.submittedAt).getTime() : 0;
@@ -2242,7 +2250,10 @@ async function memberReqAction(op, data, context) {
         } else {
           need(msg.length >= 10, '더 알고 싶은 점을 10자 이상 남겨 주세요.');
           c.held = true; c.holdMessage = msg; c.heldBy = 'user';
-          log = kind(req) + ' 요청 보류 → ' + nick(req.fromId);
+          /* 사진 먼저 볼게요 (2026-11-02): 내 사진은 안 열고 상대에게 공개 부탁. 푸시·화면 문구만 다르고 나머지는 보류와 같음 */
+          const ask = !!data.askReveal && (req.type || 'contact') === 'photo' && !req.fromRevealed;
+          if (ask) c.askReveal = true; else delete c.askReveal;
+          log = ask ? '사진 먼저 보기 부탁 → ' + nick(req.fromId) : kind(req) + ' 요청 보류 → ' + nick(req.fromId);
         }
       } else if (op === 'reqUnapprove') {             /* 받은 사람이 수락 취소 → 다시 대기 */
         need(isTo && (st === 'approved' || st === 'user_approved'));
@@ -2255,7 +2266,7 @@ async function memberReqAction(op, data, context) {
         if (inboxFull(reqs, entries, req.toId, me.id)) throw new HttpsError('resource-exhausted', nick(req.toId) + '님은 지금 답장을 기다리는 신청이 많아요. 며칠 뒤 다시 보내 보세요.');
         c.note = clip(data.note, 200);
         ['held', 'holdMessage', 'heldBy', 'rejected', 'rejectMessage', 'rejectedBy', 'approved', 'userApproved', 'approveMessage', 'decidedAt', 'revealedContact', 'toContact',
-          'expired', 'expiredWhy', 'remind1Sent', 'remind2Sent', 'remind3Sent'].forEach((k) => { delete c[k]; });   /* 자동 마감 표시·독촉 표시도 (11-01: 다시 보내도 '답 없이 마감'으로 남던 것) */
+          'expired', 'expiredWhy', 'askReveal', 'remind1Sent', 'remind2Sent', 'remind3Sent'].forEach((k) => { delete c[k]; });   /* 자동 마감 표시·독촉 표시도 (11-01: 다시 보내도 '답 없이 마감'으로 남던 것) */
         if (st === 'rejected') { delete c.fromRevealed; delete c.fromRevealedAt; }   /* 거절·마감으로 닫힌 사진은 다시 보내도 닫힌 채로, 공개는 보내는 사람이 직접 (2026-11-02) */
         c.submittedAt = now; c.reappliedAt = now;
         log = kind(req) + ' 요청 재신청 → ' + nick(req.toId);
