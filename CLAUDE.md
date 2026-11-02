@@ -3,7 +3,7 @@
 지인 기반 소개팅 웹앱. "관리자(베니) 주변 사람들 중심으로 믿을 수 있는 소개팅"을 이어주는 작은 서비스.
 
 - **레포**: `benny3s/bridge` (이 폴더 `matchmaking/`가 git 루트. 구 `benny-meeting`에서 rename됨 — 2026-09-21)
-- **라이브**: https://benny3s.github.io/bridge/ (**2026-11-02부터 이 저장소는 비공개** — `master` push 뒤 `node tools/publish-site.js` 가 화면 파일만 `benny3s.github.io` 저장소의 `bridge/` 로 복사해 배포. 주소는 그대로). 구 주소 `benny3s.github.io/benny-meeting/`는 별도 `benny-meeting` repo(리다이렉트 전용)가 `/bridge/`로 넘겨줌. ※ **Firebase 프로젝트명은 여전히 `benny-meeting`** (데이터 백엔드 — Pages 주소와 무관, 안 바뀜)
+- **라이브**: https://benny3s.github.io/bridge/ (GitHub Pages, `master` push 시 자동 배포. 비공개 전환 준비만 됨 — `tools/publish-site.js`, 아래 배포 절차 참고). 구 주소 `benny3s.github.io/benny-meeting/`는 별도 `benny-meeting` repo(리다이렉트 전용)가 `/bridge/`로 넘겨줌. ※ **Firebase 프로젝트명은 여전히 `benny-meeting`** (데이터 백엔드 — Pages 주소와 무관, 안 바뀜)
 
 ## 아키텍처 (한눈에)
 - **클라이언트**: 단일 파일 **`index.html`** (~630KB, 바닐라 JS). 실제 로직은 `<script id="app-logic">` 인라인 블록 하나에 다 들어있음. (별도 `<script id="state-json" type="application/json">`은 시드용 JSON — JS 아님)
@@ -34,7 +34,7 @@
    (functions 배포는 firebase.json predeploy 가 `node tools/check-secrets.js` 로 함수마다 쓰는 Secret(NUM_ENC_KEY·SOLAPI 등 — 직접이든 decPhone·encPhone 같은 도우미를 거쳐서든)이 `runWith({ secrets })` 에 있는지 확인하고 빠지면 멈춤. 2026-10-29 aiConcierge 에 NUM_ENC_KEY 가 빠져 decPhone 이 조용히 빈 값을 돌려주고 모든 신청자가 번호 '형식오류'로 보류됨. **검사 장치가 실패하면 그걸 사용자 탓으로 판정하지 말 것** — 못 풀면·못 읽으면 관리자 확인으로(AI 부관리자 ESCALATE))
 3. **커밋 + 푸시**. 커밋 메시지는 한국어로 무엇을 왜 바꿨는지 + 끝에 버전.
    - **브랜치 정책**: 로컬 데스크톱 세션은 **`master` 직푸시**(GitHub Pages가 master에서 배포). **단, 샌드박스/클라우드 세션이 "특정 브랜치에만 푸시" 같은 제한을 두면 그 세션 지침이 우선** — 그때는 세션 브랜치에 푸시하고 사용자가 master로 병합. 어느 쪽인지 애매하면 사용자에게 확인.
-   - **`master` push 뒤 꼭 `node tools/publish-site.js`** (안 돌리면 라이브가 안 바뀜). 화면이 새 정적 파일을 불러 쓰면 그 스크립트의 FILES 에 추가. 서버·도구·규칙·문서는 절대 넣지 않음.
+   - 저장소를 비공개로 돌린 뒤부터는 **`master` push 뒤 꼭 `node tools/publish-site.js`** (안 돌리면 라이브가 안 바뀜). 지금은 공개 저장소라 필요 없음. 화면이 새 정적 파일을 불러 쓰면 그 스크립트의 FILES 에 추가. 서버·도구·규칙·문서는 절대 넣지 않음.
 4. **라이브 확인** — Pages 반영에 1~2분. 새 버전 뜰 때까지 폴링:
    ```bash
    for i in 1 2 3 4 5 6; do v=$(curl -s "https://benny3s.github.io/bridge/index.html?cb=$RANDOM" | grep -o "APP_VERSION = '[0-9-]*'" | head -1); echo "try $i: $v"; case "$v" in *NNN*) echo LIVE; break;; esac; sleep 15; done

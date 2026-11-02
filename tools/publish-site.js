@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-/* 공개 사이트 내보내기 (2026-11-02): 이 저장소는 비공개 → origin/master 의 화면 파일만 benny3s.github.io 저장소의 bridge/ 로 복사해 push. 주소는 그대로 benny3s.github.io/bridge/.
+/* 공개 사이트 내보내기 (2026-11-02, 비공개 전환용): origin/master 의 화면 파일만 benny3s.github.io 저장소의 bridge/ 로 복사해 push. 주소는 그대로 benny3s.github.io/bridge/.
    node tools/publish-site.js   ← master push 뒤에 (어느 브랜치·worktree 에서 돌려도 origin/master 를 씀). 올리지 않으면 라이브가 안 바뀔 뿐, 다른 파일이 새지는 않음.
    공개되는 건 FILES 뿐 — 화면이 새 정적 파일을 불러 쓰면 여기에 추가. 서버·도구·규칙·문서는 절대 넣지 않음. 커밋 메시지도 공개되므로 버전만 적음. */
 const { execFileSync } = require('child_process');
 const fs = require('fs'), path = require('path');
 const FILES = ['index.html', 'firebase-messaging-sw.js', 'coffee-qr.png', 'notif-icon.png', 'notif-badge.png', 'beta'];
 const git = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', maxBuffer: 1 << 26, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-const here = __dirname;
+const here = git(__dirname, 'rev-parse', '--show-toplevel');
 const common = path.resolve(here, git(here, 'rev-parse', '--git-common-dir'));
 const SITE = process.env.SITE_REPO || path.resolve(common, '..', '..', 'secretary', 'benny3s.github.io');
 if (!fs.existsSync(path.join(SITE, '.git'))) throw new Error('사이트 저장소가 없어요: ' + SITE);
