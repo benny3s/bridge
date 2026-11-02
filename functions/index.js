@@ -75,8 +75,26 @@ function authEntryFor(state, entry) {
 /* ── 서버 로그인 (Firebase custom token) ──
    PIN·관리자 비밀번호를 서버에서 확인하고 토큰 발급 → 보안 규칙이 토큰의 신분(claims)으로 접근을 판단.
    claims: 승인 회원 {m:1}, 승인 대기 {p:1}, 관리자 {admin:1}. uid = 회원 entryId / 'admin'.
-   대입 공격 방지: 계정별 실패 5회마다 잠금(15분→30분→… 최대 24시간). 잠금 기록은 loginGuard(클라 접근 불가). */
-const LOGIN_MAX_FAILS = 5;
+   대입 공격 방지: 계정별로 실패가 쌓이면 점점 길게 잠금. 잠금 기록은 loginGuard(클라 접근 불가). */
+/* 방어 기준값·공격자 목록은 서버 전용 문서 security/guard 에 둔다 (앱은 못 읽음). 저장소가 공개라 코드에 두면 기준 바로 아래로 맞춰 시도할 수 있음 (2026-11-03).
+   못 읽으면 마지막으로 읽은 값, 그것도 없으면 아래 기본값. 문서를 고치면 5분 안에 반영 */
+const GUARD_DEFAULTS = { loginMaxFails: 5, lockBaseMin: 15, lockMaxMin: 1440, ipFailLimit: 10, ipFailWindowMin: 60, ipBlockMin: 1440, ipMultiTargetLimit: 3, acctFailLimit: 5, acctWindowMin: 1440, acctLockMin: 1440, sprayTargets: 4, sprayWindowMin: 5, sprayLockMin: 30 };
+const GUARD_TTL_MS = 5 * 60000;
+let guardCache = null, guardAt = 0;
+async function guardCfg() {
+  if (guardCache && Date.now() - guardAt < GUARD_TTL_MS) return guardCache;
+  const snap = await db.doc('security/guard').get().catch(() => null);
+  if (snap || !guardCache) {
+    if (snap && !snap.exists) console.error('[GUARD] security/guard 없음 — 기본값으로 막음');
+    const d = (snap && snap.exists) ? snap.data() : {};
+    const c = { attackerIps: new Set(Array.isArray(d.attackerIps) ? d.attackerIps : []), breachedIds: new Set(Array.isArray(d.breachedIds) ? d.breachedIds : []) };
+    Object.keys(GUARD_DEFAULTS).forEach((k) => { c[k] = Number(d[k]) > 0 ? Number(d[k]) : GUARD_DEFAULTS[k]; });
+    guardCache = c;
+  }
+  if (snap) guardAt = Date.now();
+  return guardCache;
+}
+async function isBreached(id) { return (await guardCfg()).breachedIds.has(id); }
 const HttpsError = functions.https.HttpsError;
 async function loginGuardCheck(key) {
   const ref = db.collection('loginGuard').doc(key);
@@ -90,10 +108,11 @@ async function loginGuardCheck(key) {
 }
 async function loginGuardResult(guard, ok) {
   if (ok) { if (guard.g.fails) await guard.ref.delete(); return 0; }
+  const c = await guardCfg();
   const fails = (guard.g.fails || 0) + 1;
   const upd = { fails, lastFailAt: Date.now() };
-  if (fails % LOGIN_MAX_FAILS === 0) {
-    const mins = Math.min(15 * Math.pow(2, fails / LOGIN_MAX_FAILS - 1), 24 * 60);
+  if (fails % c.loginMaxFails === 0) {
+    const mins = Math.min(c.lockBaseMin * Math.pow(2, fails / c.loginMaxFails - 1), c.lockMaxMin);
     upd.lockedUntil = Date.now() + mins * 60000;
   }
   await guard.ref.set(upd, { merge: true });
@@ -209,7 +228,7 @@ exports.memberLogin = functions
       console.info('[LOGIN_AUDIT_BLOCKED]', JSON.stringify(Object.assign({ pinLen: pin.length, weakPin: COMMON_WEAK_PINS.has(pin) }, auditMeta)));
       await db.collection('loginAudit').add(Object.assign({ status: 'blocked', weakPin: COMMON_WEAK_PINS.has(pin) }, auditMeta)).catch(() => {});
       if (COMMON_WEAK_PINS.has(pin)) await ipFailRecord(ip, 'honeypot', entryId).catch(() => {});
-      if (COMMON_WEAK_PINS.has(pin) && BREACHED_IDS.has(entryId)) await addWatchIp(ip);   /* 탈취 계정에 옛 흔한 PIN = 공격자 → 이 IP 로 회원 앱 열면 알림 */
+      if (COMMON_WEAK_PINS.has(pin) && await isBreached(entryId)) await addWatchIp(ip);   /* 탈취 계정에 옛 흔한 PIN = 공격자 → 이 IP 로 회원 앱 열면 알림 */
       try {
         const st0 = (await db.doc('app/state').get()).data() || {};
         const e0 = (st0.entries || []).concat(st0.pendingEntries || []).find((e) => e.id === entryId) || null;
@@ -254,7 +273,7 @@ exports.memberLogin = functions
     const acctLock = familiar ? null : await accountLockCheck(entry.id).catch(() => null);
     if (acctLock) {
       await db.collection('loginAudit').add(Object.assign({ status: 'acct-locked', nickname: entry.nickname }, auditMeta)).catch(() => {});
-      if (COMMON_WEAK_PINS.has(pin) && BREACHED_IDS.has(entry.id)) await addWatchIp(ip);
+      if (COMMON_WEAK_PINS.has(pin) && await isBreached(entry.id)) await addWatchIp(ip);
       const o = Object.assign({}, audO, { status: 'blocked' });
       await suspiciousAlert(o, await suspicionOf(o), ['계정 보호 잠금 중 다시 시도']).catch(() => {});
       throw new HttpsError('resource-exhausted', '이 계정은 PIN이 여러 번 틀려 보호를 위해 하루 동안 잠겼어요. 본인이시면 아래 \'PIN을 잊으셨나요? PIN 재설정 요청\'으로 관리자에게 새 PIN을 받아 주세요.');
@@ -270,7 +289,7 @@ exports.memberLogin = functions
       /* 맞아도 여기선 pinWeak 를 붙이지 않음 (2026-10-28) — 회원 누구나 state 를 읽으니, 남의 계정에 쉬운 PIN 을 대 보고
          pinWeak 가 생기는지로 그 PIN 을 알아낼 수 있었음. 관리자에겐 아래 경고로 알림 */
       if (!real) { await loginGuardResult(guard, false); await ipFailRecord(ip, 'member', entryId); if (!familiar) await accountFailRecord(entry, ip); }
-      if (BREACHED_IDS.has(entry.id)) await addWatchIp(ip);
+      if (await isBreached(entry.id)) await addWatchIp(ip);
       const o = Object.assign({}, audO, { status: real ? 'weak' : 'fail', fails: 1 });
       const s = await suspicionOf(o);
       if (real || s.reasons.length) await suspiciousAlert(o, s, real ? ['흔한 PIN 계정 — 로그인 막고 새 PIN 필요(관리자탭 PIN 재설정)'] : []).catch(() => {});
@@ -304,8 +323,8 @@ exports.memberLogin = functions
       }
     }
     /* 탈취됐던 계정이 맞는 PIN 으로 들어옴 = 새 PIN 을 받은 본인 (옛 쉬운 PIN 은 위에서 거부됨) →
-       본인이 옛 PIN 을 먼저 넣어 자동으로 감시 목록에 오른 그 IP 는 빼 줌 (2026-10-27 수달 헛경고). 상수로 박힌 공격자 IP 는 그대로 */
-    if (BREACHED_IDS.has(entry.id) && !WATCH_IPS.includes(ip)) {
+       본인이 옛 PIN 을 먼저 넣어 자동으로 감시 목록에 오른 그 IP 는 빼 줌 (2026-10-27 헛경고). security/guard 의 공격자 IP 는 그대로 */
+    if (await isBreached(entry.id) && !(await guardCfg()).attackerIps.has(ip)) {
       await db.doc('security/watch').set({ ips: admin.firestore.FieldValue.arrayRemove(ip) }, { merge: true }).catch(() => {});
     }
     await db.collection('loginAudit').add(Object.assign({ status: 'ok', nickname: entry.nickname }, auditMeta)).catch(() => {});
@@ -639,7 +658,7 @@ exports.adminSecurityLog = functions
       const snaps = await db.getAll(...ips.map((ip) => db.collection('ipIntel').doc(guardKey('i_', ip))));
       snaps.forEach((s, i) => { if (s.exists) { const x = s.data(); intel[ips[i]] = { vpn: !!x.vpn, type: x.type || '', provider: x.provider || '', city: x.city || '' }; } });
     }
-    const watch = Array.from(await watchIpSet().catch(() => new Set(WATCH_IPS)));
+    const watch = Array.from(await watchIpSet().catch(() => new Set()));
     return { logins, access, intel, watch };
   });
 
@@ -2612,10 +2631,9 @@ async function syncPhotoAcl(state, force) {
    (2) 로그인 공격 방어:
        - X-Forwarded-For 헤더 조작(스푸핑) 원천 차단: Google 프론트엔드가 보증하는 실제 클라이언트 IP 추출.
        - 일반 회원 보호: 회원 잠금(loginGuard)은 (계정+IP) 단위로만 걸어, 공격자가 틀려도 실제 회원 본인은 자기 폰에서 정상 로그인 가능.
-       - 다중 계정 찌르기(스프레이) 즉시 차단: 한 IP에서 서로 다른 계정 3개 이상 틀리거나 1시간 내 10회 실패 시 해당 IP 24시간 차단.
-       - 분산 프록시 스프레이 방어: 3분 내 서버 전체에서 8개 이상 서로 다른 계정이 실패하면 15분간 흔한 PIN(1234, 0000 등) 대입 차단. */
-const IP_FAIL_LIMIT = 10;
-const IP_MULTI_TARGET_LIMIT = 3;
+       - 다중 계정 찌르기(스프레이) 즉시 차단: 한 IP 에서 여러 계정을 틀리거나 짧은 시간에 많이 실패하면 해당 IP 차단.
+       - 분산 프록시 스프레이 방어: 서버 전체에서 서로 다른 계정 실패가 몰리면 잠시 흔한 PIN(1234, 0000 등) 대입 차단.
+       기준값은 security/guard (guardCfg). */
 const COMMON_WEAK_PINS = new Set(['0000', '1111', '1234', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999', '123456', '000000', '111111', '1004', '2580', '4860']);
 /* 앱 isWeakPin 과 같은 기준 (반복·연속·흔한 조합·출생연도·MMDD) */
 function isWeakPinServer(pin) {
@@ -2634,8 +2652,6 @@ function isWeakPinServer(pin) {
    이상하면 바로 관리자 알림: 공격·차단 이력 IP / VPN·데이터센터 / 탈취 이력 계정 / 30일+ 안 쓰던 계정 / 그 계정에서 처음 보는 기기 종류 /
    앱 밖 사이트·일반 브라우저 아님 / 쉬운 PIN 대입 / 2번째 이상 실패 / 없는 계정.
    공격자가 VPN 을 끄고 자기 계정으로 같은 집 IP 에서 앱을 열면 '공격·차단 이력 IP' 로 바로 잡힌다. */
-const WATCH_IPS = ['180.65.139.114', '112.212.220.111', '45.80.212.81', '45.80.212.84', '135.136.27.15', '2a04:4e41:2201:7dfb::3d3e:7dfb'];   /* 10-26 공격자 */
-const BREACHED_IDS = new Set(['9cc9116d-7bc6-481c-a280-81c6ef2a82ff', '24d69624-2988-45e1-911e-ce9df19c0613', 'a061a706-0554-449c-bec8-6bd699e5b7dc', '161e4ad5-1eee-412a-a762-8d7511240980']);
 const APP_ORIGIN = 'https://benny3s.github.io';
 function deviceOf(ua) {
   const u = String(ua || '');
@@ -2666,15 +2682,14 @@ async function ipIntel(ip) {
 }
 /* 감시 IP = 공격자 IP + 자동 차단됐던 IP(ipFailRecord 가 security/watch 에 붙임) */
 async function watchIpSet() {
-  const s = await db.doc('security/watch').get().catch(() => null);
+  const [s, c] = await Promise.all([db.doc('security/watch').get().catch(() => null), guardCfg()]);
   const extra = (s && s.exists && Array.isArray(s.data().ips)) ? s.data().ips : [];
-  return new Set(WATCH_IPS.concat(extra));
+  return new Set(Array.from(c.attackerIps).concat(extra));
 }
-/* 계정 단위 잠금 (2026-10-26): 처음 보는 곳들에서 합쳐 24시간 안에 5번 틀리면 24시간 잠금 + 알림 (Benny: 10 → 5).
-   기존 잠금(loginGuard m_계정_IP)은 IP 마다 따로 세서 IP 를 바꿔 가며 5번씩 맞혀 볼 수 있었음.
-   익숙한 곳(familiarIp)은 예외 — 일부러 틀려 회원을 못 들어오게 하는 방해를 막음 (같은 곳 5번 15분 잠금은 그대로).
+/* 계정 단위 잠금 (2026-10-26): 처음 보는 곳들에서 합쳐 일정 횟수 틀리면 그 계정을 잠그고 알림.
+   기존 잠금(loginGuard m_계정_IP)은 IP 마다 따로 세서 IP 를 바꿔 가며 맞혀 볼 수 있었음.
+   익숙한 곳(familiarIp)은 예외 — 일부러 틀려 회원을 못 들어오게 하는 방해를 막음 (같은 곳 잠금은 그대로).
    새 PIN(관리자 임시 PIN·본인 변경)이 금고에 들어오면 sweepSecrets 가 풀어 줌 */
-const ACCOUNT_FAIL_LIMIT = 5;
 /* 이 계정이 90일 안에 앱을 열었던 곳인지 (accessSeen). IPv4 는 같은 IP, IPv6 는 같은 /64(한 가입자 회선). IP 는 위조 불가(Google 이 넣는 실제 IP) */
 function ipNet(ip) {
   const s = String(ip || '');
@@ -2699,6 +2714,7 @@ async function accountLockCheck(id) {
   return (d.lockedUntil && d.lockedUntil > Date.now()) ? d : null;
 }
 async function accountFailRecord(entry, ip) {
+  const c = await guardCfg();
   const now = Date.now();
   let lockedNow = false, n = 0, ips = [];
   try {
@@ -2706,19 +2722,19 @@ async function accountFailRecord(entry, ip) {
       const ref = acctGuardRef(entry.id);
       const s = await tx.get(ref);
       const d = s.exists ? s.data() : {};
-      const fails = (d.fails || []).filter((f) => now - f.t < 86400000);
+      const fails = (d.fails || []).filter((f) => now - f.t < c.acctWindowMin * 60000);
       fails.push({ t: now, ip: String(ip || '').slice(0, 64) });
       n = fails.length;
       ips = Array.from(new Set(fails.map((f) => f.ip)));
       const upd = { fails: fails.slice(-50) };
-      if (n >= ACCOUNT_FAIL_LIMIT && !(d.lockedUntil > now)) { upd.lockedUntil = now + 86400000; upd.lockedAt = now; lockedNow = true; }
+      if (n >= c.acctFailLimit && !(d.lockedUntil > now)) { upd.lockedUntil = now + c.acctLockMin * 60000; upd.lockedAt = now; lockedNow = true; }
       tx.set(ref, upd, { merge: true });
     });
   } catch (e) { console.error('accountFailRecord', e); return; }
   if (lockedNow) {
     await securityAlert({ type: 'login-lock', target: entry.nickname || entry.id, fails: n, ip, ips },
       '🔒 계정 보호 잠금 · ' + (entry.nickname || ''),
-      '24시간 안에 ' + n + '번 틀림 (IP ' + ips.length + '곳) → 이 계정 하루 잠금. 본인이면 관리자탭에서 새 PIN 주면 풀려요');
+      Math.round(c.acctWindowMin / 60) + '시간 안에 ' + n + '번 틀림 (IP ' + ips.length + '곳) → 이 계정 잠금. 본인이면 관리자탭에서 새 PIN 주면 풀려요');
   }
 }
 /* VPN 로그인 검토 (loginHold/{계정_IP}): pending → 관리자 approve(7일간 그 계정·IP 허용) / deny(거부 + 감시 IP).
@@ -2762,7 +2778,7 @@ async function knownDevices(uid) {
 async function suspicionOf(o) {
   const reasons = [];
   const [watch, intel, devs] = await Promise.all([
-    watchIpSet().catch(() => new Set(WATCH_IPS)), ipIntel(o.ip),
+    watchIpSet().catch(() => new Set()), ipIntel(o.ip),
     o.uid ? knownDevices(o.uid).catch(() => new Set()) : Promise.resolve(new Set())
   ]);
   const device = deviceOf(o.ua);
@@ -2772,7 +2788,7 @@ async function suspicionOf(o) {
   else if (o.origin.indexOf(APP_ORIGIN) !== 0) reasons.push('앱 밖 사이트에서 접속(' + o.origin.slice(0, 60) + ')');
   if (!/Mozilla\//.test(o.ua || '')) reasons.push('일반 브라우저 아님');
   /* 로그인 성공·앱 접속은 새 PIN(쉬운 옛 PIN 은 거부됨)·새 세션(옛 세션은 끊김)이라 본인 → 실패·차단 시도에만 붙임 */
-  if (o.entry && BREACHED_IDS.has(o.entry.id) && o.status !== 'ok' && o.status !== 'access') reasons.push('탈취 이력 계정');
+  if (o.entry && await isBreached(o.entry.id) && o.status !== 'ok' && o.status !== 'access') reasons.push('탈취 이력 계정');
   if (o.entry && o.entry.lastSeenAt && o.status !== 'access') {
     const days = Math.floor((Date.now() - Date.parse(o.entry.lastSeenAt)) / 86400000);
     if (days >= 30) reasons.push(days + '일 만의 접속');
@@ -2984,7 +3000,7 @@ async function signupRisk(id) {
   if (!su || !su.realIp) return ['신청 기록 없음(앱 밖 경로 의심)'];
   const ip = su.realIp, why = [];
   const [watch, intel, li, same] = await Promise.all([
-    watchIpSet().catch(() => new Set(WATCH_IPS)), ipIntel(ip),
+    watchIpSet().catch(() => new Set()), ipIntel(ip),
     db.collection('loginIp').doc(guardKey('ip_', ip)).get().then((d) => d.data()).catch(() => null),
     db.collection('signups').where('realIp', '==', ip).limit(5).get().catch(() => null)
   ]);
@@ -3134,7 +3150,7 @@ async function triageFacts(d) {
       reasons: d.reasons || [], at: d.at, device: d.device || '', browserVersion: uaVersion(d.ua),
       fromAppSite: String(d.origin || '').indexOf(APP_ORIGIN) === 0,
       network: { provider: cur.provider || '', org: cur.org || '', city: cur.city || '', country: cur.country || '', type: cur.type || '', vpn: !!cur.dcvpn, icloudRelay: !!cur.relay },
-      breachedAccount: BREACHED_IDS.has(d.target),
+      breachedAccount: await isBreached(d.target),
       sameLineSeenBefore: sameNet,
       pastAccessCount: past.length,
       history
@@ -3164,13 +3180,13 @@ async function triagePush(ref, d, verdict, note) {
 async function runTriage(ref, d) {
   const urgent = d.triage.state === 'note';   /* 이미 푸시한 경고 → AI 의견만 기록 */
   const r = await triageFacts(d);
-  if (!urgent && d.kind === 'access' && r.sessionBeforeAttack && !BREACHED_IDS.has(d.target) && !(d.intel && d.intel.dcvpn)
+  if (!urgent && d.kind === 'access' && r.sessionBeforeAttack && !(await isBreached(d.target)) && !(d.intel && d.intel.dcvpn)
       && !(d.intel && d.intel.country && d.intel.country !== 'KR')) {
     const v = { state: 'benign', by: 'rule', reason: '10-26 공격 전부터 이 기기에 로그인돼 있던 세션 — 기록 시작 전부터 쓰던 기기라 처음 보는 것처럼 보임' };
     await ref.set(benignClose(d, v), { merge: true });
     return v;
   }
-  if (!urgent && r.sameNet && !BREACHED_IDS.has(d.target)) {
+  if (!urgent && r.sameNet && !(await isBreached(d.target))) {
     const v = { state: 'benign', by: 'rule', reason: '전에 이 계정이 쓰던 같은 회선(IP)에서 새 기기 — 같은 집·회사 기기로 보임' };
     await ref.set(benignClose(d, v), { merge: true });
     return v;
@@ -3257,7 +3273,7 @@ async function accessAudit(context, entry) {
     const o = { ip, ua, origin, entry, entryId: entry.id, uid, status: 'access', authAt: at ? new Date(at * 1000).toISOString() : '' };
     const before = await knownDevices(uid).catch(() => new Set());
     const n = await noteAccess(uid, entry.id, entry.nickname, ip, ua, origin);
-    const watched = (await watchIpSet().catch(() => new Set(WATCH_IPS))).has(ip);
+    const watched = (await watchIpSet().catch(() => new Set())).has(ip);
     const recentAlert = n.doc.alertAt && Date.now() - Date.parse(n.doc.alertAt) < 6 * 3600000;
     if (!n.fresh && !(watched && !recentAlert)) return;
     const s = await suspicionOf(Object.assign({}, o, { uid: '' }));   /* 기기 비교는 방금 남긴 기록 말고 그 전 목록(before)으로 */
@@ -3299,21 +3315,22 @@ async function ipBlockedCheck(ip, pin) {
   }
 }
 async function ipFailRecord(ip, what, targetId) {
+  const c = await guardCfg();
   const ref = db.collection('loginIp').doc(guardKey('ip_', ip));
   let blockedNow = false, n = 0, targetCount = 0;
   const now = Date.now();
   await db.runTransaction(async (tx) => {
     const s = await tx.get(ref);
     const d = s.exists ? s.data() : {};
-    const fails = (d.fails || []).filter((t) => now - t < 3600000);
+    const fails = (d.fails || []).filter((t) => now - t < c.ipFailWindowMin * 60000);
     fails.push(now); n = fails.length;
     const targetMap = Object.assign({}, d.targetMap || {});
-    Object.keys(targetMap).forEach((k) => { if (now - targetMap[k] >= 3600000) delete targetMap[k]; });
+    Object.keys(targetMap).forEach((k) => { if (now - targetMap[k] >= c.ipFailWindowMin * 60000) delete targetMap[k]; });
     if (targetId) targetMap[String(targetId).slice(0, 64)] = now;
     targetCount = Object.keys(targetMap).length;
     const upd = { fails: fails.slice(-50), targetMap };
-    if ((n >= IP_FAIL_LIMIT || targetCount >= IP_MULTI_TARGET_LIMIT) && !(d.blockedUntil > now)) {
-      upd.blockedUntil = now + 24 * 3600000; /* 24시간 IP 차단 */
+    if ((n >= c.ipFailLimit || targetCount >= c.ipMultiTargetLimit) && !(d.blockedUntil > now)) {
+      upd.blockedUntil = now + c.ipBlockMin * 60000;
       blockedNow = true;
     }
     tx.set(ref, upd, { merge: true });
@@ -3321,12 +3338,12 @@ async function ipFailRecord(ip, what, targetId) {
   if (blockedNow) {
     /* 차단된 IP 는 감시 목록에 — 나중에 이 IP 로 회원 계정 접속이 보이면 알림 (accessAudit) */
     await db.doc('security/watch').set({ ips: admin.firestore.FieldValue.arrayUnion(ip) }, { merge: true }).catch(() => {});
-    const reason = targetCount >= IP_MULTI_TARGET_LIMIT
-      ? ('한 IP(' + ip + ')에서 ' + targetCount + '개 계정을 연속 시도해 24시간 차단했어요')
-      : ('한 IP(' + ip + ')에서 1시간에 ' + n + '번 로그인 실패 → 24시간 차단했어요');
+    const reason = targetCount >= c.ipMultiTargetLimit
+      ? ('한 IP(' + ip + ')에서 ' + targetCount + '개 계정을 연속 시도해 차단했어요')
+      : ('한 IP(' + ip + ')에서 로그인 ' + n + '번 실패 → 차단했어요');
     await securityAlert({ type: 'ip-block', ip, what, fails: n, targets: targetCount }, '🛡 로그인 공격 IP 자동 차단', reason);
   }
-  /* 분산 프록시 스프레이 감지: 5분 내 4개 이상 서로 다른 계정 실패 시(계정 잠금 5회 미만이어도!) 즉시 알림 + 30분간 흔한 PIN 대입 차단 */
+  /* 분산 프록시 스프레이 감지: 서로 다른 계정 실패가 몰리면(계정 잠금 전이어도) 즉시 알림 + 잠시 흔한 PIN 대입 차단 */
   if (targetId) {
     try {
       const spRef = db.collection('loginGuard').doc('_spray');
@@ -3335,25 +3352,25 @@ async function ipFailRecord(ip, what, targetId) {
         const spSnap = await tx.get(spRef);
         const sp = spSnap.exists ? spSnap.data() : {};
         const recent = Object.assign({}, sp.recentTargets || {});
-        Object.keys(recent).forEach((k) => { if (now - recent[k] >= 300000) delete recent[k]; });
+        Object.keys(recent).forEach((k) => { if (now - recent[k] >= c.sprayWindowMin * 60000) delete recent[k]; });
         recent[String(targetId).slice(0, 64)] = now;
         const cnt = Object.keys(recent).length;
         const upd = { recentTargets: recent, updatedAt: now };
-        if (cnt >= 4 && !(sp.sprayUntil > now)) {
-          upd.sprayUntil = now + 30 * 60000;
+        if (cnt >= c.sprayTargets && !(sp.sprayUntil > now)) {
+          upd.sprayUntil = now + c.sprayLockMin * 60000;
           sprayTriggered = true;
         }
         tx.set(spRef, upd, { merge: true });
       });
       if (sprayTriggered) {
-        await securityAlert({ type: 'ip-block', ip, what: 'spray', fails: 4 }, '🛡 무차별 대입(스프레이) 방어 작동', '5분 내 4개 이상 서로 다른 계정 PIN 실패가 감지되어(잠금 회피 시도 포함) 보안 보호 모드를 켰어요');
+        await securityAlert({ type: 'ip-block', ip, what: 'spray', fails: c.sprayTargets }, '🛡 무차별 대입(스프레이) 방어 작동', '짧은 시간에 서로 다른 계정 ' + c.sprayTargets + '개 이상 PIN 실패가 감지되어(잠금 회피 시도 포함) 보안 보호 모드를 켰어요');
       }
     } catch (e) { console.error('sprayRecord', e); }
   }
 }
-/* 계정 잠금이 걸린 순간 알림 (5회마다) */
+/* 계정 잠금이 걸린 순간 알림 */
 async function lockAlert(guardKeyName, fails, ip, label) {
-  if (!fails || fails % LOGIN_MAX_FAILS !== 0) return;
+  if (!fails || fails % (await guardCfg()).loginMaxFails !== 0) return;
   const isAdminKey = guardKeyName === 'admin' || String(guardKeyName).indexOf('adm_') === 0;
   await securityAlert({ type: isAdminKey ? 'admin-lock' : 'login-lock', target: label || guardKeyName, fails, ip },
     isAdminKey ? '🚨 관리자 로그인 잠김' : '🛡 로그인 잠김',
