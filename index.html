@@ -1121,7 +1121,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-01-524';
+  var APP_VERSION = '2026-11-02-527';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -6763,12 +6763,14 @@
     /* 보낸 사진 요청: 내 사진도 상대에게 공개할 수 있음 (상대가 보류로 "사진 보여주세요" 한 경우 등) */
     var revealMine = '';
     if (!incoming && isPhoto) {
-      revealMine = r.fromRevealed
+      revealMine = st === 'rejected'
+        ? (r.fromRevealed ? '<div class="mine-note">📷 공개했던 내 사진은 닫혔어요.</div>' : '')
+        : r.fromRevealed
         ? '<div class="mine-note" style="color:#137333;">📷 내 사진을 상대에게 공개했어요.</div>'
         : '<div class="mine-actions"><button type="button" class="card-btn" data-action="reveal-mine" data-id="' + escapeHtml(r.id) + '">📷 내 사진 공개</button></div>';
     }
     /* 받은 사진 요청: 상대가 자기 사진을 공개함 → 나는 명단에서 그 사람 사진을 볼 수 있음 */
-    if (incoming && isPhoto && r.fromRevealed) {
+    if (incoming && isPhoto && r.fromRevealed && st !== 'rejected') {
       revealMine += '<div class="mine-note" style="color:#137333;">📷 상대도 사진을 공개했어요.</div>';
     }
     /* 대화 신청(구 번호 요청)이 수락됨 → 채팅 버튼 (번호 대신 앱 내 채팅) */
@@ -11640,7 +11642,7 @@
           '<button type="button" class="card-btn primary" id="modal-ok">요청하기</button>' +
           (isPhoto ? '<button type="button" class="card-btn approve" id="modal-ok-reveal">요청 + 내 사진 공개</button>' : '') +
         '</div>' +
-        (isPhoto ? '<p class="modal-msg" style="color:var(--muted);font-size:0.8rem;margin:6px 0 0;">“요청 + 내 사진 공개”를 누르면 상대가 수락 전에도 내 사진을 볼 수 있어요 (수락률↑).</p>' : '')
+        (isPhoto ? '<p class="modal-msg" style="color:var(--muted);font-size:0.8rem;margin:6px 0 0;">“요청 + 내 사진 공개”를 누르면 상대가 수락 전에도 내 사진을 볼 수 있어요. 거절되거나 답 없이 마감되면 자동으로 닫혀요.</p>' : '')
       );
       new Promise(function (resolve) {
         function finish(val) { closeModal(noteOverlay); resolve(val); }
@@ -11945,7 +11947,7 @@
       if ((req.type || 'contact') === 'photo') {
         /* 승인된 사진 요청은 양방향 상호 공개 (요청자·수신자 모두 서로 사진을 봄) — "보고 튀기" 방지 */
         if (req.approved) { add(photo, req.fromId, req.toId); add(photo, req.toId, req.fromId); }
-        if (req.fromRevealed) add(photo, req.toId, req.fromId);   /* 요청자가 자기 사진 공개 → 받은 사람이 봄 */
+        if (req.fromRevealed && !req.rejected) add(photo, req.toId, req.fromId);   /* 요청자가 자기 사진 공개 → 받은 사람이 봄 (거절·마감되면 닫힘, 서버 photoAclFor 와 같게) */
       } else if (req.approved) { add(contact, req.fromId, req.toId); add(contact, req.toId, req.fromId); }
     });
     _permIdxFor = reqs; _permIdx = { photo: photo, contact: contact };
@@ -12034,7 +12036,7 @@
     var me = findMyEntry(currentState);
     if (!me) return modalNotice('로그인 필요', '먼저 로그인해주세요.');
     var req = (currentState.dateRequests || []).find(function (r) { return r.id === id; });
-    if (!req || req.fromId !== me.id || (req.type || 'contact') !== 'photo' || req.fromRevealed) return;
+    if (!req || req.fromId !== me.id || (req.type || 'contact') !== 'photo' || req.fromRevealed || req.rejected) return;
     var toName = nickForEntry(currentState, req.toId);
     modalConfirm('내 사진 공개', escapeHtml(toName) + '님에게 내 사진을 공개할까요? 공개하면 상대가 바로 내 사진을 볼 수 있어요.', '공개', 'primary').then(function (ok) {
       if (!ok) return;
@@ -12281,6 +12283,7 @@
     var overlay = openModal(
       '<h3>다시 요청하기</h3>' +
       '<p class="modal-msg">' + escapeHtml(toName) + '님에게 ' + (isPhoto ? '사진' : '대화') + ' 요청을 다시 보내요. 상대가 궁금해한 정보를 담아주세요.</p>' +
+      (isPhoto && req.rejected && req.fromRevealed ? '<p class="modal-msg" style="color:var(--muted);font-size:0.8rem;margin:6px 0 0;">📷 공개했던 내 사진은 닫혀 있어요. 다시 보여 주려면 보낸 뒤 [내 사진 공개]를 눌러 주세요.</p>' : '') +
       feedbackHtml +
       '<textarea class="modal-input" id="reapply-note" rows="3" maxlength="200" placeholder="예: 직장은 강남 ○○회사 다니고 있어요! 다시 요청드려요" style="margin-top:8px;">' + escapeHtml(reqNote(req) || '') + '</textarea>' +
       '<div class="modal-actions">' +

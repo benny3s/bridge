@@ -98,5 +98,39 @@ const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
   st.dateRequests=F.map((f,i)=>({id:'c'+i,type:'photo',fromId:f,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1)})).concat([{id:'rm',type:'photo',fromId:M,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(9),rejected:true,expired:true,decidedAt:agoF(1)}]);
   err=null; try{await m.chatAction.run({op:'reqReapply',as:M,id:'rm',note:'다시 부탁드려요 반가워요 잘 부탁해요'},mctx(M,{m:1}));}catch(e){err=e;}
   ok(err && /기다리는 신청이 많아요/.test(err.message),'신청함이 5명으로 꽉 차면 다시 보내기도 막힘'+(err?'':' — 안 막힘'));
+  // 먼저 공개한 사진: 거절·자동 마감되면 닫힘, 대기·보류 중엔 열림 (2026-11-02). 서버 ACL 과 화면 색인이 같아야 함
+  const srcAll=fs.readFileSync(process.argv[2],'utf8').replace(/\r\n/g,'\n');
+  const aclFn=new Function(srcAll.slice(srcAll.indexOf('function photoAclFor('),srcAll.indexOf('async function syncPhotoAcl('))+';return photoAclFor;')();
+  const htmlAll=fs.readFileSync(path.join(path.dirname(process.argv[2]),'..','index.html'),'utf8');
+  const permFn=new Function('var _permIdx=null,_permIdxFor=null;'+htmlAll.slice(htmlAll.indexOf('function permIndex(state)'),htmlAll.indexOf('function canViewPhotoOf('))+';return permIndex;')();
+  const seesM=(rq)=>{const s0={entries:[{id:M},{id:A}],dateRequests:rq};return {srv:aclFn(s0)[M].viewers.includes(A),scr:!!((permFn(s0).photo[A]||{})[M])};};
+  const chk=(rq,want,msg)=>{const v=seesM(rq);ok(v.srv===want&&v.scr===want,msg+' (서버 '+v.srv+' · 화면 '+v.scr+')');};
+  const rv={id:'p',type:'photo',fromId:M,toId:A,note:'안녕하세요 반가워요',fromRevealed:true,submittedAt:agoF(1)};
+  chk([rv],true,'대기 중이면 먼저 공개한 사진이 보임');
+  chk([{...rv,held:true}],true,'보류 중이면 먼저 공개한 사진이 보임');
+  chk([{...rv,rejected:true,rejectedBy:'user'}],false,'거절되면 먼저 공개한 사진이 닫힘');
+  chk([{...rv,rejected:true,expired:true,rejectedBy:'auto'}],false,'답 없이 마감되면 먼저 공개한 사진이 닫힘');
+  chk([{...rv,approved:true}],true,'수락되면 서로 보임');
+  chk([{...rv,rejected:true},{id:'q',type:'photo',fromId:A,toId:M,approved:true,submittedAt:agoF(1)}],true,'거절돼도 반대쪽 요청이 수락돼 있으면 보임');
+  // 실제 거절 동작을 거쳐도 닫힘
+  DB = seed(); st=DB.app.state; st.dateRequests=[{...rv}];
+  await m.chatAction.run({op:'reqReject',as:A,id:'p',msg:''},mctx(A,{m:1}));
+  ok(!aclFn(DB.app.state)[M].viewers.includes(A),'거절 버튼을 누르면 사진 열람 목록에서 빠짐');
+  // 끝난 요청에는 사진을 새로 공개할 수 없음
+  DB = seed(); st=DB.app.state; st.dateRequests=[{id:'p',type:'photo',fromId:M,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1),rejected:true}];
+  err=null; try{await m.chatAction.run({op:'reqReveal',as:M,id:'p'},mctx(M,{m:1}));}catch(e){err=e;}
+  ok(err&&!DB.app.state.dateRequests[0].fromRevealed,'거절된 요청에는 사진을 새로 공개할 수 없음'+(err?'':' — 공개됨'));
+  // 거절 뒤 다시 보내면 닫힌 채로 가고, 직접 공개하면 다시 열림
+  DB = seed(); st=DB.app.state; st.dateRequests=[{...rv,rejected:true,fromRevealedAt:agoF(1)}];
+  await m.chatAction.run({op:'reqReapply',as:M,id:'p',note:'다시 부탁드려요 반가워요 잘 부탁해요'},mctx(M,{m:1}));
+  let rr=DB.app.state.dateRequests[0];
+  ok(!rr.rejected&&!rr.fromRevealed&&!rr.fromRevealedAt,'거절 뒤 다시 보내면 사진은 닫힌 채로 감');
+  await m.chatAction.run({op:'reqReveal',as:M,id:'p'},mctx(M,{m:1}));
+  ok(DB.app.state.dateRequests[0].fromRevealed===true,'다시 보낸 요청에서 직접 공개하면 다시 열림');
+  // 보류 뒤 다시 보내면 원래대로 열림
+  DB = seed(); st=DB.app.state; st.dateRequests=[{...rv,held:true,holdMessage:'더 알고 싶어요 알려 주세요',heldBy:'user'}];
+  await m.chatAction.run({op:'reqReapply',as:M,id:'p',note:'다시 부탁드려요 반가워요 잘 부탁해요'},mctx(M,{m:1}));
+  rr=DB.app.state.dateRequests[0];
+  ok(!rr.held&&rr.fromRevealed===true,'보류 뒤 다시 보내면 공개한 사진은 그대로 열림');
   console.log('\n'+pass+' OK, '+fail+' FAIL'); process.exit(fail?1:0);
 })();

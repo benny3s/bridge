@@ -2019,6 +2019,7 @@ async function memberReqAction(op, data, context) {
       const c = copy();
       if (op === 'reqReveal') {                       /* 보낸 사진 요청에서 내 사진 먼저 공개 */
         need(isFrom && (req.type || 'contact') === 'photo' && !req.fromRevealed);
+        need(st !== 'rejected', '이미 끝난 요청이에요. 다시 요청한 뒤에 사진을 공개할 수 있어요.');
         c.fromRevealed = true; c.fromRevealedAt = now;
         log = '내 사진 공개 → ' + nick(req.toId);
       } else if (op === 'reqApprove' || op === 'reqReject' || op === 'reqHold') {   /* 받은 사람만, 대기·보류 중일 때만 */
@@ -2050,6 +2051,7 @@ async function memberReqAction(op, data, context) {
         c.note = clip(data.note, 200);
         ['held', 'holdMessage', 'heldBy', 'rejected', 'rejectMessage', 'rejectedBy', 'approved', 'userApproved', 'approveMessage', 'decidedAt', 'revealedContact', 'toContact',
           'expired', 'expiredWhy', 'remind1Sent', 'remind2Sent', 'remind3Sent'].forEach((k) => { delete c[k]; });   /* 자동 마감 표시·독촉 표시도 (11-01: 다시 보내도 '답 없이 마감'으로 남던 것) */
+        if (st === 'rejected') { delete c.fromRevealed; delete c.fromRevealedAt; }   /* 거절·마감으로 닫힌 사진은 다시 보내도 닫힌 채로, 공개는 보내는 사람이 직접 (2026-11-02) */
         c.submittedAt = now; c.reappliedAt = now;
         log = kind(req) + ' 요청 재신청 → ' + nick(req.toId);
       } else if (op === 'reqCancel') {                /* 보낸 사람이 취소 = 삭제 */
@@ -2559,7 +2561,7 @@ if (process.env.BRIDGE_LOCAL_TEST) { exports._purgeOldChatsForTest = purgeOldCha
 
 /* ══ 3단계-③: 사진 원본 열람 권한 ══
    photos/{id} 에 서버가 viewers(볼 수 있는 uid)·owners(고칠 수 있는 uid)를 유지 → 규칙이 이 목록으로 판단.
-   앱의 canViewPhotoOf 와 같은 기준: 승인된 사진 요청은 서로 공개, '내 사진 공개'(fromRevealed)는 요청 받은 사람에게 공개.
+   앱의 canViewPhotoOf 와 같은 기준: 승인된 사진 요청은 서로 공개, '내 사진 공개'(fromRevealed)는 요청 받은 사람에게 공개 (거절·답 없이 마감되면 닫힘, 대기·보류 중엔 열림).
    본인·주선자(대리 프로필)는 항상 포함, 보는 사람이 대리 프로필이면 그 주선자도 포함(주선자가 친구로 전환해 봄). 관리자는 규칙에서 허용.
    매 변경마다 전체를 다시 계산하되, 서버 전용 캐시(acl/photos)와 비교해 바뀐 문서만 씀. 하루 한 번은 전부 다시 씀. */
 function photoAclFor(state) {
@@ -2582,7 +2584,7 @@ function photoAclFor(state) {
   (state.dateRequests || []).forEach((r) => {
     if ((r.type || 'contact') !== 'photo') return;
     if (r.approved) { grant(r.toId, r.fromId); grant(r.fromId, r.toId); }
-    if (r.fromRevealed) grant(r.fromId, r.toId);
+    if (r.fromRevealed && !r.rejected) grant(r.fromId, r.toId);
   });
   const out = {};
   Object.keys(acl).forEach((id) => { out[id] = { viewers: Object.keys(acl[id].viewers).sort(), owners: Object.keys(acl[id].owners).sort() }; });
@@ -4013,7 +4015,7 @@ exports.aiConcierge = functions
         tx.update(stateRef, {
           pendingEntries: nextPend,
           entries: nextEntries,
-          logs: logs.slice(-500)
+          logs   /* 자르지 않음: 500으로 자르면 600에서 도는 maybeArchiveLogs 가 안 돌아 옛 기록이 보관 없이 사라졌음 (2026-10-25~11-02) */
         });
       });
       if (welcomeMsgs.length) await appendMemberMsgs(welcomeMsgs, []).catch((e) => console.error('welcome msgs', e));
