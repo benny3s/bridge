@@ -11,7 +11,7 @@ const db={collection:(c)=>Object.assign(query(c,[],0),{doc:(id)=>docOf(c,id||cry
  doc:(p)=>{const [c,id]=p.split('/');return docOf(c,id);},
  runTransaction:async(fn)=>fn({get:(r)=>r.get(),update:(r,o)=>r.update(o),set:(r,o,opt)=>r.set(o,opt)})};
 const rl=Module._load;
-Module._load=function(r){ if(r==='firebase-admin'){const a={initializeApp(){},firestore:()=>db,auth:()=>({createCustomToken:async(uid,cl)=>JSON.stringify({uid,cl}),revokeRefreshTokens:async()=>{revoked++;}})};a.firestore.FieldValue={delete:()=>({}),arrayUnion:()=>({})};a.messaging=()=>({send:async()=>{},sendEachForMulticast:async()=>({responses:[]})});return a;}
+Module._load=function(r){ if(r==='firebase-admin'){const a={initializeApp(){},firestore:()=>db,auth:()=>({createCustomToken:async(uid,cl)=>JSON.stringify({uid,cl}),revokeRefreshTokens:async()=>{revoked++;}})};a.firestore.FieldValue={delete:()=>({}),arrayUnion:()=>({})};a.messaging=()=>({send:async()=>{},sendEachForMulticast:async(x)=>{(global.__sent=global.__sent||[]).push(x);return {responses:[]};}});return a;}
  if(r==='firebase-functions/v1'||r==='firebase-functions'){const c={};const s=()=>c;c.region=s;c.runWith=s;c.https={onCall:h=>({run:h}),HttpsError:class extends Error{constructor(code,msg){super(msg);this.code=code;}}};c.firestore={document:()=>({onUpdate:h=>({run:h}),onWrite:h=>({run:h}),onCreate:h=>({run:h})})};c.pubsub={schedule:()=>({timeZone:()=>({onRun:h=>({run:h})}),onRun:h=>({run:h})})};const f=function(){return c};Object.assign(f,c);f.config=()=>({});return f;}
  return rl.apply(this,arguments);};
 global.fetch=async()=>{throw new Error('no net')};
@@ -132,5 +132,55 @@ const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
   await m.chatAction.run({op:'reqReapply',as:M,id:'p',note:'다시 부탁드려요 반가워요 잘 부탁해요'},mctx(M,{m:1}));
   rr=DB.app.state.dateRequests[0];
   ok(!rr.held&&rr.fromRevealed===true,'보류 뒤 다시 보내면 공개한 사진은 그대로 열림');
+  // 사진 먼저 볼게요: 보류 + 부탁 표시, 내 사진은 안 열림, 보낸 사람이 공개하면 보임 (2026-11-02)
+  FAKE_NOW = Date.parse('2026-11-20T12:00:00Z');
+  const pr={id:'p',type:'photo',fromId:M,toId:A,note:'안녕하세요 반가워요',submittedAt:agoF(1)};
+  const askMsg='사진을 먼저 보고 결정하고 싶어요. 사진을 공개해 주시면 답할게요!';
+  DB = seed(); st=DB.app.state; st.dateRequests=[{...pr}];
+  await m.chatAction.run({op:'reqHold',as:A,id:'p',msg:askMsg,askReveal:true},mctx(A,{m:1}));
+  rr=DB.app.state.dateRequests[0];
+  ok(rr.held&&rr.askReveal===true&&rr.heldBy==='user'&&!rr.approved,'사진 먼저 볼게요 → 보류 + 부탁 표시');
+  ok(!aclFn(DB.app.state)[A].viewers.includes(M),'눌러도 내 사진은 상대에게 안 열림');
+  ok(!aclFn(DB.app.state)[M].viewers.includes(A),'공개 전이라 상대 사진도 아직 안 보임');
+  ok((DB.app.state.logs||[]).some(l=>/사진 먼저 보기 부탁 →/.test(String(l.detail))),'기록에 부탁으로 남음 (버튼 쓰임 재기)');
+  await m.chatAction.run({op:'reqReveal',as:M,id:'p'},mctx(M,{m:1}));
+  rr=DB.app.state.dateRequests[0];
+  ok(aclFn(DB.app.state)[M].viewers.includes(A)&&rr.held,'보낸 사람이 공개하면 보이고, 결정은 받은 사람 몫(보류 그대로)');
+  // 일반 보류·먼저 공개한 요청엔 부탁 표시 없음, 다시 보내면 지움
+  DB = seed(); st=DB.app.state; st.dateRequests=[{...pr}];
+  await m.chatAction.run({op:'reqHold',as:A,id:'p',msg:'직장이 궁금해요 알려 주세요'},mctx(A,{m:1}));
+  ok(!DB.app.state.dateRequests[0].askReveal,'일반 보류엔 부탁 표시 없음');
+  DB = seed(); st=DB.app.state; st.dateRequests=[{...pr,fromRevealed:true}];
+  await m.chatAction.run({op:'reqHold',as:A,id:'p',msg:askMsg,askReveal:true},mctx(A,{m:1}));
+  ok(!DB.app.state.dateRequests[0].askReveal,'이미 공개한 요청엔 부탁 표시 없음');
+  DB = seed(); st=DB.app.state; st.dateRequests=[{...pr,held:true,heldBy:'user',holdMessage:askMsg,askReveal:true}];
+  await m.chatAction.run({op:'reqReapply',as:M,id:'p',note:'다시 부탁드려요 반가워요 잘 부탁해요'},mctx(M,{m:1}));
+  ok(!DB.app.state.dateRequests[0].askReveal,'다시 보내면 부탁 표시 지움');
+  // 보류 자동 마감: 보류 7일, 보류 뒤 공개했으면 공개 7일, 관리자 보류 제외, 고침 전 보류는 11-10 00시(KST) 뒤
+  const heldRow=(o)=>Object.assign({},pr,{held:true,heldBy:'user',holdMessage:askMsg,submittedAt:agoF(20)},o);
+  const runHeld=async(rows)=>{DB=seed();DB.app.state.dateRequests=rows;await m.remindPending.run();return DB.app.state.dateRequests;};
+  let hr=await runHeld([heldRow({decidedAt:agoF(8)})]);
+  ok(hr[0].expired&&hr[0].rejected&&hr[0].expiredWhy==='held'&&!hr[0].held,'보류 8일 → 자동 마감');
+  hr=await runHeld([heldRow({decidedAt:agoF(6)})]);
+  ok(!hr[0].expired&&hr[0].held,'보류 6일 → 그대로');
+  hr=await runHeld([heldRow({decidedAt:agoF(8),fromRevealed:true,fromRevealedAt:agoF(2)})]);
+  ok(!hr[0].expired&&hr[0].held,'보류 8일이어도 사진 공개가 2일 전이면 그대로');
+  hr=await runHeld([heldRow({decidedAt:agoF(8),heldBy:'admin'})]);
+  ok(!hr[0].expired&&hr[0].held,'관리자 보류는 자동 마감 안 함');
+  hr=await runHeld([heldRow({decidedAt:agoF(8),fromRevealed:true})]);
+  ok(hr[0].expired&&!aclFn({entries:[{id:M},{id:A}],dateRequests:hr})[M].viewers.includes(A),'공개한 채 보류 마감되면 사진도 닫힘');
+  FAKE_NOW = Date.parse('2026-11-05T12:00:00Z');
+  hr=await runHeld([heldRow({decidedAt:agoF(30)})]);
+  ok(!hr[0].expired&&hr[0].held,'고침 전 오래된 보류도 11-10 전엔 그대로');
+  FAKE_NOW = Date.parse('2026-11-10T01:00:00Z');
+  hr=await runHeld([heldRow({decidedAt:agoF(30)})]);
+  ok(hr[0].expired&&hr[0].expiredWhy==='held','고침 전 오래된 보류는 11-10 00시(KST) 뒤 마감');
+  FAKE_NOW = 0;
+  // 베타는 푸시가 꺼져 있어 문구는 여기서 확인: 부탁은 '사진 공개 부탁', 일반 보류는 '요청 보류'
+  const pushOf=async(after)=>{global.__sent=[];DB=seed();(DB.pushTokens=DB.pushTokens||{})[M]={tokens:['t-m'],token:'t-m'};const b={...DB.app.state,dateRequests:[{...pr}]},a={...DB.app.state,dateRequests:[after]};await m.onStateChange.run({before:{data:()=>clone(b)},after:{data:()=>clone(a)}},{params:{}});return global.__sent.map(x=>x.data||{});};
+  let pu=await pushOf({...pr,held:true,heldBy:'user',holdMessage:askMsg,askReveal:true});
+  ok(pu.some(d=>d.title==='📷 사진 공개 부탁'&&/사진을 먼저 보고 결정하고 싶어 해요/.test(d.body)),'부탁 → 보낸 사람에게 사진 공개 부탁 푸시'+(pu.length?'':' (푸시 없음)'));
+  pu=await pushOf({...pr,held:true,heldBy:'user',holdMessage:'직장이 궁금해요 알려 주세요'});
+  ok(pu.some(d=>d.title==='사진 요청 보류'&&/요청을 보류했어요/.test(d.body)),'일반 보류 → 예전 푸시 그대로'+(pu.length?'':' (푸시 없음)'));
   console.log('\n'+pass+' OK, '+fail+' FAIL'); process.exit(fail?1:0);
 })();
