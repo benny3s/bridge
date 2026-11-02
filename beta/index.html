@@ -6870,6 +6870,7 @@
     var replyMsg = '';
     if (st === 'approved' && r.approveMessage) replyMsg = '<div class="mine-note">답장: ' + escapeHtml(r.approveMessage) + '</div>';
     else if (st === 'held' && r.askReveal && !r.fromRevealed) replyMsg = '<div class="mine-note" style="background:var(--gold-soft);color:var(--ink);">' + (incoming ? '📷 상대에게 사진 공개를 부탁했어요. 공개하면 알림으로 알려드려요. 7일 안에 결정이 없으면 자동으로 마감돼요.' : '📷 상대가 사진을 먼저 보고 결정하고 싶어 해요. 아래 <b>내 사진 공개</b>를 누르면 바로 전해져요. 7일 안에 공개하지 않으면 자동으로 마감돼요.') + '</div>';
+    else if (st === 'held' && r.askReveal) replyMsg = '<div class="mine-note" style="background:var(--gold-soft);color:var(--ink);">' + (incoming ? '📷 상대가 사진을 공개했어요. 보고 승인이나 거절을 정해 주세요. 7일 안에 결정이 없으면 자동으로 마감돼요.' : '상대가 사진을 보고 결정할 거예요. 7일 안에 결정이 없으면 자동으로 마감돼요.') + '</div>';
     else if (st === 'held' && r.holdMessage) replyMsg = '<div class="mine-note">보류 메시지: ' + escapeHtml(r.holdMessage) + '</div>';
     else if (st === 'rejected' && r.expired) replyMsg = '<div class="mine-note">⌛ ' + (r.expiredWhy === 'resting' ? '상대가 지금 쉬는 중이라' : r.expiredWhy === 'held' ? '보류된 채 7일이 지나' : '7일 동안 답이 없어') + ' 자동으로 마감됐어요. 거절된 건 아니에요 — 다른 분께도 신청해 보세요.</div>';
     else if (st === 'rejected' && r.rejectMessage) replyMsg = '<div class="mine-note reject">거절 메시지: ' + escapeHtml(r.rejectMessage) + '</div>';
@@ -6885,7 +6886,7 @@
         : '<div class="mine-actions"><button type="button" class="card-btn' + (st === 'held' && r.askReveal ? ' primary' : '') + '" data-action="reveal-mine" data-id="' + escapeHtml(r.id) + '">📷 내 사진 공개</button></div>';
     }
     /* 받은 사진 요청: 상대가 자기 사진을 공개함 → 나는 명단에서 그 사람 사진을 볼 수 있음 */
-    if (incoming && isPhoto && r.fromRevealed && st !== 'rejected') {
+    if (incoming && isPhoto && r.fromRevealed && st !== 'rejected' && !(st === 'held' && r.askReveal)) {
       revealMine += '<div class="mine-note" style="color:#137333;">📷 상대도 사진을 공개했어요.</div>';
     }
     /* 대화 신청(구 번호 요청)이 수락됨 → 채팅 버튼 (번호 대신 앱 내 채팅) */
