@@ -2,9 +2,10 @@
 // 신청 자동 마감(첫 마감 예고)·쉬는 회원 마감·2주 쉬기 알림·답 대기 5건 막기 시험 (2026-11-01 v516)
 const fs=require('fs'),path=require('path'),Module=require('module'),crypto=require('crypto');
 process.env.NUM_ENC_KEY=crypto.randomBytes(32).toString('hex');
+process.env.BRIDGE_LOCAL_TEST='1';
 let DB={}; let revoked=0; const alerts=[];
 const clone=(v)=>v&&JSON.parse(JSON.stringify(v));
-const docOf=(col,id)=>({id,get:async()=>{const v=(DB[col]||{})[id];return {exists:!!v,id,data:()=>clone(v)};},set:async(o,opt)=>{(DB[col]=DB[col]||{})[id]=Object.assign({},opt&&opt.merge?(DB[col]||{})[id]:{},o);},update:async(o)=>{Object.assign(DB[col][id],o);}});
+const docOf=(col,id)=>({id,get:async()=>{const v=(DB[col]||{})[id];return {exists:!!v,id,data:()=>clone(v)};},set:async(o,opt)=>{(DB[col]=DB[col]||{})[id]=Object.assign({},opt&&opt.merge?(DB[col]||{})[id]:{},o);},update:async(o)=>{Object.assign(DB[col][id],o);},delete:async()=>{if(DB[col])delete DB[col][id];}});
 const query=(c,filters,lim)=>({where:(f,op,v)=>query(c,filters.concat([[f,v,op]]),lim),limit:(n)=>query(c,filters,n),orderBy:()=>query(c,filters,lim),
   get:async()=>{const docs=Object.entries(DB[c]||{}).filter(([id,x])=>filters.every(([f,v,op])=>op==='>'?x[f]>v:x[f]===v)).map(([id,x])=>({id,data:()=>clone(x)}));return {docs,empty:!docs.length,size:docs.length,forEach:(fn)=>docs.forEach(fn)};}});
 const db={collection:(c)=>Object.assign(query(c,[],0),{doc:(id)=>docOf(c,id||crypto.randomUUID()),add:async(o)=>{(DB[c]=DB[c]||{})[crypto.randomUUID()]=o;}}),
@@ -182,5 +183,88 @@ const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
   ok(pu.some(d=>d.title==='📷 사진 공개 부탁'&&/사진을 먼저 보고 결정하고 싶어 해요/.test(d.body)),'부탁 → 보낸 사람에게 사진 공개 부탁 푸시'+(pu.length?'':' (푸시 없음)'));
   pu=await pushOf({...pr,held:true,heldBy:'user',holdMessage:'직장이 궁금해요 알려 주세요'});
   ok(pu.some(d=>d.title==='사진 요청 보류'&&/요청을 보류했어요/.test(d.body)),'일반 보류 → 예전 푸시 그대로'+(pu.length?'':' (푸시 없음)'));
+  // 신청 글 속 연락처: 회원 모두가 읽는 app/state 엔 안 남고, 두 사람·주선자는 원문 그대로 (2026-11-03)
+  const PH='010-1234-5678',KK='K'.repeat(20),PRIV='🔒 연락처가 담겨 있어 두 분만 볼 수 있어요.';
+  const privSeed=(rows)=>{DB=seed();DB.app.state.entries.push({id:KK,nickname:'주선자',isMatchmaker:true});DB.app.state.entries.find(e=>e.id===B).managedBy=KK;DB.app.state.dateRequests=rows;delete DB.reqPrivate;};
+  const row=()=>({id:'c1',type:'contact',fromId:B,toId:A,note:'안녕하세요 대화 신청드려요',submittedAt:agoF(1)});
+  const stOf=(id='c1')=>DB.app.state.dateRequests.find(r=>r.id===id);
+  const noPhone=()=>JSON.stringify(DB.app.state).indexOf('1234-5678')<0;
+  privSeed([row()]);
+  await m.chatAction.run({op:'reqApprove',as:A,id:'c1',msg:'제 번호는 '+PH+' 입니다 연락주세요'},mctx(A,{m:1}));
+  ok(stOf().approved&&stOf().approveMessage===PRIV,'번호 든 답장 → 승인되고 state 엔 안내 문구만');
+  ok(noPhone(),'번호가 state 어디에도 없음');
+  ok(DB.reqPrivate&&DB.reqPrivate.c1&&DB.reqPrivate.c1.texts.approveMessage.indexOf(PH)>=0,'원문은 reqPrivate 에 그대로');
+  ok(DB.reqPrivate&&[A,B,KK].every(x=>DB.reqPrivate.c1.viewers.includes(x))&&DB.reqPrivate.c1.viewers.length===3,'읽는 사람 = 두 사람 + 담당 주선자');
+  privSeed([row()]);
+  await m.chatAction.run({op:'reqApprove',as:A,id:'c1',msg:'네 반갑습니다 대화해 보아요'},mctx(A,{m:1}));
+  ok(stOf().approveMessage==='네 반갑습니다 대화해 보아요'&&!DB.reqPrivate,'연락처 없는 답장은 예전 그대로');
+  privSeed([row()]);
+  await m.chatAction.run({op:'reqReject',as:A,id:'c1',msg:'죄송해요 '+PH+' 로 연락 주세요'},mctx(A,{m:1}));
+  ok(stOf().rejectMessage===PRIV&&noPhone(),'거절 글도 옮김');
+  privSeed([row()]);
+  await m.chatAction.run({op:'reqHold',as:A,id:'c1',msg:'궁금한 게 있어요 '+PH+' 로 주세요'},mctx(A,{m:1}));
+  ok(stOf().holdMessage===PRIV&&noPhone(),'보류 글도 옮김');
+  privSeed([]);
+  const cr=await m.chatAction.run({op:'reqCreate',as:M,to:A,type:'contact',note:'dohan03 카톡아이디로 연락주세요'},mctx(M,{m:1}));
+  ok(stOf(cr.id).note===PRIV&&DB.reqPrivate[cr.id].texts.note.indexOf('dohan03')>=0&&JSON.stringify(DB.app.state).indexOf('dohan03')<0,'처음 보내는 글의 카톡 아이디도 옮김');
+  privSeed([Object.assign(row(),{approved:true,approveMessage:'제 번호는 '+PH+' 입니다',decidedAt:agoF(40)}),Object.assign(row(),{id:'c2',approved:true,approveMessage:'네 반갑습니다 대화해요',decidedAt:agoF(2)})]);
+  await m.remindPending.run();
+  ok(stOf().approveMessage===PRIV&&noPhone(),'예전 답장도 다음 정기 실행 때 옮김');
+  ok(DB.reqPrivate&&DB.reqPrivate.c1&&DB.reqPrivate.c1.texts.approveMessage.indexOf(PH)>=0,'오래된 답장도 원문을 지우지 않음 (상대가 못 봤을 수 있음)');
+  ok(stOf('c2').approveMessage==='네 반갑습니다 대화해요'&&!(DB.reqPrivate&&DB.reqPrivate.c2),'다른 답장은 그대로');
+  await m.remindPending.run();
+  ok(DB.reqPrivate&&DB.reqPrivate.c1&&DB.reqPrivate.c1.texts.approveMessage.indexOf(PH)>=0,'두 번 돌아도 원문이 안내 문구로 덮이지 않음');
+  privSeed([Object.assign(row(),{approved:true,approveMessage:PRIV}),Object.assign(row(),{id:'c3',fromId:'없는회원',approved:true,approveMessage:PRIV})]);
+  DB.reqPrivate={c1:{viewers:[A],texts:{approveMessage:PH}},c3:{viewers:[A],texts:{approveMessage:PH}},gone:{viewers:[A],texts:{note:PH}}};
+  if(m._purgeReqPrivateForTest)await m._purgeReqPrivateForTest(DB.app.state);
+  ok(!DB.reqPrivate.gone,'신청이 사라지면 원문도 지움');
+  ok(!DB.reqPrivate.c3,'회원이 삭제되면 원문도 지움');
+  ok(DB.reqPrivate.c1&&DB.reqPrivate.c1.texts.approveMessage===PH&&DB.reqPrivate.c1.viewers.length===3,'살아 있는 신청은 원문 유지, 읽는 사람만 새로 맞춤');
+
+  // 🧭 주간 행동 보고: 베니 님만, 제재 아님 (2026-11-03)
+  const NOWB=Date.parse('2026-11-09T00:30:00Z'),at=(d)=>new Date(NOWB-d*86400000).toISOString(),mins=(iso,n)=>new Date(Date.parse(iso)+n*60000).toISOString();
+  let lid=0;const lg=(iso,actor,detail)=>({id:'l'+(++lid),at:iso,type:'request',actor,detail});
+  const closeSet=(a,n,gap)=>Array.from({length:n}).flatMap((_,i)=>[lg(at(5+i),a,'사진 요청 수락 → 상대'+i),lg(mins(at(5+i),gap),a,'사진 공개 회수 → 상대'+i)]);
+  const bState={entries:[{id:'b1',nickname:'셋닫기'},{id:'b2',nickname:'둘닫기'},{id:'b3',nickname:'늦닫기'},{id:'b4',nickname:'재요청'},{id:'b5',nickname:'한번'},{id:'b6',nickname:'차단둘'},{id:'b7',nickname:'차단하나'},{id:'b8',nickname:'시험',testAccount:true},{id:'b9',nickname:'대리',managedBy:'b10'},{id:'b10',nickname:'담당',isMatchmaker:true},{id:'b11',nickname:'옛일'},{id:'b12',nickname:'쉼',deactivated:true}],
+   logs:[...closeSet('셋닫기',3,1),...closeSet('둘닫기',2,1),...closeSet('늦닫기',3,1500),...closeSet('시험',3,1),...closeSet('대리',3,60),...closeSet('쉼',3,1),...closeSet('탈퇴자',3,1),
+    lg(at(40),'피치','사진 요청 거절 → 재요청'),lg(at(9),'재요청','사진 보기 요청 → 피치 (사진 공개)'),lg(at(8),'재요청','사진 요청 재신청 → 피치'),lg(at(7),'재요청','대화 신청 → 피치'),
+    lg(at(3),'재요청','사진 보기 요청 → 처음보는분'),lg(at(2),'처음보는분','사진 요청 거절 → 재요청'),
+    lg(at(6),'한번','사진 보기 요청 → 다른분'),lg(at(5),'다른분','사진 요청 거절 → 한번'),lg(at(4),'한번','사진 보기 요청 → 다른분'),
+    lg(at(60),'옛분','사진 요청 거절 → 옛일'),lg(at(50),'옛일','사진 보기 요청 → 옛분'),lg(at(49),'옛일','사진 보기 요청 → 옛분'),lg(at(48),'옛일','사진 보기 요청 → 옛분')]};
+  const bBlocks=[{ids:['b6','b7']},{ids:['b6']}];
+  const bRows=m._buildBehaviorReportForTest?m._buildBehaviorReportForTest(bState,[],bBlocks,NOWB):[];
+  const bBy=(n)=>bRows.find(r=>r.nick===n);
+  ok(bBy('셋닫기')&&bBy('셋닫기').closes===3&&bBy('셋닫기').fast===3,'수락 직후 닫기 3번 → 올라감 (5분 안 3)');
+  ok(!bBy('둘닫기'),'2번은 안 올라감');
+  ok(!bBy('늦닫기'),'24시간 지나 닫은 건 안 셈');
+  ok(!bBy('시험'),'시험 계정 뺌');
+  ok(!bBy('탈퇴자'),'없는 회원 뺌');
+  ok(bBy('대리')&&bBy('대리').mm==='담당'&&bBy('대리').fast===0,'대리 프로필엔 담당 주선자 표시');
+  ok(bBy('쉼')&&bBy('쉼').resting===true,'쉬는 회원은 표시만');
+  ok(bBy('재요청')&&bBy('재요청').again===3&&bBy('재요청').top==='피치 3','거절 뒤 재요청 3번 (거절 전 요청은 안 셈)');
+  ok(!bBy('한번'),'재요청 1번은 안 올라감');
+  ok(!bBy('옛일'),'30일 넘은 재요청은 안 셈');
+  ok(bBy('차단둘')&&bBy('차단둘').blockedBy===2&&!bBy('차단하나'),'차단 2명부터');
+  ok(JSON.stringify(bRows).indexOf('blockers')<0,'누가 차단했는지는 안 담음');
+  DB=seed();DB.app.state.entries.push(...bState.entries);DB.app.state.logs=bState.logs;DB.memberBlocks={x:bBlocks[0],y:bBlocks[1]};DB.pushTokens={admin:{tokens:['t-a'],token:'t-a'}};
+  let denied=0;try{await m.chatAction.run({op:'behaviorReport'},mctx(A,{m:1}));}catch(e){denied++;}
+  try{await m.chatAction.run({op:'behaviorReport'},ctx({admin:1,ao:Date.now()+60000}));}catch(e){denied++;}
+  ok(denied===2,'회원·이번만 관리자는 못 봄');
+  FAKE_NOW=Date.parse('2026-11-10T00:30:00Z');global.__sent=[];
+  await m.remindPending.run();
+  ok(!(DB.adminReports&&DB.adminReports.behavior),'월요일 9시 말고는 안 만듦');
+  FAKE_NOW=NOWB;global.__sent=[];
+  await m.remindPending.run();
+  ok(DB.adminReports&&DB.adminReports.behavior&&DB.adminReports.behavior.rows.length>=4,'월요일 9시에 보고 만듦');
+  let pushes=global.__sent.map(x=>x.data||{}).filter(d=>/행동 보고/.test(d.title||''));
+  ok(pushes.length===1&&pushes[0].body.indexOf('셋닫기')<0,'관리자 푸시 1번, 잠금 화면에 이름 없음');
+  global.__sent=[];FAKE_NOW=NOWB+60000;await m.remindPending.run();
+  ok(!global.__sent.map(x=>x.data||{}).some(d=>/행동 보고/.test(d.title||'')),'같은 날 다시 돌아도 안 보냄');
+  FAKE_NOW=NOWB+7*86400000;global.__sent=[];await m.remindPending.run();
+  ok(!global.__sent.map(x=>x.data||{}).some(d=>/행동 보고/.test(d.title||'')),'새로 오른 회원이 없으면 다음 주엔 푸시 안 함');
+  FAKE_NOW=NOWB;
+  const got=await m.chatAction.run({op:'behaviorReport'},ctx({admin:1}));
+  ok(got&&Array.isArray(got.rows)&&got.rows.length>=4,'관리자는 볼 수 있음');
+  FAKE_NOW=0;
   console.log('\n'+pass+' OK, '+fail+' FAIL'); process.exit(fail?1:0);
 })();
