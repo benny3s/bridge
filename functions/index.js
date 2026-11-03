@@ -2762,7 +2762,10 @@ function buildBehaviorReport(state, archive, blocks, nowMs) {
   logs.forEach((x) => {
     const d = String(x.detail || ''), t = Date.parse(x.at) || 0;
     let g;
-    if ((g = d.match(/^사진 요청 수락 → (.+)$/))) acc[x.actor + '>' + g[1]] = t;
+    if ((g = d.match(/^(사진 요청|대화 신청|번호 요청) 수락 → (.+)$/))) {
+      delete rej[g[2] + '>' + x.actor];   /* 상대가 받아 줬으면 그 뒤 요청은 재요청이 아님 */
+      if (g[1] === '사진 요청') acc[x.actor + '>' + g[2]] = t;
+    }
     else if ((g = d.match(/^(?:사진|대화|번호) 요청 거절 → (.+)$/))) rej[g[1] + '>' + x.actor] = 1;
     else if ((g = d.match(/^(?:사진 요청 승인 취소|사진 공개 회수) → (.+)$/))) {
       const k = x.actor + '>' + g[1], at = acc[k];
