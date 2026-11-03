@@ -242,6 +242,14 @@ const agoF = (d) => new Date(Date.now() - d * 86400000).toISOString();
   ok(bBy('대리')&&bBy('대리').mm==='담당'&&bBy('대리').fast===0,'대리 프로필엔 담당 주선자 표시');
   ok(bBy('쉼')&&bBy('쉼').resting===true,'쉬는 회원은 표시만');
   ok(bBy('재요청')&&bBy('재요청').again===3&&bBy('재요청').top==='피치 3','거절 뒤 재요청 3번 (거절 전 요청은 안 셈)');
+  const accRows=m._buildBehaviorReportForTest?m._buildBehaviorReportForTest({entries:[{id:'k1',nickname:'수락후'},{id:'k2',nickname:'다시거절'}],logs:[
+    lg(at(9),'상대A','사진 요청 거절 → 수락후'),lg(at(8),'수락후','사진 요청 재신청 → 상대A'),lg(at(7),'상대A','사진 요청 수락 → 수락후'),
+    lg(at(6),'수락후','대화 신청 → 상대A'),lg(at(5),'상대A','대화 신청 수락 → 수락후'),lg(at(4),'수락후','사진 보기 요청 → 상대A'),lg(at(3),'수락후','사진 보기 요청 → 상대A'),
+    lg(at(9),'상대B','사진 요청 거절 → 다시거절'),lg(at(8),'상대B','사진 요청 수락 → 다시거절'),lg(at(7),'상대B','대화 요청 거절 → 다시거절'),
+    lg(at(6),'다시거절','대화 신청 → 상대B'),lg(at(5),'다시거절','사진 보기 요청 → 상대B'),lg(at(4),'다시거절','대화 요청 재신청 → 상대B'),
+  ]},[],[],NOWB):[];
+  ok(!accRows.some(r=>r.nick==='수락후'),'상대가 수락해 준 뒤 요청은 재요청으로 안 셈');
+  ok(accRows.some(r=>r.nick==='다시거절'&&r.again===3),'수락 뒤 다시 거절되면 그때부터 다시 셈');
   ok(!bBy('한번'),'재요청 1번은 안 올라감');
   ok(!bBy('옛일'),'30일 넘은 재요청은 안 셈');
   ok(bBy('차단둘')&&bBy('차단둘').blockedBy===2&&!bBy('차단하나'),'차단 2명부터');
