@@ -1314,7 +1314,8 @@ exports.remindPending = functions
           .map((p) => (p && warn.has(p.id) ? Object.assign({}, p, { heldWarnAt: nowIso }) : p));
         if (heldGone.length) upd.logs = (state.logs || []).concat(heldGone.map((x) => logItem('admin', '자동 정리', '보류 30일 동안 보완 없어 신청 정리 · ' + x.nickname)));
       }
-      if (changed) upd.dateRequests = updated;
+      const stashed = stashReqContacts(updated, entries, tx);   /* 예전 글·관리자 화면에서 쓴 글의 연락처도 여기서 옮김 */
+      if (changed || stashed !== updated) upd.dateRequests = stashed;
       if (entriesNext) upd.entries = entriesNext;
       if (Object.keys(upd).length) tx.update(ref, upd);
       return { entries, sends, newMsgs, nudges, heldWarn, heldGone };
@@ -1341,12 +1342,15 @@ exports.remindPending = functions
     await aiStallCheck().catch((e) => console.error('aiStallCheck', e));
     await purgeDeletedSecrets().catch((e) => console.error('purgeDeletedSecrets', e));
     await flushStaleTriage().catch((e) => console.error('flushStaleTriage', e));   /* AI 판단 못 받은 경고는 그냥 푸시 */
+    const kstNow = new Date(Date.now() + 9 * 3600000);
+    if (kstNow.getUTCDay() === 1 && kstNow.getUTCHours() === 9) await weeklyBehaviorReport().catch((e) => console.error('weeklyBehaviorReport', e));
     /* 연락처 자동 가림은 중단(2026-10-27): '카톡·인스타' 단어만으로 일반 대화까지 가리고 지난 대화를 소급해 덮어씀 → 새 방식(안전 전달 버튼·실제 번호만) 나올 때까지 끔 */
     if (new Date().getUTCHours() === 19) {
       await purgeOldChats().catch((e) => console.error('purgeOldChats', e)); /* 매일 KST 04시 */
       await purgeOldSecurityLogs().catch((e) => console.error('purgeOldSecurityLogs', e));
       const st = (await db.doc('app/state').get()).data() || {};
       await syncPhotoAcl(st, true).catch((e) => console.error('syncPhotoAcl(force)', e)); /* 사진 열람 목록 하루 한 번 전체 재기록 */
+      await purgeReqPrivate(st).catch((e) => console.error('purgeReqPrivate', e));
     }
     return null;
   });
@@ -2283,7 +2287,7 @@ async function memberReqAction(op, data, context) {
       if (op !== 'reqCancel') { next = reqs.slice(); next[idx] = c; }
     }
     if (next === reqs && !log && !Object.keys(upd).length) return;   /* state 는 그대로 (예: 차단 풀기·지울 신청 없는 차단) */
-    upd.dateRequests = next;
+    upd.dateRequests = stashReqContacts(next, entries, tx);
     if (log) upd.logs = (s.logs || []).concat([logItem('request', me.nickname || '', log)]);
     tx.update(ref, upd);   /* 서버 쓰기(_w·_wn 그대로) → 조작 감지 대상 아님, 푸시 알림은 onStateChange 가 예전처럼 */
   });
@@ -2574,6 +2578,13 @@ exports.chatAction = functions
     const state = (await db.doc('app/state').get()).data() || {};
     const entries = state.entries || [];
 
+    /* ── 🧭 행동 보고: 베니 님만 ('이번만 허용' 관리자는 못 봄) ── */
+    if (op === 'behaviorReport') {
+      if (c.admin !== 1 || c.ao) throw new HttpsError('permission-denied', '관리자만 볼 수 있어요.');
+      if (data.fresh) return makeBehaviorReport(state, false);
+      const rep = await db.doc('adminReports/behavior').get();
+      return rep.exists ? rep.data() : makeBehaviorReport(state, false);
+    }
     /* ── 관리자: 신고된 방 열람 기록 · 신고 처리 완료 ── */
     if (op === 'adminViewed' || op === 'resolve') {
       if (c.admin !== 1) throw new HttpsError('permission-denied', '관리자만 할 수 있어요.');
@@ -2704,6 +2715,99 @@ async function purgeOldChats(nowMs) {
 const CONTACT_RE = /01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}|공\s*일\s*공|카\s*톡|카카오톡|카카오|kakao|오픈\s*채팅|open\.?kakao|텔레그램|telegram|인스타(그램)?|instagram|라인\s*아이디|line\s*id|아이디\s*[:：]\s*\S{3,}|\bid\s*[:：]\s*\S{3,}|@[A-Za-z0-9._]{3,}/i;
 function hasContact(text) { return CONTACT_RE.test(String(text || '')); }
 const CONTACT_MASK_TEXT = '🔒 연락처 (교환 완료 — 보안을 위해 가려졌어요)';
+/* 신청 글 속 연락처 옮기기 (2026-11-03): app/state 는 승인 회원 누구나 읽는 문서라 신청·답장 글의 번호가 화면 밖에서 읽힐 수 있었음.
+   지우면 상대가 아직 못 봤을 수 있어(10-27 소급 가림) 지우지 않고 reqPrivate/{신청 id} 로 옮김 — 두 사람·담당 주선자는 화면에서 원문 그대로 봄.
+   그래서 '카톡·인스타' 같은 말만 있어 넓게 잡혀도 보는 사람에겐 달라지는 것이 없음. 앱은 안내 문구를 보면 reqPrivate 에서 읽어 옴 (index.html REQ_PRIVATE_TEXT 와 같게) */
+const REQ_PRIVATE_TEXT = '🔒 연락처가 담겨 있어 두 분만 볼 수 있어요.';
+const REQ_TEXT_FIELDS = ['note', 'approveMessage', 'holdMessage', 'rejectMessage'];
+function stashReqContacts(reqs, entries, tx) {
+  let changed = false;
+  const out = reqs.map((r) => {
+    if (!r || !r.id) return r;
+    const texts = {};
+    REQ_TEXT_FIELDS.forEach((k) => { if (typeof r[k] === 'string' && r[k] !== REQ_PRIVATE_TEXT && hasContact(r[k])) texts[k] = r[k]; });
+    if (!Object.keys(texts).length) return r;
+    changed = true;
+    tx.set(db.collection('reqPrivate').doc(r.id), { viewers: chatViewers(entries, [r.fromId, r.toId]), texts, at: new Date().toISOString() }, { merge: true });
+    const c = Object.assign({}, r);
+    Object.keys(texts).forEach((k) => { c[k] = REQ_PRIVATE_TEXT; });
+    return c;
+  });
+  return changed ? out : reqs;
+}
+/* 신청이 사라졌거나 회원이 삭제되면 원문도 지움, 담당 주선자가 바뀌면 읽는 사람도 맞춤 — 매일 KST 04시 */
+async function purgeReqPrivate(state) {
+  const reqs = state.dateRequests || [], entries = state.entries || [];
+  const qs = await db.collection('reqPrivate').get();
+  for (const d of qs.docs) {
+    const ref = db.collection('reqPrivate').doc(d.id);
+    const r = reqs.find((x) => x && x.id === d.id);
+    const alive = r && REQ_TEXT_FIELDS.some((k) => r[k] === REQ_PRIVATE_TEXT) && entryById(entries, r.fromId) && entryById(entries, r.toId);
+    if (!alive) { await ref.delete(); continue; }
+    const viewers = chatViewers(entries, [r.fromId, r.toId]);
+    if (viewers.join() !== (d.data().viewers || []).join()) await ref.update({ viewers });
+  }
+}
+/* 🧭 주간 행동 보고 (2026-11-03 Benny): 수락 직후 닫기·거절 뒤 다시 요청·차단 누적을 모아 베니 님만 봄. 이유는 기록에 없어 벌점·제재에 쓰지 않음 (회수는 안전장치).
+   서버 전용 adminReports/behavior — 규칙상 아무도 직접 못 읽고 chatAction behaviorReport 로만. 최근 30일 기록, 차단은 전체 수만(누가 차단했는지는 안 담음) */
+const BEHAVIOR_WINDOW_MS = 30 * 86400000;
+const BEHAVIOR_MIN = { closes: 3, again: 3, blockedBy: 2 };
+function buildBehaviorReport(state, archive, blocks, nowMs) {
+  const since = nowMs - BEHAVIOR_WINDOW_MS;
+  const seen = {};
+  const logs = (archive || []).concat(state.logs || []).filter((x) => { if (!x || !x.actor || x.type !== 'request' || seen[x.id]) return false; seen[x.id] = 1; return true; })
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const acc = {}, rej = {}, tally = {};
+  const row = (n) => { tally[n] = tally[n] || { closes: 0, fast: 0, again: 0, targets: {} }; return tally[n]; };
+  logs.forEach((x) => {
+    const d = String(x.detail || ''), t = Date.parse(x.at) || 0;
+    let g;
+    if ((g = d.match(/^사진 요청 수락 → (.+)$/))) acc[x.actor + '>' + g[1]] = t;
+    else if ((g = d.match(/^(?:사진|대화|번호) 요청 거절 → (.+)$/))) rej[g[1] + '>' + x.actor] = 1;
+    else if ((g = d.match(/^(?:사진 요청 승인 취소|사진 공개 회수) → (.+)$/))) {
+      const k = x.actor + '>' + g[1], at = acc[k];
+      if (at && t - at < 86400000 && t >= since) { const r = row(x.actor); r.closes++; if (t - at <= 300000) r.fast++; }
+      delete acc[k];
+    } else if ((g = d.match(/^(?:사진 보기 요청|대화 신청|번호 요청|(?:사진|대화|번호) 요청 재신청) → (.+?)(?: \(사진 공개\))?$/))) {
+      if (rej[x.actor + '>' + g[1]] && t >= since) { const r = row(x.actor); r.again++; r.targets[g[1]] = (r.targets[g[1]] || 0) + 1; }
+    }
+  });
+  const blockedBy = {};
+  (blocks || []).forEach((b) => (b.ids || []).forEach((id) => { blockedBy[id] = (blockedBy[id] || 0) + 1; }));
+  const entries = state.entries || [];
+  const out = [];
+  entries.forEach((e) => {
+    if (!e || e.testAccount || !e.nickname) return;
+    const r = tally[e.nickname] || { closes: 0, fast: 0, again: 0, targets: {} }, nB = blockedBy[e.id] || 0;
+    if (r.closes < BEHAVIOR_MIN.closes && r.again < BEHAVIOR_MIN.again && nB < BEHAVIOR_MIN.blockedBy) return;
+    const top = Object.keys(r.targets).sort((a, b) => r.targets[b] - r.targets[a])[0];
+    const mm = e.managedBy ? entryById(entries, e.managedBy) : null;
+    out.push({ id: e.id, nick: e.nickname, mm: (mm && mm.nickname) || '', resting: !!e.deactivated, closes: r.closes, fast: r.fast, again: r.again, top: top ? top + ' ' + r.targets[top] : '', blockedBy: nB });
+  });
+  return out.sort((a, b) => (b.closes + b.again + b.blockedBy) - (a.closes + a.again + a.blockedBy));
+}
+async function makeBehaviorReport(state, weekly) {
+  const [arch, blocks, prevSnap] = await Promise.all([db.doc('app/logs').get(), db.collection('memberBlocks').get(), db.doc('adminReports/behavior').get()]);
+  const prev = prevSnap.exists ? prevSnap.data() : null;
+  const rows = buildBehaviorReport(state, (arch.data() || {}).logs, blocks.docs.map((d) => d.data()), Date.now());
+  /* 🆕 = 지난 주간 보고에 없던 회원. 손으로 다시 계산해도 기준은 지난 주간 보고 그대로 */
+  const baseIds = weekly ? (prev ? (prev.rows || []).map((r) => r.id) : null) : ((prev && prev.baseIds) || null);
+  if (baseIds) rows.forEach((r) => { r.isNew = baseIds.indexOf(r.id) < 0; });
+  const nowIso = new Date(Date.now()).toISOString();
+  const doc = { at: nowIso, rows, weeklyAt: weekly ? nowIso : ((prev && prev.weeklyAt) || null) };
+  if (baseIds) doc.baseIds = baseIds;
+  await db.doc('adminReports/behavior').set(doc);
+  return doc;
+}
+/* 월요일 09시(KST). 같은 이름이 매주 알림으로 오지 않게 새로 오른 회원이 있을 때만 푸시, 잠금 화면에 이름은 안 씀 */
+async function weeklyBehaviorReport() {
+  const prev = (await db.doc('adminReports/behavior').get()).data();
+  if (prev && prev.weeklyAt && Date.now() - Date.parse(prev.weeklyAt) < 20 * 3600000) return;
+  const state = (await db.doc('app/state').get()).data() || {};
+  const doc = await makeBehaviorReport(state, true);
+  const n = doc.baseIds ? doc.rows.filter((r) => r.isNew).length : doc.rows.length;
+  if (n) await sendToAdmin('🧭 주간 행동 보고', '살펴볼 회원 ' + n + '명이 새로 올랐어요. 관리자 탭에서 볼 수 있어요.', { route: 'admin' });
+}
 async function maskOldContacts(nowMs) {
   const now = nowMs || Date.now();
   const qs = await db.collection('chats').get();
@@ -2773,7 +2877,7 @@ exports.adminRestoreMaskedChats = functions
     return out;
   });
 
-if (process.env.BRIDGE_LOCAL_TEST) { exports._purgeOldChatsForTest = purgeOldChats; exports._detectTamperIssuesForTest = (b, a) => detectTamperIssues(b, a); exports._maskOldContactsForTest = maskOldContacts; exports._hasContactForTest = hasContact; } /* 로컬 시험 전용 (배포 시 내보내지 않음) */
+if (process.env.BRIDGE_LOCAL_TEST) { exports._purgeReqPrivateForTest = purgeReqPrivate; exports._buildBehaviorReportForTest = buildBehaviorReport; exports._purgeOldChatsForTest = purgeOldChats; exports._detectTamperIssuesForTest = (b, a) => detectTamperIssues(b, a); exports._maskOldContactsForTest = maskOldContacts; exports._hasContactForTest = hasContact; } /* 로컬 시험 전용 (배포 시 내보내지 않음) */
 
 /* ══ 3단계-③: 사진 원본 열람 권한 ══
    photos/{id} 에 서버가 viewers(볼 수 있는 uid)·owners(고칠 수 있는 uid)를 유지 → 규칙이 이 목록으로 판단.
@@ -3748,7 +3852,7 @@ exports.betaSeed = functions
     const st = data && data.state;
     if (!st || !Array.isArray(st.entries) || !st.adminAuth) throw new HttpsError('invalid-argument', '시드 데이터가 올바르지 않아요.');
     const wiped = {};
-    for (const col of ['secrets', 'adminOnly', 'adminKey', 'photos', 'chats', 'pushTokens', 'securityAlerts', 'loginGuard', 'loginIp', 'rateLimit', 'acl', 'acqFilter', 'sendContacts', 'memberMsgs']) {
+    for (const col of ['secrets', 'adminOnly', 'adminKey', 'photos', 'chats', 'pushTokens', 'securityAlerts', 'loginGuard', 'loginIp', 'rateLimit', 'acl', 'acqFilter', 'sendContacts', 'memberMsgs', 'reqPrivate', 'adminReports']) {
       wiped[col] = await wipeCollection(col);
     }
     await db.doc('app/logs').delete().catch(() => {});
