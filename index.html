@@ -8599,8 +8599,9 @@
     var delReqs = (state.entries || []).filter(function (e) { return e.deleteRequested; });
     var deacReqs = (state.entries || []).filter(function (e) { return e.deactivateRequested; });
     var delReqItems = delReqs.map(function (e) {
+      var _mmOnly = isMmOnlyDelete(e);
       return foldItem(
-        '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> <span class="chip" style="background:#fce8e6;color:#c5221f;">🗑 삭제 요청</span>',
+        '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> ' + (_mmOnly ? '<span class="chip" style="background:var(--gold-soft);color:var(--ink);">🤝 주선자 전환</span>' : '<span class="chip" style="background:#fce8e6;color:#c5221f;">🗑 삭제 요청</span>'),
         '<div class="p-meta">' + genderLabel(e.gender) + ' · ' + escapeHtml(e.region || '') + ' · 요청: ' + fmtDate(e.deleteReqAt) + '</div>' +
         (function () {   /* 프로필을 지우고 요청해도 누군지 알 수 있게 — 고유번호 + 예전 닉네임(관리자 전용 기록·변경 내역) */
           var olds = ((_adminPriv[e.id] && _adminPriv[e.id].nickHistory) || []).slice();
@@ -8609,10 +8610,11 @@
           return '<div class="p-meta">🆔 ' + escapeHtml(formatUid(e) || '-') + (olds.length ? ' · 예전 닉네임: <b>' + escapeHtml(olds.slice(-3).join(', ')) + '</b>' : '') + '</div>';
         })() +
         (e.deleteReason ? '<div class="p-meta" style="color:var(--ink);">사유: "' + escapeHtml(e.deleteReason) + '"</div>' : '') +
+        (_mmOnly ? '<div class="p-meta" style="color:var(--ink);">주선자 계정으로 이미 바뀌었어요. 소개팅 프로필만 지우면 끝나요.</div>' : '') +
         '<div class="pending-actions">' +
           '<button type="button" class="card-btn" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">👤 프로필</button>' +
-          '<button type="button" class="card-btn approve" data-action="archive-instead" data-id="' + escapeHtml(e.id) + '">🗄 보관으로 대신</button>' +
-          '<button type="button" class="card-btn danger" data-action="approve-delete" data-id="' + escapeHtml(e.id) + '">🗑 완전 삭제</button>' +
+          (_mmOnly ? '' : '<button type="button" class="card-btn approve" data-action="archive-instead" data-id="' + escapeHtml(e.id) + '">🗄 보관으로 대신</button>') +
+          '<button type="button" class="card-btn danger" data-action="approve-delete" data-id="' + escapeHtml(e.id) + '">' + (_mmOnly ? '🗑 프로필만 삭제' : '🗑 완전 삭제') + '</button>' +
           '<button type="button" class="card-btn" data-action="cancel-delete" data-id="' + escapeHtml(e.id) + '">요청 취소</button>' +
         '</div>'
       );
@@ -9446,7 +9448,11 @@
     };
     var whatNow = (secOpen.length ? _wnRow('security', '🛡 보안 경고 ' + secOpen.length + '건', secWho(secOpen[0]) + ' · ' + secWhat(secOpen[0]) + ' ' + _wnTime(secOpen[0].at)) : '') +
       (freshPending.length ? _wnRow('pending', '🆕 가입 신청 ' + freshPending.length + '명', _who3(freshPending)) : '') +
-      (delReqs.length ? _wnRow('pending', '🗑 삭제 요청 ' + delReqs.length + '명', _who3(delReqs)) : '') +
+      (function () {
+        var mm = delReqs.filter(isMmOnlyDelete), del = delReqs.filter(function (e) { return !isMmOnlyDelete(e); });
+        return (del.length ? _wnRow('pending', '🗑 삭제 요청 ' + del.length + '명', _who3(del)) : '') +
+          (mm.length ? _wnRow('pending', '🤝 주선자 전환 ' + mm.length + '명', _who3(mm)) : '');
+      })() +
       (deacReqs.length ? _wnRow('pending', '📦 보관 요청 ' + deacReqs.length + '명', _who3(deacReqs)) : '') +
       (repRooms.length ? _wnRow('reports', '🚩 신고 ' + repRooms.length + '건', '') : '') +
       (adminMsgUnreadTotal ? _wnRow('adminmsg', '💬 안 읽은 Q&A ' + adminMsgUnreadTotal + '건', '') : '');
@@ -11092,11 +11098,15 @@
     });
   }
   /* 관리자: 삭제 요청 승인 → (연결 회원 안내 옵션) → 실제 삭제 */
+  /* '🤝 주선자로만 남기' 로 온 삭제 요청 — 소개팅 프로필만 지우고 주선자 계정은 남김 (leaveAsMatchmakerOnly) */
+  function isMmOnlyDelete(e) { return /^주선자로만 남기/.test((e && e.deleteReason) || ''); }
   function handleApproveDelete(id) {
     if (!isAdminUnlocked) return;
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
     var connected = connectedMemberIds(currentState, id);
+    var mmOnly = isMmOnlyDelete(entry), shellGone = false;
+    var mmOnlyNote = mmOnly ? '소개팅 프로필만 지워요. <b>주선자 계정은 남아요.</b> ' : '';
     function doDelete() {
       /* 삭제 이력(tombstone): 프로필 정보까지 보존(누구였는지 기억용). 단 전화번호·실명·사진·알게된경로 등 PII는 즉시 폐기 */
       var tomb = {
@@ -11140,10 +11150,12 @@
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
           var delSet = {}; delSet[id] = true;
-          /* 이 프로필이 주선자의 '본인' 프로필이고, 삭제 후 그 주선자가 관리하는 다른 프로필이 없으면 → 빈 주선자 껍데기도 함께 삭제 */
-          if (entry.managedBy && entry.ownerSelf) {
+          /* 이 프로필이 주선자의 '본인' 프로필이고, 삭제 후 그 주선자가 관리하는 다른 프로필이 없으면 → 빈 주선자 껍데기도 함께 삭제.
+             단 '🤝 주선자로만 남기'는 계정을 남기기로 한 요청이라 지우지 않음 (2026-11-04: 프로필만 지울 줄 알았는데 계정까지 지워질 뻔) */
+          shellGone = false;
+          if (entry.managedBy && entry.ownerSelf && !mmOnly) {
             var stillManaged = (s.entries || []).some(function (e) { return e.id !== id && e.managedBy === entry.managedBy; });
-            if (!stillManaged) delSet[entry.managedBy] = true;
+            if (!stillManaged) { delSet[entry.managedBy] = true; shellGone = true; }
           }
           var newEntries = (s.entries || []).filter(function (e) { return !delSet[e.id]; });
           var newRequests = (s.dateRequests || []).filter(function (r) { return !delSet[r.toId] && !delSet[r.fromId]; });
@@ -11158,16 +11170,16 @@
       }); }).then(function () {
         photosRef.doc(id).delete().catch(function () {});
         delete photoCache[id];
-        if (entry.managedBy && entry.ownerSelf) { try { photosRef.doc(entry.managedBy).delete().catch(function () {}); pushTokensRef.doc(entry.managedBy).delete().catch(function () {}); } catch (e) {} } /* 껍데기 정리 */
+        if (shellGone) { try { photosRef.doc(entry.managedBy).delete().catch(function () {}); pushTokensRef.doc(entry.managedBy).delete().catch(function () {}); } catch (e) {} } /* 껍데기 정리 — 주선자 계정이 남으면 알림·사진도 그대로 */
         appendLog('admin', '관리자', '삭제 요청 승인 · ' + entry.nickname);
         return refreshNow();
       }).then(function () {
-        modalNotice('삭제 완료', entry.nickname + '님을 삭제했어요.');
+        modalNotice('삭제 완료', mmOnly ? entry.nickname + '님의 소개팅 프로필을 지웠어요. 주선자 계정은 남아 있어요.' : entry.nickname + '님을 삭제했어요.');
       }).catch(function (err) { modalNotice('오류', '삭제 실패: ' + (err.message || err)); });
     }
     /* 연결된 회원이 없으면 단순 확인 후 삭제 */
     if (!connected.length) {
-      modalConfirm('삭제 승인', escapeHtml(entry.nickname) + '님을 정말 삭제할까요? 되돌릴 수 없어요.', '삭제', 'danger').then(function (ok) { if (ok) doDelete(); });
+      modalConfirm('삭제 승인', mmOnly ? escapeHtml(entry.nickname) + '님의 소개팅 프로필을 지울까요? ' + mmOnlyNote + '되돌릴 수 없어요.' : escapeHtml(entry.nickname) + '님을 정말 삭제할까요? 되돌릴 수 없어요.', '삭제', 'danger').then(function (ok) { if (ok) doDelete(); });
       return;
     }
     /* 연결된 회원이 있으면: 누구와 연결됐는지 보여주고, 안내는 '선택'으로 명확히 (한 창에서 3지선다) */
@@ -11183,7 +11195,7 @@
     }
     var delOv = openModal(
       '<h3>🗑 ' + escapeHtml(entry.nickname) + '님 삭제</h3>' +
-      '<p class="modal-msg"><b>되돌릴 수 없어요.</b> 이 회원과 연결된 <b>' + connected.length + '명</b>이 있어요:</p>' +
+      '<p class="modal-msg">' + mmOnlyNote + '<b>되돌릴 수 없어요.</b> 이 회원과 연결된 <b>' + connected.length + '명</b>이 있어요:</p>' +
       '<p class="modal-msg" style="background:var(--gold-soft);color:var(--ink);padding:8px 10px;border-radius:8px;margin:0 0 8px;">🔗 ' + escapeHtml(connNames.join(', ')) + '</p>' +
       '<p class="modal-msg" style="font-size:0.85rem;color:var(--muted);margin:0 0 4px;">삭제하면 연결 정보가 사라져 이후엔 안내를 못 보내요. <b>안내는 선택이에요.</b></p>' +
       '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
