@@ -9116,15 +9116,14 @@
       return '<button type="button" class="card-btn' + (on ? ' primary' : '') + '" data-action="seen-sort" data-col="' + col + '" style="flex:none;padding:4px 10px;font-size:0.8rem;">' + label + (on ? (_sc.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</button>';
     }
     var seenSearchBox = '<input type="text" id="seen-search" value="' + escapeHtml(seenSearch) + '" placeholder="🔍 고유번호 · 닉네임 · 지역 · 이름 · 전화 검색" style="width:100%;box-sizing:border-box;margin:0 0 8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;font:inherit;background:var(--paper);color:var(--ink);">';
-    var seenSection = adminFold('👥 회원 명단', _sN.active,
+    var seenSection = adminFold('👥 회원 명단 <span style="font-weight:400;font-size:0.8rem;color:var(--muted);">7일 안 접속 ' + _sVisited + '명</span>', _sN.active,
       (adminSeenType === 'mm' ? '' : seenSearchBox) +
       '<div class="seen-filters">' + SEEN_F.map(seenChip).join('') +
         '<details class="seen-more" data-fk="seen-more"' + (SEEN_F_MORE.some(function (f) { return f[0] === adminSeenType; }) ? ' open' : '') + '><summary>더보기</summary>' + SEEN_F_MORE.map(seenChip).join('') + '</details>' +
       '</div>' +
       (adminSeenType === 'mm' ? mmTreeHtml(state) :
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 8px;"><span class="sub" style="font-weight:700;">정렬</span>' +
-        seenSortBtn('join', '가입') + seenSortBtn('seen', '접속') + seenSortBtn('got', '받은 대기') + seenSortBtn('uid', '고유번호') +
-        '<span class="sub" style="margin-left:auto;">7일 안 접속 ' + _sVisited + '명</span></div>' +
+        seenSortBtn('join', '가입') + seenSortBtn('seen', '접속') + seenSortBtn('got', '대기') + seenSortBtn('uid', '번호') + '</div>' +
       (seenList.length ? '<div id="seen-list">' + seenList.map(seenRow).join('') + '</div>' : '<p class="sub">해당하는 회원이 없어요.</p>')), true, 'seen');
 
     /* 서버 용량 */
