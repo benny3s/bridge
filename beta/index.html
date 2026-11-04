@@ -1150,7 +1150,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-03-530';
+  var APP_VERSION = '2026-11-05-533';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -2025,7 +2025,7 @@
     if (tab === 'admin' && !isAdminUnlocked) tab = currentUser ? 'mine' : 'list';
     if (tab === 'mine' && !currentUser) tab = 'list';
     if (tab === 'mine') {   /* 보던 안쪽 탭에 갇히지 않게 — 관리자 새 메시지면 💬 대화, 특정 항목이면 그 탭(아래 pane 전환), 아니면 자동 */
-      reqFilter = { 'in': 'all', out: 'all' }; _connOrder = null;
+      reqFilter = { 'in': 'open', out: 'open' }; _connOrder = null;
       try { mineTab = (!focusId && adminUnreadFor(currentState, findMyEntry(currentState))) ? 'chat' : null; } catch (e) { mineTab = null; }
     }
     activeTab = tab;
@@ -7468,7 +7468,7 @@
   }
   /* 메시지함 탭: 한 번에 하나만 보여 구분이 확실하고 화면이 짧음. 숫자 = 할 일(안 읽은 대화·응답 필요) */
   var mineTab = null, mineTabFor = '';
-  var reqFilter = { 'in': 'all', out: 'all' };   /* 받은·보낸 요청 칩 선택 */
+  var reqFilter = { 'in': 'open', out: 'open' };   /* 받은·보낸 요청 칩 선택 */
   function showMinePane(k) {
     mineTab = k;
     var ts = document.querySelectorAll('.mine-tab'), ps = document.querySelectorAll('.mine-pane');
@@ -7476,7 +7476,7 @@
     for (var j = 0; j < ps.length; j++) ps[j].classList.toggle('on', ps[j].getAttribute('data-pane') === k);
   }
   function mineTabsHtml(state, me, pd, restoreHtml) {
-    if (mineTabFor !== me.id) { mineTab = null; mineTabFor = me.id; reqFilter = { 'in': 'all', out: 'all' }; _connOrder = null; }   /* 프로필 바꾸면 다시 자동 선택 */
+    if (mineTabFor !== me.id) { mineTab = null; mineTabFor = me.id; reqFilter = { 'in': 'open', out: 'open' }; _connOrder = null; }   /* 프로필 바꾸면 다시 자동 선택 */
     var pin = pd['in'] || { n: 0, need: 0, html: '' }, pout = pd.out || { n: 0, need: 0, html: '' };
     var chatUn = chatUnreadTotal(state, me) + adminUnreadFor(state, me);
     var connHtml = connectionsSummaryHtml(state, me, true);
@@ -7597,8 +7597,11 @@
     }
     var reqs = state.dateRequests || [];
     var paneData = {};   /* 탭용: 받은/보낸 요청 목록·개수·응답 필요 수 */
-    var REQ_F = [['all', '전체'], ['pending', '대기'], ['held', '보류'], ['approved', '승인'], ['rejected', '거절'], ['hidden', '🙈 숨김']];
-    var stKey = function (r) { var st = reqStatus(r); return st === 'user_approved' ? 'approved' : st; };
+    /* 기본 보기 = 진행 중 (2026-11-05 Benny: 보낸 요청 50줄 — 끝난 신청은 '전체'에). 답 없이 마감은 거절과 따로 셈 */
+    var REQ_F = [['open', '진행 중'], ['all', '전체'], ['pending', '대기'], ['held', '보류'], ['approved', '승인'], ['rejected', '거절'], ['expired', '⌛ 마감'], ['hidden', '🙈 숨김']];
+    var stKey = function (r) { var st = reqStatus(r); if (st === 'rejected' && r.expired) return 'expired'; return st === 'user_approved' ? 'approved' : st; };
+    /* 사람이 막 거절한 줄은 3일간 남김 — 알림 보고 들어왔는데 줄이 없으면 안 되니까. 마감은 앱 열 때 ⌛ 카드로 따로 알림 */
+    var isOpenReq = function (r) { var k = stKey(r); return k !== 'expired' && (k !== 'rejected' || isFreshDecision(r)); };
     var groups = [
       { key: 'in', title: '📥 받은 요청', incoming: true },
       { key: 'out', title: '📤 보낸 요청', incoming: false }
@@ -7628,11 +7631,13 @@
         .sort(function (a, b) { return (b.submittedAt || '').localeCompare(a.submittedAt || ''); });
       var cnt = { all: items.length, hidden: hiddenItems.length };
       items.forEach(function (r) { var k = stKey(r); cnt[k] = (cnt[k] || 0) + 1; });
+      var openN = items.filter(isOpenReq).length;
+      if (openN && openN < items.length) cnt.open = openN;   /* 끝난 줄이 있을 때만 — 없으면 전체와 같음 */
       var _showChips = items.length + hiddenItems.length > 3 || hiddenItems.length > 0;
-      var f = reqFilter[g.key] || 'all';
-      if (!_showChips || (f !== 'all' && !cnt[f])) f = 'all';
-      reqFilter[g.key] = f;   /* 되돌린 값을 저장 — 나중에 저절로 다시 걸리지 않게 */
-      var shown = f === 'hidden' ? hiddenItems : (f === 'all' ? items : items.filter(function (r) { return stKey(r) === f; }));
+      var f = reqFilter[g.key] || 'open';
+      if (f === 'open') { if (!_showChips || !cnt.open) f = 'all'; }   /* 기본값이라 저장 안 함 — 끝난 줄이 생기면 다시 진행 중으로 */
+      else if (!_showChips || (f !== 'all' && !cnt[f])) { f = 'all'; reqFilter[g.key] = f; }   /* 되돌린 값을 저장 — 나중에 저절로 다시 걸리지 않게 */
+      var shown = f === 'hidden' ? hiddenItems : (f === 'all' ? items : (f === 'open' ? items.filter(isOpenReq) : items.filter(function (r) { return stKey(r) === f; })));
       var chips = (items.length + hiddenItems.length > 3 || hiddenItems.length)
         ? '<div class="req-chips">' + REQ_F.filter(function (x) { return x[0] === 'all' || cnt[x[0]]; }).map(function (x) {
             return '<button type="button" class="req-chip' + (x[0] === f ? ' on' : '') + '" data-action="req-filter" data-g="' + g.key + '" data-f="' + x[0] + '">' + x[1] + ' <b>' + (cnt[x[0]] || 0) + '</b></button>';
@@ -7642,6 +7647,7 @@
         ? shown.map(function (r) { return reqRowHtml(r, state, g.incoming, f === 'hidden'); }).join('')
         : '';
       if (f === 'hidden' && shown.length) tabInner = '<p class="sub" style="margin:2px 0 6px;font-size:0.8rem;">내 목록에서 숨긴 요청이에요. 줄을 눌러 \'↩️ 숨김 취소\'로 되돌릴 수 있어요.</p>' + tabInner;
+      if (f === 'open') tabInner += '<p class="sub" style="margin:6px 0 0;font-size:0.8rem;">끝난 신청 ' + (items.length - openN) + '건은 위 \'전체\'에 있어요.</p>';
       var heldCnt = items.filter(function (r) { return reqStatus(r) === 'held'; }).length;
       paneData[g.key] = { n: items.length, need: g.incoming ? needCnt : heldCnt, html: chips + tabInner, hasAny: items.length + hiddenItems.length > 0 };   /* 보낸 요청 숫자는 '보류(다시 요청 가능)'만 — 거절은 할 일이 아님 */
       /* 5개 초과면 스크롤 */
@@ -8693,8 +8699,9 @@
     var delReqs = (state.entries || []).filter(function (e) { return e.deleteRequested; });
     var deacReqs = (state.entries || []).filter(function (e) { return e.deactivateRequested; });
     var delReqItems = delReqs.map(function (e) {
+      var _mmOnly = isMmOnlyDelete(e);
       return foldItem(
-        '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> <span class="chip" style="background:#fce8e6;color:#c5221f;">🗑 삭제 요청</span>',
+        '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> ' + (_mmOnly ? '<span class="chip" style="background:var(--gold-soft);color:var(--ink);">🤝 주선자 전환</span>' : '<span class="chip" style="background:#fce8e6;color:#c5221f;">🗑 삭제 요청</span>'),
         '<div class="p-meta">' + genderLabel(e.gender) + ' · ' + escapeHtml(e.region || '') + ' · 요청: ' + fmtDate(e.deleteReqAt) + '</div>' +
         (function () {   /* 프로필을 지우고 요청해도 누군지 알 수 있게 — 고유번호 + 예전 닉네임(관리자 전용 기록·변경 내역) */
           var olds = ((_adminPriv[e.id] && _adminPriv[e.id].nickHistory) || []).slice();
@@ -8703,10 +8710,11 @@
           return '<div class="p-meta">🆔 ' + escapeHtml(formatUid(e) || '-') + (olds.length ? ' · 예전 닉네임: <b>' + escapeHtml(olds.slice(-3).join(', ')) + '</b>' : '') + '</div>';
         })() +
         (e.deleteReason ? '<div class="p-meta" style="color:var(--ink);">사유: "' + escapeHtml(e.deleteReason) + '"</div>' : '') +
+        (_mmOnly ? '<div class="p-meta" style="color:var(--ink);">주선자 계정으로 이미 바뀌었어요. 소개팅 프로필만 지우면 끝나요.</div>' : '') +
         '<div class="pending-actions">' +
           '<button type="button" class="card-btn" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">👤 프로필</button>' +
-          '<button type="button" class="card-btn approve" data-action="archive-instead" data-id="' + escapeHtml(e.id) + '">🗄 보관으로 대신</button>' +
-          '<button type="button" class="card-btn danger" data-action="approve-delete" data-id="' + escapeHtml(e.id) + '">🗑 완전 삭제</button>' +
+          (_mmOnly ? '' : '<button type="button" class="card-btn approve" data-action="archive-instead" data-id="' + escapeHtml(e.id) + '">🗄 보관으로 대신</button>') +
+          '<button type="button" class="card-btn danger" data-action="approve-delete" data-id="' + escapeHtml(e.id) + '">' + (_mmOnly ? '🗑 프로필만 삭제' : '🗑 완전 삭제') + '</button>' +
           '<button type="button" class="card-btn" data-action="cancel-delete" data-id="' + escapeHtml(e.id) + '">요청 취소</button>' +
         '</div>'
       );
@@ -9316,7 +9324,6 @@
           : '<td style="color:var(--muted);text-align:center;font-size:0.78rem;white-space:nowrap;">' + seenTxt + '</td>') +
       '</tr>';
     }).join('');
-    var pendingCountForBar = (state.pendingEntries || []).filter(function (e) { return !e.heldReason; }).length;
     var cNoSms = contactRows.filter(function (s) { return !smsLastFor(state, s.e.id); }).length;
     var cfBtn = function (k, label, n) { return '<button type="button" class="card-btn' + (_contactFilter === k ? ' primary' : '') + '" data-action="cf-filter" data-id="' + k + '" style="flex:none;padding:3px 10px;font-size:0.8rem;">' + label + ' ' + n + '</button>'; };
     var staleSection = adminFold('📞 연락 필요 (무응답·미접속)', contactRows.length,
@@ -9531,15 +9538,33 @@
     /* 맨 위 바로가기: 해야 할 일(연락 필요·보안 경고·승인 대기)로 바로 이동 */
     var _secOpenN = _secAlerts.filter(function (a) { return !a.resolved; }).length;
     var jump = function (k, label, n, hot) { return n ? '<button type="button" class="card-btn' + (hot ? ' danger' : ' primary') + '" data-action="sec-jump" data-id="' + k + '" style="flex:none;padding:5px 12px;">' + label + ' ' + n + '</button>' : ''; };
-    var quickBar = jump('security', '🛡 보안 경고', _secOpenN, true) + jump('pending', '⏳ 승인 대기', pendingCountForBar, false) + jump('stale', '📞 연락 필요', contactRows.length, false);
+    var quickBar = jump('stale', '📞 연락 필요', contactRows.length, false);
+    /* 맨 위 '지금 볼 것' (2026-11-04 Benny: '뭐가 온건지도 모르겠어') — 배지 숫자 대신 글로, 누르면 그 칸으로 */
+    var _who3 = function (arr) { var n = arr.map(function (e) { return e.nickname || '회원'; }); return n.slice(0, 3).join('·') + (n.length > 3 ? ' 외 ' + (n.length - 3) + '명' : ''); };
+    var _wnTime = function (t) { var d = new Date(t); return isNaN(d) ? '' : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); };
+    var _wnRow = function (k, title, sub) {
+      return '<button type="button" data-action="sec-jump" data-id="' + k + '" style="display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:8px 2px;font:inherit;color:inherit;cursor:pointer;"><b>' + title + '</b>' +
+        (sub ? ' <span style="color:var(--muted);font-size:0.86rem;">— ' + escapeHtml(sub) + '</span>' : '') + '</button>';
+    };
+    var whatNow = (secOpen.length ? _wnRow('security', '🛡 보안 경고 ' + secOpen.length + '건', secWho(secOpen[0]) + ' · ' + secWhat(secOpen[0]) + ' ' + _wnTime(secOpen[0].at)) : '') +
+      (freshPending.length ? _wnRow('pending', '🆕 가입 신청 ' + freshPending.length + '명', _who3(freshPending)) : '') +
+      (function () {
+        var mm = delReqs.filter(isMmOnlyDelete), del = delReqs.filter(function (e) { return !isMmOnlyDelete(e); });
+        return (del.length ? _wnRow('pending', '🗑 삭제 요청 ' + del.length + '명', _who3(del)) : '') +
+          (mm.length ? _wnRow('pending', '🤝 주선자 전환 ' + mm.length + '명', _who3(mm)) : '');
+      })() +
+      (deacReqs.length ? _wnRow('pending', '📦 보관 요청 ' + deacReqs.length + '명', _who3(deacReqs)) : '') +
+      (repRooms.length ? _wnRow('reports', '🚩 신고 ' + repRooms.length + '건', '') : '') +
+      (adminMsgUnreadTotal ? _wnRow('adminmsg', '💬 안 읽은 Q&A ' + adminMsgUnreadTotal + '건', '') : '');
     return (
       '<div class="admin-panel"><div class="adm-head">' +
         smsDraftsHtml(state) +
+        (whatNow ? '<div style="border:1px solid var(--line);border-radius:12px;padding:8px 12px 4px;background:var(--paper);"><b style="font-size:0.92rem;">🔔 지금 볼 것</b><div style="margin-top:6px;">' + whatNow + '</div></div>' : '') +
         (quickBar ? '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + quickBar + '</div>' : '') +
         headerBtns +
       '</div>' +
         adminGroupsHtml(order, secHtml, {
-          security: _secOpenN, pending: pendingCountForBar, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,
+          security: _secOpenN, pending: approvalTotal, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,   /* pending: 삭제·보관 요청까지 — 가입만 세면 '비어 있음'으로 칸이 숨었음 */
           held: heldPending.length, editrev: editRevList.length, reports: repRooms.length
         }, adminAiIntelBoardHtml(state)) +
       '</div>'
@@ -11173,11 +11198,15 @@
     });
   }
   /* 관리자: 삭제 요청 승인 → (연결 회원 안내 옵션) → 실제 삭제 */
+  /* '🤝 주선자로만 남기' 로 온 삭제 요청 — 소개팅 프로필만 지우고 주선자 계정은 남김 (leaveAsMatchmakerOnly) */
+  function isMmOnlyDelete(e) { return /^주선자로만 남기/.test((e && e.deleteReason) || ''); }
   function handleApproveDelete(id) {
     if (!isAdminUnlocked) return;
     var entry = (currentState.entries || []).find(function (e) { return e.id === id; });
     if (!entry) return;
     var connected = connectedMemberIds(currentState, id);
+    var mmOnly = isMmOnlyDelete(entry), shellGone = false;
+    var mmOnlyNote = mmOnly ? '주선자 계정은 남아요. ' : '';
     function doDelete() {
       /* 삭제 이력(tombstone): 프로필 정보까지 보존(누구였는지 기억용). 단 전화번호·실명·사진·알게된경로 등 PII는 즉시 폐기 */
       var tomb = {
@@ -11221,10 +11250,12 @@
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
           var delSet = {}; delSet[id] = true;
-          /* 이 프로필이 주선자의 '본인' 프로필이고, 삭제 후 그 주선자가 관리하는 다른 프로필이 없으면 → 빈 주선자 껍데기도 함께 삭제 */
-          if (entry.managedBy && entry.ownerSelf) {
+          /* 이 프로필이 주선자의 '본인' 프로필이고, 삭제 후 그 주선자가 관리하는 다른 프로필이 없으면 → 빈 주선자 껍데기도 함께 삭제.
+             단 '🤝 주선자로만 남기'는 계정을 남기기로 한 요청이라 지우지 않음 (2026-11-04: 프로필만 지울 줄 알았는데 계정까지 지워질 뻔) */
+          shellGone = false;
+          if (entry.managedBy && entry.ownerSelf && !mmOnly) {
             var stillManaged = (s.entries || []).some(function (e) { return e.id !== id && e.managedBy === entry.managedBy; });
-            if (!stillManaged) delSet[entry.managedBy] = true;
+            if (!stillManaged) { delSet[entry.managedBy] = true; shellGone = true; }
           }
           var newEntries = (s.entries || []).filter(function (e) { return !delSet[e.id]; });
           var newRequests = (s.dateRequests || []).filter(function (r) { return !delSet[r.toId] && !delSet[r.fromId]; });
@@ -11239,16 +11270,16 @@
       }); }).then(function () {
         photosRef.doc(id).delete().catch(function () {});
         delete photoCache[id];
-        if (entry.managedBy && entry.ownerSelf) { try { photosRef.doc(entry.managedBy).delete().catch(function () {}); pushTokensRef.doc(entry.managedBy).delete().catch(function () {}); } catch (e) {} } /* 껍데기 정리 */
+        if (shellGone) { try { photosRef.doc(entry.managedBy).delete().catch(function () {}); pushTokensRef.doc(entry.managedBy).delete().catch(function () {}); } catch (e) {} } /* 껍데기 정리 — 주선자 계정이 남으면 알림·사진도 그대로 */
         appendLog('admin', '관리자', '삭제 요청 승인 · ' + entry.nickname);
         return refreshNow();
       }).then(function () {
-        modalNotice('삭제 완료', entry.nickname + '님을 삭제했어요.');
+        modalNotice('삭제 완료', mmOnly ? entry.nickname + '님의 소개팅 프로필을 지웠어요. 주선자 계정은 남아 있어요.' : entry.nickname + '님을 삭제했어요.');
       }).catch(function (err) { modalNotice('오류', '삭제 실패: ' + (err.message || err)); });
     }
     /* 연결된 회원이 없으면 단순 확인 후 삭제 */
     if (!connected.length) {
-      modalConfirm('삭제 승인', escapeHtml(entry.nickname) + '님을 정말 삭제할까요? 되돌릴 수 없어요.', '삭제', 'danger').then(function (ok) { if (ok) doDelete(); });
+      modalConfirm('삭제 승인', mmOnly ? escapeHtml(entry.nickname) + '님의 소개팅 프로필을 지울까요? ' + mmOnlyNote + '되돌릴 수 없어요.' : escapeHtml(entry.nickname) + '님을 정말 삭제할까요? 되돌릴 수 없어요.', '삭제', 'danger').then(function (ok) { if (ok) doDelete(); });
       return;
     }
     /* 연결된 회원이 있으면: 누구와 연결됐는지 보여주고, 안내는 '선택'으로 명확히 (한 창에서 3지선다) */
@@ -11264,7 +11295,7 @@
     }
     var delOv = openModal(
       '<h3>🗑 ' + escapeHtml(entry.nickname) + '님 삭제</h3>' +
-      '<p class="modal-msg"><b>되돌릴 수 없어요.</b> 이 회원과 연결된 <b>' + connected.length + '명</b>이 있어요:</p>' +
+      '<p class="modal-msg">' + mmOnlyNote + '<b>되돌릴 수 없어요.</b> 이 회원과 연결된 <b>' + connected.length + '명</b>이 있어요:</p>' +
       '<p class="modal-msg" style="background:var(--gold-soft);color:var(--ink);padding:8px 10px;border-radius:8px;margin:0 0 8px;">🔗 ' + escapeHtml(connNames.join(', ')) + '</p>' +
       '<p class="modal-msg" style="font-size:0.85rem;color:var(--muted);margin:0 0 4px;">삭제하면 연결 정보가 사라져 이후엔 안내를 못 보내요. <b>안내는 선택이에요.</b></p>' +
       '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
