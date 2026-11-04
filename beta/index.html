@@ -134,8 +134,9 @@
   .leave-lbl { display: block; font-weight: 600; margin: 6px 0 2px; } .leave-lbl span { color: var(--muted); font-weight: 400; }
   .leave-stars { display: flex; gap: 2px; margin: 0 0 8px; } .leave-stars button { font-size: 1.9rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--gold); padding: 2px 4px; }
   .adm-head { display: grid; gap: 10px; margin-bottom: 14px; }
-  .seen-sum { background: var(--gold-soft); border-radius: 10px; padding: 8px 11px; font-size: 0.88rem; line-height: 1.5; margin: 0 0 8px; }
   .seen-filters { display: flex; gap: 5px; flex-wrap: wrap; margin: 0 0 8px; } .seen-filters .filter-btn { padding: 4px 10px; font-size: 0.82rem; min-height: 0; }
+  .seen-more summary { list-style: none; cursor: pointer; padding: 4px 10px; font-size: 0.82rem; color: var(--muted); } .seen-more summary::-webkit-details-marker { display: none; }
+  .seen-more[open] { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 5px; }
   .seen-row { border-bottom: 1px solid var(--line); padding: 8px 2px; }
   .seen-l1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
   .seen-uid { color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
@@ -1150,7 +1151,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-05-533';
+  var APP_VERSION = '2026-11-05-534';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -9062,8 +9063,11 @@
       test: allEntries.filter(function (e) { return seenKind(e) === 'test'; }).length, all: allEntries.length
     };
     var _sVisited = _sAct.filter(function (e) { return e.lastSeenAt && _sNow - Date.parse(e.lastSeenAt) <= _sWeek; }).length;
-    var SEEN_F = [['active', '활동 중'], ['new', '🆕 이번 주'], ['male', '남'], ['female', '여'], ['quiet', '🌙 7일+ 안 옴'], ['resting', '💤 쉬는 중'], ['mm', '🤝 주선자'], ['test', '🧪'], ['all', '전체']];
-    if (!SEEN_F.some(function (f) { return f[0] === adminSeenType; })) adminSeenType = 'active';
+    /* 2026-11-04 Benny '회원 화면 보기 힘들어': 자주 쓰는 칩만 앞에, 나머지는 더보기 */
+    var SEEN_F = [['active', '활동 중'], ['male', '남'], ['female', '여'], ['new', '🆕 이번 주'], ['resting', '💤 쉬는 중'], ['mm', '🤝 주선자']];
+    var SEEN_F_MORE = [['quiet', '🌙 7일+ 안 옴'], ['test', '🧪 테스트'], ['all', '전체']];
+    if (!SEEN_F.concat(SEEN_F_MORE).some(function (f) { return f[0] === adminSeenType; })) adminSeenType = 'active';
+    function seenChip(f) { return '<button type="button" class="filter-btn" data-action="seen-type" data-type="' + f[0] + '" aria-pressed="' + (adminSeenType === f[0]) + '">' + f[1] + ' <b>' + _sN[f[0]] + '</b></button>'; }
     function seenPass(e) {
       var k = seenKind(e), f = adminSeenType;
       if (f === 'all') return true;
@@ -9093,18 +9097,18 @@
         .filter(Boolean).map(escapeHtml).join(' · ');
       var blob = ((formatUid(e) || '') + ' ' + (e.nickname || '') + ' ' + (e.region || '') + ' ' + (mmE ? mmE.nickname : '') + ' ' + (decryptedNames[e.id] || '') + ' ' + (decryptedContacts[e.id] || '')).toLowerCase();
       var dater = k !== 'mm';
+      var lvB = (e.ownerSelf || [0, 2, 3].indexOf(memberLevel(e, state)) >= 0) ? levelBadge(e, state) : '';   /* '일반'은 대부분이라 안 보임 */
       return '<div class="seen-row" data-seensearch="' + escapeHtml(blob) + '">' +
-        '<div class="seen-l1"><span class="seen-uid">' + escapeHtml(formatUid(e) || '—') + '</span> ' +
-          '<b class="seen-nick" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">' + escapeHtml(e.nickname || '(이름 없음)') + '</b> ' + badge + ' ' + levelBadge(e, state) + '</div>' +
+        '<div class="seen-l1"><b class="seen-nick" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">' + escapeHtml(e.nickname || '(이름 없음)') + '</b> ' + badge + ' ' + lvB + '</div>' +
         (who || mmE ? '<div class="seen-l2">' + who + (mmE ? (who ? ' · ' : '') + '↳ ' + escapeHtml(mmE.nickname || '') + ' 소개' : '') + '</div>' : '') +
         '<div class="seen-l3">' +
-          '<span>가입 ' + seenMD(e.submittedAt) + '</span>' +
           (e.managedBy ? '' : '<span class="seen-link" data-action="log-filter" data-nick="' + escapeHtml(e.nickname) + '" title="눌러서 이 사람 활동 기록">접속 ' + escapeHtml(e.lastSeenAt ? relTimeShort(e.lastSeenAt) : '기록 없음') + '</span>') +
-          (dater ? '<span' + (_waitN[e.id] >= 3 ? ' style="color:var(--accent);font-weight:700;"' : '') + '>📥 받은 ' + (_gotN[e.id] || 0) + (_waitN[e.id] ? ' · 대기 ' + _waitN[e.id] : '') + '</span>' : '') +
-          (dater ? '<button type="button" class="seen-mini" data-action="perm-photo" data-id="' + escapeHtml(e.id) + '" title="이 사람이 볼 수 있는 사진">📷 ' + d.photoN + '</button>' +
-            '<button type="button" class="seen-mini" data-action="perm-contact" data-id="' + escapeHtml(e.id) + '" title="이 사람이 대화할 수 있는 사람">💬 ' + d.contactN + '</button>' : '') +
+          (dater && _gotN[e.id] ? '<span' + (_waitN[e.id] >= 3 ? ' style="color:var(--accent);font-weight:700;"' : '') + '>📥 받은 ' + _gotN[e.id] + (_waitN[e.id] ? ' · 대기 ' + _waitN[e.id] : '') + '</span>' : '') +
+          (dater && d.photoN ? '<button type="button" class="seen-mini" data-action="perm-photo" data-id="' + escapeHtml(e.id) + '" title="이 사람이 볼 수 있는 사진">📷 ' + d.photoN + '</button>' : '') +
+          (dater && d.contactN ? '<button type="button" class="seen-mini" data-action="perm-contact" data-id="' + escapeHtml(e.id) + '" title="이 사람이 대화할 수 있는 사람">💬 ' + d.contactN + '</button>' : '') +
           (e.acqFilterCount ? '<span title="지인 필터">🙈 ' + e.acqFilterCount + '</span>' : '') +
-          (dater && !e.deactivated ? '<label class="seen-test" title="테스트 계정 (명단·통계에서 빠짐)"><input type="checkbox" data-testtoggle="' + escapeHtml(e.id) + '"' + (e.testAccount ? ' checked' : '') + '>🧪</label>' : '') +
+          (dater && !e.deactivated && e.testAccount ? '<label class="seen-test" title="테스트 계정 (명단·통계에서 빠짐)"><input type="checkbox" data-testtoggle="' + escapeHtml(e.id) + '" checked>🧪</label>' : '') +
+          '<span class="seen-uid" style="margin-left:auto;">' + escapeHtml(formatUid(e) || '—') + ' · 가입 ' + seenMD(e.submittedAt) + '</span>' +
         '</div></div>';
     }
     function seenSortBtn(col, label) {
@@ -9113,16 +9117,14 @@
     }
     var seenSearchBox = '<input type="text" id="seen-search" value="' + escapeHtml(seenSearch) + '" placeholder="🔍 고유번호 · 닉네임 · 지역 · 이름 · 전화 검색" style="width:100%;box-sizing:border-box;margin:0 0 8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;font:inherit;background:var(--paper);color:var(--ink);">';
     var seenSection = adminFold('👥 회원 명단', _sN.active,
-      '<div class="seen-sum">활동 <b>' + _sN.active + '</b>명 (남 ' + _sN.male + ' · 여 ' + _sN.female + ') · 이번 주 새로 <b>' + _sN['new'] + '</b> · 7일 안 접속 ' + _sVisited + ' · 쉬는 중 ' + _sN.resting + ' · 주선자 ' + _sN.mm + '</div>' +
-      '<div class="seen-filters">' + SEEN_F.map(function (f) {
-        var on = adminSeenType === f[0];
-        return '<button type="button" class="filter-btn" data-action="seen-type" data-type="' + f[0] + '" aria-pressed="' + on + '">' + f[1] + ' <b>' + _sN[f[0]] + '</b></button>';
-      }).join('') + '</div>' +
+      (adminSeenType === 'mm' ? '' : seenSearchBox) +
+      '<div class="seen-filters">' + SEEN_F.map(seenChip).join('') +
+        '<details class="seen-more" data-fk="seen-more"' + (SEEN_F_MORE.some(function (f) { return f[0] === adminSeenType; }) ? ' open' : '') + '><summary>더보기</summary>' + SEEN_F_MORE.map(seenChip).join('') + '</details>' +
+      '</div>' +
       (adminSeenType === 'mm' ? mmTreeHtml(state) :
       '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 8px;"><span class="sub" style="font-weight:700;">정렬</span>' +
-        seenSortBtn('join', '가입') + seenSortBtn('seen', '접속') + seenSortBtn('got', '받은 대기') + seenSortBtn('uid', '고유번호') + '</div>' +
-      seenSearchBox +
-      '<p class="sub" style="margin:0 0 6px;">닉네임 → 프로필 · 접속 → 활동 기록 · 📷💬 → 볼 수 있는 사진·대화 · 📥 대기 3건+ 빨강</p>' +
+        seenSortBtn('join', '가입') + seenSortBtn('seen', '접속') + seenSortBtn('got', '받은 대기') + seenSortBtn('uid', '고유번호') +
+        '<span class="sub" style="margin-left:auto;">7일 안 접속 ' + _sVisited + '명</span></div>' +
       (seenList.length ? '<div id="seen-list">' + seenList.map(seenRow).join('') + '</div>' : '<p class="sub">해당하는 회원이 없어요.</p>')), true, 'seen');
 
     /* 서버 용량 */
@@ -13056,9 +13058,11 @@
       ? '<h4 style="margin:14px 0 6px;">🔐 새 PIN 정하기 대기 (' + forced.length + ')</h4>' +
         '<p class="sub">아직 새 PIN을 안 정한 계정이에요. 누르면 <b>새 6자리 임시 PIN</b>이 걸리고(이전 임시 PIN은 무효), 내 폰 문자앱이 문구까지 채워진 채 열려요.</p>' + forcedRows
       : '';
-    return adminFold('🔑 PIN 재설정 요청', list.length + forced.length,
-      '<p class="sub">번호가 <b>✅ 일치</b>하면 <b>임시 PIN 보내기</b>만 누르세요. 6자리 임시 PIN이 걸리고, 내 폰 문자앱이 <b>가입 때 등록한 번호</b>·문구까지 채워진 채 열려요. 회원이 로그인하면 새 PIN을 정하게 돼요.</p>' +
-      (rows || '<p class="sub">대기 중인 요청이 없어요 🙆</p>') + forcedBlock, (list.length + forced.length) > 0, 'pinreset');
+    /* 요청은 없고 임시 PIN 받은 회원만 남았으면 제목도 그대로 — 'PIN 재설정 요청 2'로 보여 할 일처럼 보였음 (2026-11-04) */
+    var _pinReqs = list.length > 0 || !forced.length;
+    return adminFold(_pinReqs ? '🔑 PIN 재설정 요청' : '🔐 새 PIN 정하기 대기', list.length + forced.length,
+      (_pinReqs ? '<p class="sub">번호가 <b>✅ 일치</b>하면 <b>임시 PIN 보내기</b>만 누르세요. 6자리 임시 PIN이 걸리고, 내 폰 문자앱이 <b>가입 때 등록한 번호</b>·문구까지 채워진 채 열려요. 회원이 로그인하면 새 PIN을 정하게 돼요.</p>' +
+      (rows || '<p class="sub">대기 중인 요청이 없어요 🙆</p>') : '') + forcedBlock, (list.length + forced.length) > 0, 'pinreset');
   }
   /* 새 PIN 정하기 대기 계정에 새 임시 PIN 걸고 문자앱 열기 (연락처 없으면 PIN을 화면에 보여 줘 직접 전달) */
   /* 🔐 로그인·접속 기록 (2026-10-26 v467) — 서버 전용 loginAudit·accessSeen 을 adminSecurityLog 가 대신 읽어 줌.
