@@ -149,8 +149,8 @@
   .adm-group { margin: 18px 0 6px; font-size: 1rem; display: flex; align-items: baseline; gap: 8px; }
   .adm-group small { color: var(--muted); font-weight: 400; font-size: 0.8rem; }
   .adm-calm { color: #137333; font-size: 0.86rem; margin: 2px 0 8px; }
-  .adm-tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
-  .adm-tools .card-btn { flex: none; width: 100%; padding: 10px 12px; font-size: 0.9rem; }
+  .adm-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .adm-tools .card-btn { flex: none; padding: 6px 12px; font-size: 0.86rem; }
   .adm-more > summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; padding: 2px 0 8px; }
   .sms-drafts { display: grid; gap: 8px; border: 1px solid var(--gold); background: var(--gold-soft); border-radius: 12px; padding: 10px 12px; }
   .sms-draft { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; padding-top: 8px; border-top: 1px dashed var(--gold); }
@@ -663,7 +663,14 @@
   }
 
   /* ---------- Admin panel ---------- */
-  .admin-panel { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; }
+  .admin-panel { padding: 0; }
+  .masthead.adm-work { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 10px; padding-top: 10px; padding-bottom: 10px; }
+  .masthead.adm-work .masthead-inner { margin: 0; gap: 8px; align-items: center; }
+  .masthead.adm-work .masthead-icon svg { width: 26px; height: 26px; }
+  .masthead.adm-work h1 { font-size: 1.1rem; margin: 0; }
+  .masthead.adm-work .masthead-sub, .masthead.adm-work .admin-bar-row:not(:last-child) { display: none; }
+  .masthead.adm-work .admin-bar { margin: 0; padding: 0; }
+  .masthead.adm-work .admin-bar-row { margin: 0; flex-wrap: nowrap; }
   .admin-panel h2 { font-size: 1.2rem; margin-bottom: 6px; display: flex; align-items: center; }
   .admin-panel .sub { color: var(--muted); font-size: 0.88rem; margin-bottom: 20px; }
   .request-item {
@@ -719,16 +726,17 @@
   }
 
   /* 관리자 폴딩 섹션 — 모든 섹션 통일 (네이티브 ▶ 마커 제거, 우측 커스텀 ⌄) */
-  .admin-fold { margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+  .admin-fold { margin-bottom: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
   .admin-fold[open] { border-color: var(--gold); }
   .admin-fold > summary {
-    cursor: pointer; list-style: none; padding: 12px 11px;
-    display: flex; align-items: center; gap: 4px;
-    font-weight: 700; font-size: 1.05rem; color: var(--ink);
+    cursor: pointer; list-style: none; padding: 11px 11px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px;
+    font-weight: 700; font-size: 1rem; color: var(--ink);
   }
+  .adm-fold-sub { order: 3; flex-basis: 100%; font-weight: 400; font-size: 0.82rem; color: var(--muted); overflow-wrap: anywhere; }
   .admin-fold > summary::-webkit-details-marker { display: none; }
   .admin-fold > summary::after {
-    content: '⌄'; margin-left: auto; padding-left: 8px; color: var(--muted);
+    content: '⌄'; order: 2; margin-left: auto; padding-left: 8px; color: var(--muted);
     font-size: 1.15rem; line-height: 1; transform: translateY(-3px);
     transition: transform 0.15s ease;
   }
@@ -1335,7 +1343,7 @@
   /* 섹션 열림 상태: 이번 세션에 사용자가 편 것만 열림 (기본은 접힘). def는 필터 등 특수 상황용 */
   function secOpenAttr(key, def) {
     var m = adminSecOpenMap();
-    var v = (key in m) ? m[key] : !!def;
+    var v = (key in m) ? m[key] : key === 'seen';   /* 기본은 다 접음 — 제목 아래 한 줄로 내용을 보여 줌 (회원 명단만 펼침) */
     return v ? ' open' : '';
   }
   function adminSecOrder() {
@@ -9538,36 +9546,31 @@
     }
     /* 맨 위 바로가기: 해야 할 일(연락 필요·보안 경고·승인 대기)로 바로 이동 */
     var _secOpenN = _secAlerts.filter(function (a) { return !a.resolved; }).length;
-    var jump = function (k, label, n, hot) { return n ? '<button type="button" class="card-btn' + (hot ? ' danger' : ' primary') + '" data-action="sec-jump" data-id="' + k + '" style="flex:none;padding:5px 12px;">' + label + ' ' + n + '</button>' : ''; };
-    var quickBar = jump('stale', '📞 연락 필요', contactRows.length, false);
-    /* 맨 위 '지금 볼 것' (2026-11-04 Benny: '뭐가 온건지도 모르겠어') — 배지 숫자 대신 글로, 누르면 그 칸으로 */
+    /* 2026-11-04 Benny '관리자탭 보기 엄청 힘들어': 칸은 접어 두고 제목 아래 한 줄로 무엇이 왔는지. 누르면 그 자리에서 펼침 */
     var _who3 = function (arr) { var n = arr.map(function (e) { return e.nickname || '회원'; }); return n.slice(0, 3).join('·') + (n.length > 3 ? ' 외 ' + (n.length - 3) + '명' : ''); };
     var _wnTime = function (t) { var d = new Date(t); return isNaN(d) ? '' : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); };
-    var _wnRow = function (k, title, sub) {
-      return '<button type="button" data-action="sec-jump" data-id="' + k + '" style="display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:8px 2px;font:inherit;color:inherit;cursor:pointer;"><b>' + title + '</b>' +
-        (sub ? ' <span style="color:var(--muted);font-size:0.86rem;">— ' + escapeHtml(sub) + '</span>' : '') + '</button>';
-    };
-    var whatNow = (secOpen.length ? _wnRow('security', '🛡 보안 경고 ' + secOpen.length + '건', secWho(secOpen[0]) + ' · ' + secWhat(secOpen[0]) + ' ' + _wnTime(secOpen[0].at)) : '') +
-      (freshPending.length ? _wnRow('pending', '🆕 가입 신청 ' + freshPending.length + '명', _who3(freshPending)) : '') +
-      (function () {
-        var mm = delReqs.filter(isMmOnlyDelete), del = delReqs.filter(function (e) { return !isMmOnlyDelete(e); });
-        return (del.length ? _wnRow('pending', '🗑 삭제 요청 ' + del.length + '명', _who3(del)) : '') +
-          (mm.length ? _wnRow('pending', '🤝 주선자 전환 ' + mm.length + '명', _who3(mm)) : '');
-      })() +
-      (deacReqs.length ? _wnRow('pending', '📦 보관 요청 ' + deacReqs.length + '명', _who3(deacReqs)) : '') +
-      (repRooms.length ? _wnRow('reports', '🚩 신고 ' + repRooms.length + '건', '') : '') +
-      (adminMsgUnreadTotal ? _wnRow('adminmsg', '💬 안 읽은 Q&A ' + adminMsgUnreadTotal + '건', '') : '');
+    var _mmReqs = delReqs.filter(isMmOnlyDelete), _delOnly = delReqs.filter(function (e) { return !isMmOnlyDelete(e); });
+    var _pendBits = [];
+    if (freshPending.length) _pendBits.push('가입 ' + _who3(freshPending));
+    if (_delOnly.length) _pendBits.push('삭제 ' + _who3(_delOnly));
+    if (_mmReqs.length) _pendBits.push('주선자 전환 ' + _who3(_mmReqs));
+    if (deacReqs.length) _pendBits.push('보관 ' + _who3(deacReqs));
+    var _drafts = smsDrafts();
+    var _draftWho = _drafts.map(function (d) { var e = allEntries.find(function (x) { return x.id === d.entryId; }); return { nickname: (e && e.nickname) || d.nick }; });
     return (
-      '<div class="admin-panel"><div class="adm-head">' +
-        smsDraftsHtml(state) +
-        (whatNow ? '<div style="border:1px solid var(--line);border-radius:12px;padding:8px 12px 4px;background:var(--paper);"><b style="font-size:0.92rem;">🔔 지금 볼 것</b><div style="margin-top:6px;">' + whatNow + '</div></div>' : '') +
-        (quickBar ? '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + quickBar + '</div>' : '') +
-        headerBtns +
-      '</div>' +
+      '<div class="admin-panel">' +
         adminGroupsHtml(order, secHtml, {
           security: _secOpenN, pending: approvalTotal, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,   /* pending: 삭제·보관 요청까지 — 가입만 세면 '비어 있음'으로 칸이 숨었음 */
           held: heldPending.length, editrev: editRevList.length, reports: repRooms.length
-        }, adminAiIntelBoardHtml(state)) +
+        }, adminAiIntelBoardHtml(state), {
+          first: _drafts.length ? adminFold('📨 보낼 문자', _drafts.length, smsDraftsHtml(state), false, 'smsdrafts').replace('</summary>', '<span class="adm-fold-sub">' + escapeHtml(_who3(_draftWho)) + '</span></summary>') : '',
+          tools: headerBtns,
+          sub: {
+            security: secOpen.length ? secWho(secOpen[0]) + ' · ' + secWhat(secOpen[0]) + ' ' + _wnTime(secOpen[0].at) : '',
+            pending: _pendBits.join(' · '), held: _who3(heldPending), reports: repRooms.length ? '신고 ' + repRooms.length + '건' : '',
+            adminmsg: adminMsgUnreadTotal ? '안 읽은 Q&A ' + adminMsgUnreadTotal + '건' : '', stale: contactRows.length ? '답이 없거나 오래 안 온 회원' : ''
+          }
+        }) +
       '</div>'
     );
   }
@@ -9581,23 +9584,24 @@
     return (pend ? '<button type="button" class="card-btn primary" data-tab="admin" style="flex:none;margin:0 0 8px;">⏳ 승인 대기 ' + pend + '명 → 관리자 탭</button>' : '') +
       (secHtml.seen || '') + order.filter(function (k) { return k !== 'seen' && SEC_GROUP[k] === 'mem'; }).map(function (k) { return secHtml[k] || ''; }).join('');
   }
-  function adminGroupsHtml(order, secHtml, todoN, aiBoard) {
-    var g = { todo: [], mem: [], rec: [] }, quiet = [];
+  function adminGroupsHtml(order, secHtml, todoN, aiBoard, extra) {
+    var g = { todo: [], mem: [], rec: [] };
     var head = function (k) { var m = /class="pending-count">(\d+)</.exec(secHtml[k] || ''); return m ? +m[1] : 0; };
     order.forEach(function (k) {
       var grp = SEC_GROUP[k] || 'rec', html = secHtml[k] || '';
       if (!html) return;
       if (grp === 'todo') {
         var n = (k in todoN) ? todoN[k] : head(k);
-        if (!n) { quiet.push((SEC_NAMES[k] || k).replace(/^\S+\s/, '')); return; }
+        if (!n) return;
+        if (extra.sub[k]) html = html.replace('</summary>', '<span class="adm-fold-sub">' + escapeHtml(extra.sub[k]) + '</span></summary>');
       }
       if (k === 'active') g.rec.unshift(html); else g[grp].push(html);
     });
+    if (extra.first) g.todo.unshift(extra.first);
     return '<h3 class="adm-group">🔔 지금 할 일 <small>' + (g.todo.length ? g.todo.length + '가지' : '') + '</small></h3>' +
       (g.todo.length ? g.todo.join('') : '<p class="adm-calm">✅ 지금 처리할 일이 없어요.</p>') +
-      (quiet.length ? '<p class="sub" style="margin:2px 0 6px;">비어 있음: ' + escapeHtml(quiet.join(' · ')) + '</p>' : '') +
-      '<p class="sub" style="margin:14px 0 4px;">👥 회원 명단 · 🤝 주선자 · 🗄 보관 계정은 <button type="button" class="seen-mini" data-tab="mmlist">👥 회원 탭</button>에 있어요.</p>' +
-      '<h3 class="adm-group">📊 요청 · 기록 · 설정</h3>' + (g.rec.length ? g.rec[0] : '') + (aiBoard || '') + g.rec.slice(1).join('');
+      '<h3 class="adm-group">🧰 보내기 · 설정</h3>' + extra.tools +
+      '<h3 class="adm-group">📊 요청 · 기록</h3>' + g.rec.join('') + (aiBoard || '');
   }
 
   /* ---- 서버 용량 ---- */
@@ -9793,10 +9797,10 @@
     if (isAdminUnlocked) {
       var msgUnread = adminMsgUnread(state);
       var approvalCount = pendingCount + deleteReqCount + deacReqCount; /* 신규 가입 + 삭제 요청 + 비활성화 요청 (승인 대기 통합) */
+      /* 할 일만 배지로 — 0이면 숨김. '요청 225'처럼 할 일 아닌 수는 📬 요청함 칸에 (2026-11-04) */
       adminTab = '<button type="button" class="tab-btn" data-tab="admin" role="tab" aria-selected="' + (activeTab === 'admin') + '">관리자' +
-        '<span class="count' + (approvalCount >= 1 ? ' blink' : '') + '" title="승인 대기 (가입·삭제·보관)">대기 ' + approvalCount + '</span>' +
-        '<span class="count" title="요청">요청 ' + reqCount + '</span>' +
-        '<span class="count' + (msgUnread >= 1 ? ' blink' : '') + '" title="안 읽은 Q&A">Q&A ' + msgUnread + '</span>' +
+        (approvalCount ? '<span class="count blink" title="승인 대기 (가입·삭제·보관)">대기 ' + approvalCount + '</span>' : '') +
+        (msgUnread ? '<span class="count blink" title="안 읽은 Q&A">Q&A ' + msgUnread + '</span>' : '') +
         (function () { var n = _secAlerts.filter(function (a) { return !a.resolved; }).length; return n ? '<span class="count blink" title="보안 경고 (관리자 탭 → 🛡 보안 경고)" style="background:#c5221f;color:#fff;">🛡 ' + n + '</span>' : ''; })() +
         '</button>';
     }
@@ -9876,8 +9880,10 @@
     else if (activeTab === 'mine' && currentUser) panel = renderMine(state);
     else if (activeTab === 'admin' && isAdminUnlocked) panel = renderAdmin(state);
     else panel = renderForm(state);
+    /* 관리자 일하는 화면(관리자·회원 탭)에선 머리글을 한 줄로 — 소개글·공유 버튼이 폰 화면 절반을 차지했음 (2026-11-04) */
+    var _admWork = isAdminUnlocked && !currentUser && (activeTab === 'admin' || activeTab === 'mmlist');
     return (
-      '<div class="masthead"><div class="masthead-inner">' +
+      '<div class="masthead' + (_admWork ? ' adm-work' : '') + '"><div class="masthead-inner">' +
         '<div class="masthead-icon">' + ICON_LOGO + '</div>' +
         '<div><h1 id="masthead-title" title="새로고침" style="cursor:pointer;">베니브릿지</h1>' + zonePillHtml(state) +
           '<p class="masthead-sub">아는 사람이 건넨 🔗링크로 연결되는, 신뢰 기반 커뮤니티예요.</p></div>' +
@@ -9907,9 +9913,9 @@
                 : '<button type="button" class="admin-link" id="user-login">' + ICON_LOCK + ' 로그인</button>')) +
         '</div>' +
       '</div></div>' +
-      whoBarHtml(state) +
+      (_admWork ? '' : whoBarHtml(state)) +
       heldBanner +
-      liveBanner +
+      (_admWork ? '<div hidden>' + liveBanner + '</div>' : liveBanner) +
       ((NOTIF_ENABLED && currentUser && !memberNotifActive())
         ? '<div class="notice-bar">' +
             '<span class="notice-icon">&#128227;</span> 요청이 오거나 승인·거절되면 알림으로 알려드려요. 상단 <b>&#128276; 알림</b> → <b>알림 설정</b>에서 켜보세요!' +
