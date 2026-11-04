@@ -1121,7 +1121,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-04-531';
+  var APP_VERSION = '2026-11-04-532';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -9222,7 +9222,6 @@
           : '<td style="color:var(--muted);text-align:center;font-size:0.78rem;white-space:nowrap;">' + seenTxt + '</td>') +
       '</tr>';
     }).join('');
-    var pendingCountForBar = (state.pendingEntries || []).filter(function (e) { return !e.heldReason; }).length;
     var cNoSms = contactRows.filter(function (s) { return !smsLastFor(state, s.e.id); }).length;
     var cfBtn = function (k, label, n) { return '<button type="button" class="card-btn' + (_contactFilter === k ? ' primary' : '') + '" data-action="cf-filter" data-id="' + k + '" style="flex:none;padding:3px 10px;font-size:0.8rem;">' + label + ' ' + n + '</button>'; };
     var staleSection = adminFold('📞 연락 필요 (무응답·미접속)', contactRows.length,
@@ -9437,15 +9436,29 @@
     /* 맨 위 바로가기: 해야 할 일(연락 필요·보안 경고·승인 대기)로 바로 이동 */
     var _secOpenN = _secAlerts.filter(function (a) { return !a.resolved; }).length;
     var jump = function (k, label, n, hot) { return n ? '<button type="button" class="card-btn' + (hot ? ' danger' : ' primary') + '" data-action="sec-jump" data-id="' + k + '" style="flex:none;padding:5px 12px;">' + label + ' ' + n + '</button>' : ''; };
-    var quickBar = jump('security', '🛡 보안 경고', _secOpenN, true) + jump('pending', '⏳ 승인 대기', pendingCountForBar, false) + jump('stale', '📞 연락 필요', contactRows.length, false);
+    var quickBar = jump('stale', '📞 연락 필요', contactRows.length, false);
+    /* 맨 위 '지금 볼 것' (2026-11-04 Benny: '뭐가 온건지도 모르겠어') — 배지 숫자 대신 글로, 누르면 그 칸으로 */
+    var _who3 = function (arr) { var n = arr.map(function (e) { return e.nickname || '회원'; }); return n.slice(0, 3).join('·') + (n.length > 3 ? ' 외 ' + (n.length - 3) + '명' : ''); };
+    var _wnTime = function (t) { var d = new Date(t); return isNaN(d) ? '' : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); };
+    var _wnRow = function (k, title, sub) {
+      return '<button type="button" data-action="sec-jump" data-id="' + k + '" style="display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:8px 2px;font:inherit;color:inherit;cursor:pointer;"><b>' + title + '</b>' +
+        (sub ? ' <span style="color:var(--muted);font-size:0.86rem;">— ' + escapeHtml(sub) + '</span>' : '') + '</button>';
+    };
+    var whatNow = (secOpen.length ? _wnRow('security', '🛡 보안 경고 ' + secOpen.length + '건', secWho(secOpen[0]) + ' · ' + secWhat(secOpen[0]) + ' ' + _wnTime(secOpen[0].at)) : '') +
+      (freshPending.length ? _wnRow('pending', '🆕 가입 신청 ' + freshPending.length + '명', _who3(freshPending)) : '') +
+      (delReqs.length ? _wnRow('pending', '🗑 삭제 요청 ' + delReqs.length + '명', _who3(delReqs)) : '') +
+      (deacReqs.length ? _wnRow('pending', '📦 보관 요청 ' + deacReqs.length + '명', _who3(deacReqs)) : '') +
+      (repRooms.length ? _wnRow('reports', '🚩 신고 ' + repRooms.length + '건', '') : '') +
+      (adminMsgUnreadTotal ? _wnRow('adminmsg', '💬 안 읽은 Q&A ' + adminMsgUnreadTotal + '건', '') : '');
     return (
       '<div class="admin-panel"><div class="adm-head">' +
         smsDraftsHtml(state) +
+        (whatNow ? '<div style="border:1px solid var(--line);border-radius:12px;padding:8px 12px 4px;background:var(--paper);"><b style="font-size:0.92rem;">🔔 지금 볼 것</b><div style="margin-top:6px;">' + whatNow + '</div></div>' : '') +
         (quickBar ? '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + quickBar + '</div>' : '') +
         headerBtns +
       '</div>' +
         adminGroupsHtml(order, secHtml, {
-          security: _secOpenN, pending: pendingCountForBar, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,
+          security: _secOpenN, pending: approvalTotal, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,   /* pending: 삭제·보관 요청까지 — 가입만 세면 '비어 있음'으로 칸이 숨었음 */
           held: heldPending.length, editrev: editRevList.length, reports: repRooms.length
         }, adminAiIntelBoardHtml(state)) +
       '</div>'
