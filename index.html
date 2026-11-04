@@ -11106,7 +11106,7 @@
     if (!entry) return;
     var connected = connectedMemberIds(currentState, id);
     var mmOnly = isMmOnlyDelete(entry), shellGone = false;
-    var mmOnlyNote = mmOnly ? '소개팅 프로필만 지워요. <b>주선자 계정은 남아요.</b> ' : '';
+    var mmOnlyNote = mmOnly ? '주선자 계정은 남아요. ' : '';
     function doDelete() {
       /* 삭제 이력(tombstone): 프로필 정보까지 보존(누구였는지 기억용). 단 전화번호·실명·사진·알게된경로 등 PII는 즉시 폐기 */
       var tomb = {
