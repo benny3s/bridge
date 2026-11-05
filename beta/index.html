@@ -8583,32 +8583,32 @@
             '</tbody>' +
           '</table>' +
         '</div>' +
-        '<div style="font-size:0.8rem;font-weight:700;margin:6px 0 5px;color:var(--ink);">🎯 [표 2] 지금 바로 실행할 AI 추천 3대 운영 전략 표</div>' +
+        '<div style="font-size:0.8rem;font-weight:700;margin:6px 0 5px;color:var(--ink);">🎯 [표 2] AI 운영 아이디어 <span style="font-weight:400;color:var(--muted);">· 참고만 (안 해도 돼요, 효과는 재 본 적 없음)</span></div>' +
         '<div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper);">' +
           '<table class="stats-table" style="margin:0;width:100%;border-collapse:collapse;">' +
             '<thead><tr style="background:var(--card);border-bottom:1px solid var(--line);font-size:0.74rem;">' +
               '<th style="text-align:left;padding:6px 8px;width:18%;">우선순위</th>' +
               '<th style="text-align:left;padding:6px 8px;width:28%;">핵심 전략 과제</th>' +
               '<th style="text-align:left;padding:6px 8px;width:36%;">데이터 근거 & 기대 효과</th>' +
-              '<th style="text-align:center;padding:6px 8px;width:18%;">바로 실행</th>' +
+              '<th style="text-align:center;padding:6px 8px;width:18%;">해 보기</th>' +
             '</tr></thead>' +
             '<tbody style="font-size:0.78rem;">' +
               '<tr>' +
                 '<td style="padding:6px 8px;font-weight:700;color:var(--accent);">1순위 · 풀 확장</td>' +
                 '<td style="padding:6px 8px;font-weight:700;">' + (genderGap >= 2 ? (scarceGender + ' 타겟 지인 초대 캠페인') : '주선자·친구 초대 활성화') + '</td>' +
-                '<td style="padding:6px 8px;">남 ' + m.maleActive + ' : 여 ' + m.femaleActive + ' 구조 — 친구 공유 팝업·공지로 ' + scarceGender + ' 유입 시 성사율 약 1.3배 상승</td>' +
+                '<td style="padding:6px 8px;">남 ' + m.maleActive + ' : 여 ' + m.femaleActive + ' 구조 — 적은 쪽(' + scarceGender + ')이 늘면 연결이 늘 수 있어요</td>' +
                 '<td style="padding:6px 8px;text-align:center;"><button type="button" class="card-btn primary" data-action="ai-intel-open-modal" data-modal-tab="broadcast" style="padding:4px 8px;font-size:0.72rem;">💌 소개공지</button></td>' +
               '</tr>' +
               '<tr>' +
                 '<td style="padding:6px 8px;font-weight:700;color:#b06000;">2순위 · 병목 해소</td>' +
                 '<td style="padding:6px 8px;font-weight:700;">48시간+ 미응답 골든타임 케어</td>' +
-                '<td style="padding:6px 8px;">현재 48h+ 미응답 <b>' + m.stale48 + '건</b>(대기 총 ' + m.waitReqTotal + '건) — 다정한 확인 안내 시 수락률 대폭 개선</td>' +
-                '<td style="padding:6px 8px;text-align:center;"><button type="button" class="card-btn" data-action="sec-jump" data-id="stale" style="padding:4px 8px;font-size:0.72rem;">📞 연락필요(' + m.stale48 + ')</button></td>' +
+                '<td style="padding:6px 8px;">현재 48h+ 미응답 <b>' + m.stale48 + '건</b>(대기 총 ' + m.waitReqTotal + '건) — 보낼 만한 분은 🟡 📞 문자 권함에 모아 둠</td>' +
+                '<td style="padding:6px 8px;text-align:center;"><button type="button" class="card-btn" data-action="sec-jump" data-id="smsrec" style="padding:4px 8px;font-size:0.72rem;">📞 문자 권함</button></td>' +
               '</tr>' +
               '<tr>' +
                 '<td style="padding:6px 8px;font-weight:700;color:#1967d2;">3순위 · 리텐션</td>' +
                 '<td style="padding:6px 8px;font-weight:700;">장기 미접속 깨우기 & 소개 보완</td>' +
-                '<td style="padding:6px 8px;">14일+ 미접속 <b>' + m.inactive14 + '명</b> · 짧은 소개(20자↓) <b>' + m.shortIntroCount + '명</b> — 주말 신규 합류 소식 발송 권장</td>' +
+                '<td style="padding:6px 8px;">14일+ 미접속 <b>' + m.inactive14 + '명</b> · 짧은 소개(20자↓) <b>' + m.shortIntroCount + '명</b> — 일괄 소식은 10-08 문자 때 다시 쓰는 분이 적었어요</td>' +
                 '<td style="padding:6px 8px;text-align:center;"><button type="button" class="card-btn approve" data-action="ai-intel-open-modal" data-modal-tab="broadcast" style="padding:4px 8px;font-size:0.72rem;">🎉 주말케어</button></td>' +
               '</tr>' +
             '</tbody>' +
@@ -13846,7 +13846,7 @@
         return;
       }
       else if (action === 'cf-filter') { _contactFilter = id || 'all'; paint(currentState); var _sd = document.querySelector('[data-sec="stale"]'); if (_sd) _sd.open = true; return; }
-      else if (action === 'sec-jump') { var _d = document.querySelector('[data-sec="' + id + '"]'); if (_d) { _d.open = true; _d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } return; }
+      else if (action === 'sec-jump') { var _d = document.querySelector('[data-sec="' + id + '"]'); if (_d) { var _pa = _d.closest('details.adm-auto'); if (_pa) _pa.open = true; _d.open = true; _d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } return; }
       else if (action === 'sec-log') { if (isAdminUnlocked) openSecurityLog(); }
       else if (action === 'sec-holds') { if (isAdminUnlocked) openLoginHolds(); }
       else if (action === 'sec-admindev') { if (isAdminUnlocked) openAdminDevices(); }
