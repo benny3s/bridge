@@ -9367,7 +9367,7 @@
     var smsRecItems = recRows.map(function (g) {
       var s0 = g.list[0], names = g.list.map(function (s) { return s.e.nickname || '회원'; });
       var who = g.mm ? '🤝 주선자 ' + escapeHtml(g.mm.nickname || '') + ' <span style="color:var(--muted);font-weight:400;">(' + escapeHtml(names.join('·')) + ')</span>' : escapeHtml(names[0]);
-      var btn = (g.list.length > 1)
+      var btn = g.mm   /* 주선자 친구는 친구 이름을 넣은 문구로 주선자에게 한 통 */
         ? '<button type="button" class="card-btn primary" data-action="rec-sms-mm" data-ids="' + escapeHtml(g.list.map(function (s) { return s.e.id; }).join(',')) + '" style="flex:none;">📱 문자</button>'
         : '<button type="button" class="card-btn primary" data-action="contact-sms" data-id="' + escapeHtml(s0.e.id) + '" data-kind="unseen" style="flex:none;">📱 문자</button>';
       return '<div class="sms-draft"><div class="sms-draft-text"><b>' + who + '</b><br>' +
@@ -9644,7 +9644,7 @@
             smsrec: recRows.length ? _who3(recRows.map(function (g) { return { nickname: g.mm ? '주선자 ' + (g.mm.nickname || '') : g.list[0].e.nickname }; })) + ' · 가장 빠른 마감 ' + _wnTime(recRows[0].closeAt) : '',
             editrev: editRevList.length ? '이미 바뀐 채 보여요 · 훑어보기: ' + _who3(editRevList) : '',
             held: heldPending.length ? '신청자가 고칠 차례 · ' + _who3(heldPending) + ' · 안 고치면 ' + mdText(Math.min.apply(null, heldPending.map(heldCloseAt))) + '부터 저절로 정리' : '',
-            stale: contactRows.length ? '👀 보고도 답 안 함 ' + cCnt.noreply + '명 → 7일 지나면 저절로 마감 · 💤 오래 안 옴 ' + cCnt.dormant + '명' : ''
+            stale: [cCnt.noreply ? '👀 보고도 답 안 함 ' + cCnt.noreply + '명 → 7일 지나면 저절로 마감' : '', cCnt.dormant ? '💤 오래 안 옴 ' + cCnt.dormant + '명' : ''].filter(Boolean).join(' · ')
           }
         }) +
       '</div>'
