@@ -149,6 +149,16 @@
   .adm-group { margin: 18px 0 6px; font-size: 1rem; display: flex; align-items: baseline; gap: 8px; }
   .adm-group small { color: var(--muted); font-weight: 400; font-size: 0.8rem; }
   .adm-calm { color: #137333; font-size: 0.86rem; margin: 2px 0 8px; }
+  /* 할 일 세 단계 색: 🔴 꼭 · 🟡 권함 · ⚪ 안 해도 됨 (왼쪽 굵은 선) */
+  .adm-tier > .admin-fold, .adm-tier > .admin-fold[open] { border-left-width: 4px; }
+  .adm-t1 > .admin-fold, .adm-t1 > .admin-fold[open] { border-left-color: #c5221f; }
+  .adm-t2 > .admin-fold, .adm-t2 > .admin-fold[open] { border-left-color: #e0a100; }
+  .adm-t3 > .admin-fold, .adm-t3 > .admin-fold[open] { border-left-color: #bdc1c6; }
+  .adm-t3 > .admin-fold > summary { font-weight: 600; color: var(--muted); }
+  .adm-auto > summary { cursor: pointer; list-style: none; }
+  .adm-auto > summary::-webkit-details-marker { display: none; }
+  .adm-auto > summary::after { content: '⌄'; margin-left: auto; color: var(--muted); }
+  .adm-auto[open] > summary::after { content: '⌃'; }
   .adm-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
   .adm-tools .card-btn { flex: none; padding: 6px 12px; font-size: 0.86rem; }
   .adm-more > summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; padding: 2px 0 8px; }
@@ -1159,7 +1169,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-05-534';
+  var APP_VERSION = '2026-11-06-535';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -1333,8 +1343,8 @@
   var openMsgFolds = {}; /* 관리자 메시지: 펼쳐둔 회원 대화 (리페인트 후 유지용) */
   var _mmFoldOpen = {};  /* 주선자 탭: 카드별 접힘 상태 (리페인트 후 유지용, 기본 열림) */
   var adminEditMode = false; /* 관리자 섹션 편집(순서·기본 열림) 모드 */
-  var DEFAULT_SEC_ORDER = ['security', 'usage', 'connlog', 'couple', 'behavior', 'pending', 'pinreset', 'reports', 'held', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
-  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', behavior: '🧭 행동 보고', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', reports: '🚨 신고된 대화', security: '🛡 보안 경고', held: '📌 보류 중', stale: '📞 연락 필요', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
+  var DEFAULT_SEC_ORDER = ['security', 'usage', 'connlog', 'couple', 'behavior', 'pending', 'pinreset', 'reports', 'held', 'smsrec', 'stale', 'editrev', 'deaclist', 'dellog', 'active', 'adminmsg', 'cap', 'seen', 'log'];
+  var SEC_NAMES = { usage: '📊 사용량 통계', connlog: '🔗 연결 이력', couple: '💕 커플 성사', behavior: '🧭 행동 보고', pending: '⏳ 승인 대기', pinreset: '🔑 PIN 재설정 요청', reports: '🚨 신고된 대화', security: '🛡 보안 경고', held: '📌 보류 중', smsrec: '📞 문자 권함', stale: '📋 연락 현황', editrev: '📝 프로필 변경', deaclist: '🗄 보관 계정', dellog: '🗑 삭제 이력', active: '📬 요청함', adminmsg: '💬 관리자 메시지', cap: '💾 서버 용량', seen: '👥 회원 명단', log: '📜 활동 기록' };
   /* 섹션 열림 상태는 "세션 메모리에만" 저장 → 리페인트(버튼 클릭 등) 동안엔 유지되지만,
      새로고침하면 초기화되어 모두 접힌 상태로 시작 (이전에 열었던 걸 기억하지 않음) */
   var _adminSecOpen = {}, _adminSecOrder = null;
@@ -1800,6 +1810,20 @@
   }
   var _secAlerts = [];
   var _contactFilter = 'all';
+  /* 🔔 앱 알림 받는 기기가 있는 회원 id (관리자만, 30분에 한 번 읽음) — 📞 문자 권함에서 앱 알림이 가는 분은 뺌. 못 읽으면 null(아무도 안 뺌) */
+  var _pushIds = null, _pushIdsAt = 0, _pushIdsBusy = false;
+  function pushIdsFor() {
+    if (isAdminUnlocked && !_pushIdsBusy && Date.now() - _pushIdsAt > 30 * 60000) {
+      _pushIdsBusy = true;
+      pushTokensRef.get().then(function (snap) {
+        var s = {};
+        snap.forEach(function (d) { var t = d.data().tokens; if (d.id !== 'admin' && (Array.isArray(t) ? t.length : (t && typeof t === 'object' ? Object.keys(t).length : 0))) s[d.id] = 1; });
+        _pushIds = s; _pushIdsAt = Date.now(); _pushIdsBusy = false;
+        if (currentState) paint(currentState);
+      }).catch(function () { _pushIdsAt = Date.now(); _pushIdsBusy = false; });
+    }
+    return _pushIds;
+  }
   /* 📞 연락 필요 필터: all | noreply | unseen | dormant | nosms */
   var _amFilter = 'talk';   /* 💬 관리자 메시지 필터: talk | auto | all */
   function applyContactFilter() {
@@ -2769,7 +2793,7 @@
     function slot(e) {
       if (!out[e.id]) {
         var ls = lastActiveAt(e), lt = ls ? new Date(ls).getTime() : 0;
-        out[e.id] = { e: e, lastT: lt, lastDays: lt ? Math.floor((now - lt) / 86400000) : null, total: 0, oldest: 0, seenN: 0, seenOld: 0, unseenN: 0, unseenOld: 0 };
+        out[e.id] = { e: e, lastT: lt, lastDays: lt ? Math.floor((now - lt) / 86400000) : null, total: 0, oldest: 0, seenN: 0, seenOld: 0, unseenN: 0, unseenOld: 0, unAll: 0, unFirstT: 0, closeAt: 0 };
       }
       return out[e.id];
     }
@@ -2783,6 +2807,11 @@
       var t = new Date(r.reappliedAt || r.submittedAt || 0).getTime(); if (!t) return;
       var d = Math.floor((now - t) / 86400000);
       s.total++; s.oldest = Math.max(s.oldest, d);
+      /* 못 본 요청은 나이와 상관없이 셈 + 가장 빠른 자동 마감 (📞 문자 권함용, 서버 reqExpireAtMs 와 같은 식) */
+      if (!(s.lastT && s.lastT >= t)) {
+        var ca = Math.max((Date.parse(r.submittedAt) || t) + 7 * 86400000, REQ_EXPIRE_FROM + 3 * 86400000);
+        s.unAll++; if (!s.unFirstT || t < s.unFirstT) s.unFirstT = t; if (!s.closeAt || ca < s.closeAt) s.closeAt = ca;
+      }
       if (now - t < CONTACT_REQ_MIN_MS) return;
       if (s.lastT && s.lastT >= t) { s.seenN++; s.seenOld = Math.max(s.seenOld, d); }
       else { s.unseenN++; s.unseenOld = Math.max(s.unseenOld, d); }
@@ -2964,6 +2993,18 @@
       ov.addEventListener('click', function (e) { if (e.target === ov) closeModal(ov); });
       render();
     }).catch(function () { modalNotice('오류', '연락처 복호화에 실패했어요.'); });
+  }
+
+  /* 📞 문자 권함: 한 주선자가 맡은 친구 여럿 → 주선자에게 한 통 (친구 이름·요청 수를 넣은 문구). 연 뒤엔 나머지 친구도 '문자 보냄'으로 기록 */
+  function sendRecSmsMm(ids) {
+    var ents = ids.map(function (x) { return (currentState.entries || []).find(function (y) { return y.id === x; }); }).filter(Boolean);
+    if (!ents.length) return;
+    var cs = contactStats(currentState), n = ents.reduce(function (a, x) { return a + ((cs[x.id] && cs[x.id].total) || 0); }, 0);
+    var mm = (currentState.entries || []).find(function (y) { return y.id === ents[0].managedBy; });
+    var text = '[베니브릿지] 주선자 ' + ((mm && mm.nickname) || '') + ' 님,\n' + ents.map(function (x) { return x.nickname || '회원'; }).join('·') + ' 님께 요청 ' + n + '건이 와 있어요.\n앱에서 확인 부탁드려요 🙏\n' + SMS_SITE;
+    openSmsNative(ents[0].id, text, null, function () {
+      ents.slice(1).reduce(function (p, x) { return p.then(function () { return recordSms(x.id, 'native', true); }); }, Promise.resolve()).catch(function () {});
+    });
   }
 
   /* 임의 번호로 문자 (비회원 등 앱에 없는 사람 응대용) — 번호·내용을 직접 입력해 내 폰 문자앱을 엶. 번호는 로그에 안 남김. */
@@ -7911,7 +7952,7 @@
           '</div>' +
         '</div></details>';
     }).join('');
-    var body = '<p class="sub">회원이 알려온 소개팅 성공 소식이에요. <b>확인 ' + confirmed + '</b>쌍이 공개 배너 "커플 탄생"에 반영돼요. 공개(익명)로 표시한 후기는 메인 화면에 노출돼요.</p>' +
+    var body = '<p class="sub">회원이 알려온 소개팅 성공 소식이에요. <b>확인 ' + confirmed + '</b>쌍이 공개 배너 "베니브릿지에서 맺어진 커플"에 반영돼요. 공개(익명)로 표시한 후기는 메인 화면에 노출돼요.</p>' +
       (list.length ? rows : '<p class="sub">아직 신고된 커플이 없어요.</p>');
     return '<details class="admin-fold" data-sec="couple"' + secOpenAttr('couple', false) + '><summary>💕 커플 성사<span class="pending-count">' + list.length + '</span></summary><div class="admin-fold-body">' + body + '</div></details>';
   }
@@ -9308,6 +9349,36 @@
     contactRows.forEach(function (s) { if (s.seenN) cCnt.noreply++; if (s.unseenN) cCnt.unseen++; if ((s.lastDays || 0) >= CONTACT_DORMANT_DAYS) cCnt.dormant++; });
     var staleRecipN = contactRows.filter(function (s) { return s.seenN || s.unseenN; }).length;
     var _entAll = {}; (state.entries || []).forEach(function (e) { _entAll[e.id] = e; });
+    /* 📞 문자 권함 (2026-11-06 Benny '해야 할 거랑 추천·안 해도 되는 거 구분이 안 돼'): 요청이 와 있는데 그 뒤 안 들어왔고(2일+ 또는 7일+ 미접속),
+       앱 알림 기기도 없고, 그 뒤 문자도 안 받은 회원만. 주선자 친구는 주선자 한 명에게 한 통. 마감(7일) 빠른 순. 나머지는 📋 연락 현황(⚪)으로 */
+    var _pIds = pushIdsFor(), recMap = {}, recIds = {};
+    Object.keys(cStats).forEach(function (k) {
+      var s = cStats[k], e = s.e;
+      if (!s.unAll || !(s.unseenN || s.lastDays === null || s.lastDays >= CONTACT_DORMANT_DAYS)) return;
+      if (_pIds && (_pIds[e.id] || (e.managedBy && _pIds[e.managedBy]))) return;
+      var last = smsLastFor(state, e.id); if (last && Date.parse(last.at) >= s.unFirstT) return;
+      var mm = (e.managedBy && !e.ownerSelf) ? _entAll[e.managedBy] : null;
+      var g = recMap[mm ? 'mm:' + mm.id : e.id] || (recMap[mm ? 'mm:' + mm.id : e.id] = { mm: mm, list: [], n: 0, closeAt: 0 });
+      g.list.push(s); g.n += s.total; if (!g.closeAt || s.closeAt < g.closeAt) g.closeAt = s.closeAt;
+      recIds[e.id] = 1;
+    });
+    var recRows = Object.keys(recMap).map(function (k) { return recMap[k]; }).sort(function (a, b) { return a.closeAt - b.closeAt; });
+    var _recClose = function (t) { var d = new Date(t), left = t - Date.now(); return (left < 86400000 ? '<b style="color:#c5221f;">' : '<b>') + (d.getMonth() + 1) + '/' + d.getDate() + ' ' + d.getHours() + '시쯤</b>'; };
+    var smsRecItems = recRows.map(function (g) {
+      var s0 = g.list[0], names = g.list.map(function (s) { return s.e.nickname || '회원'; });
+      var who = g.mm ? '🤝 주선자 ' + escapeHtml(g.mm.nickname || '') + ' <span style="color:var(--muted);font-weight:400;">(' + escapeHtml(names.join('·')) + ')</span>' : escapeHtml(names[0]);
+      var btn = (g.list.length > 1)
+        ? '<button type="button" class="card-btn primary" data-action="rec-sms-mm" data-ids="' + escapeHtml(g.list.map(function (s) { return s.e.id; }).join(',')) + '" style="flex:none;">📱 문자</button>'
+        : '<button type="button" class="card-btn primary" data-action="contact-sms" data-id="' + escapeHtml(s0.e.id) + '" data-kind="unseen" style="flex:none;">📱 문자</button>';
+      return '<div class="sms-draft"><div class="sms-draft-text"><b>' + who + '</b><br>' +
+        '요청 ' + g.n + '건 · ' + (s0.lastDays === null ? '접속 기록 없음' : s0.lastDays + '일째 안 들어옴') + ' · ⌛ ' + _recClose(g.closeAt) + ' 마감</div>' + btn + '</div>';
+    }).join('');
+    var smsRecSection = adminFold('📞 문자 권함', recRows.length,
+      '<div class="sms-drafts">' +
+        '<div style="font-size:0.82rem;">요청이 와 있는데 <b>그 뒤로 앱에 안 들어왔고</b>, 앱 알림도 안 받는 분이에요. 마감 전에 문자 한 통이면 답할 기회가 생겨요. <b>안 보내도 마감 시각에 저절로 닫혀요.</b>' +
+          (_pIds ? '' : ' <span style="color:var(--muted);">(알림 기기 정보를 아직 못 읽어 알림 받는 분도 섞여 있을 수 있어요)</span>') + '</div>' +
+        smsRecItems +
+      '</div>', false, 'smsrec');
     function cDayCol(d) { return d >= 7 ? '#c5221f' : (d >= 3 ? '#b06000' : 'var(--ink)'); }
     function cCell(id, kind, on, label, col) {
       if (!on) return '<td style="color:var(--muted);text-align:center;">·</td>';
@@ -9322,7 +9393,7 @@
       var seenTxt = s.lastDays === null ? '기록 없음' : (s.lastDays === 0 ? '오늘' : s.lastDays + '일 전');
       var cf = [s.seenN ? 'noreply' : '', s.unseenN ? 'unseen' : '', (s.lastDays || 0) >= CONTACT_DORMANT_DAYS ? 'dormant' : '', last ? 'sms' : 'nosms'].filter(Boolean).join(' ');
       return '<tr data-cf="' + cf + '">' +
-        '<td style="min-width:92px;"><b>' + escapeHtml(e.nickname || '회원') + '</b>' +
+        '<td style="min-width:92px;">' + (recIds[e.id] ? '<span style="font-size:0.7rem;color:#b06000;">🟡 문자 권함</span><br>' : '') + '<b>' + escapeHtml(e.nickname || '회원') + '</b>' +
           ' <button type="button" class="card-btn" data-action="admin-msg" data-id="' + escapeHtml(e.id) + '" style="flex:none;padding:0 5px;font-size:0.72rem;" title="앱 메시지">💬</button>' +
           '<div style="color:var(--muted);font-size:0.72rem;">' + escapeHtml(formatUid(e) || '') + (mm ? ' · 🤝' + escapeHtml(mm.nickname || '주선자') : '') + '</div>' +
           (lastTxt ? '<div style="font-size:0.72rem;color:var(--ink);">📱 ' + escapeHtml(lastTxt) + ' 보냄</div>' : '') + '</td>' +
@@ -9335,7 +9406,8 @@
     }).join('');
     var cNoSms = contactRows.filter(function (s) { return !smsLastFor(state, s.e.id); }).length;
     var cfBtn = function (k, label, n) { return '<button type="button" class="card-btn' + (_contactFilter === k ? ' primary' : '') + '" data-action="cf-filter" data-id="' + k + '" style="flex:none;padding:3px 10px;font-size:0.8rem;">' + label + ' ' + n + '</button>'; };
-    var staleSection = adminFold('📞 연락 필요 (무응답·미접속)', contactRows.length,
+    var staleSection = adminFold('📋 연락 현황', contactRows.length,
+      '<p class="sub" style="margin:0 0 8px;">⚪ <b>여기는 안 보내도 돼요.</b> 👀 보고도 답 안 한 요청은 7일이 지나면 저절로 마감되고, 💤 대기 없이 오래 안 온 분께 한꺼번에 보낸 문자(10-08)는 그 뒤 계속 쓰는 분이 적었어요. 보낼 만한 분은 위 🟡 📞 문자 권함에 따로 모아 뒀어요.</p>' +
       '<div style="display:flex;gap:5px;flex-wrap:wrap;margin:0 0 8px;">' +
         cfBtn('all', '전체', contactRows.length) + cfBtn('noreply', '👀 무응답', cCnt.noreply) + cfBtn('unseen', '📭 미접속', cCnt.unseen) +
         cfBtn('dormant', '💤 장기', cCnt.dormant) + cfBtn('nosms', '📱 문자 안 보낸', cNoSms) +
@@ -9495,7 +9567,7 @@
     var secHtml = {
       security: securitySection,
       reports: reportsSection,
-      usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), behavior: behaviorSectionHtml(), pending: pendingSection, pinreset: pinResetSectionHtml(state, adminFold), held: heldSection, stale: staleSection, editrev: editRevSection,
+      usage: usageStatsHtml(state), connlog: connLogHtml(state), couple: coupleSectionHtml(state), behavior: behaviorSectionHtml(), pending: pendingSection, pinreset: pinResetSectionHtml(state, adminFold), held: heldSection, smsrec: smsRecSection, stale: staleSection, editrev: editRevSection,
       deaclist: deacListSection, dellog: delLogSection,
       active: activeReqSection, adminmsg: adminMsgSection,
       cap: capSection, seen: seenSection, log: logSection
@@ -9560,15 +9632,19 @@
     return (
       '<div class="admin-panel">' +
         adminGroupsHtml(order, secHtml, {
-          security: _secOpenN, pending: approvalTotal, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,   /* pending: 삭제·보관 요청까지 — 가입만 세면 '비어 있음'으로 칸이 숨었음 */
+          security: _secOpenN, pending: approvalTotal, smsrec: recRows.length, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,   /* pending: 삭제·보관 요청까지 — 가입만 세면 '비어 있음'으로 칸이 숨었음 */
           held: heldPending.length, editrev: editRevList.length, reports: repRooms.length
         }, adminAiIntelBoardHtml(state), {
           first: _drafts.length ? adminFold('📨 보낼 문자', _drafts.length, smsDraftsHtml(state), false, 'smsdrafts').replace('</summary>', '<span class="adm-fold-sub">' + escapeHtml(_who3(_draftWho)) + '</span></summary>') : '',
           tools: headerBtns,
           sub: {
             security: secOpen.length ? secWho(secOpen[0]) + ' · ' + secWhat(secOpen[0]) + ' ' + _wnTime(secOpen[0].at) : '',
-            pending: _pendBits.join(' · '), held: _who3(heldPending), reports: repRooms.length ? '신고 ' + repRooms.length + '건' : '',
-            adminmsg: adminMsgUnreadTotal ? '안 읽은 Q&A ' + adminMsgUnreadTotal + '건' : '', stale: contactRows.length ? '답이 없거나 오래 안 온 회원' : ''
+            pending: _pendBits.join(' · '), reports: repRooms.length ? '신고 ' + repRooms.length + '건' : '',
+            adminmsg: adminMsgUnreadTotal ? '안 읽은 Q&A ' + adminMsgUnreadTotal + '건' : '',
+            smsrec: recRows.length ? _who3(recRows.map(function (g) { return { nickname: g.mm ? '주선자 ' + (g.mm.nickname || '') : g.list[0].e.nickname }; })) + ' · 가장 빠른 마감 ' + _wnTime(recRows[0].closeAt) : '',
+            editrev: editRevList.length ? '이미 바뀐 채 보여요 · 훑어보기: ' + _who3(editRevList) : '',
+            held: heldPending.length ? '신청자가 고칠 차례 · ' + _who3(heldPending) + ' · 안 고치면 ' + mdText(Math.min.apply(null, heldPending.map(heldCloseAt))) + '부터 저절로 정리' : '',
+            stale: contactRows.length ? '👀 보고도 답 안 함 ' + cCnt.noreply + '명 → 7일 지나면 저절로 마감 · 💤 오래 안 옴 ' + cCnt.dormant + '명' : ''
           }
         }) +
       '</div>'
@@ -9577,15 +9653,18 @@
 
   /* 관리자 탭 (2026-11-01 Benny: '관리자탭 불친절') — 🔔 지금 할 일은 건수 있는 칸만, 📊 요청 · 기록 · 설정.
      회원 칸(mem: 명단·보관 계정)은 👥 회원 탭에 (memberTabHtml). 묶음 안 순서는 ✏️ 섹션 순서 그대로. todoN 에 없는 할 일 칸(PIN 요청)은 접힌 제목의 건수로 판단 */
-  var SEC_GROUP = { security: 'todo', pending: 'todo', pinreset: 'todo', reports: 'todo', held: 'todo', stale: 'todo', editrev: 'todo', adminmsg: 'todo',
+  var SEC_GROUP = { security: 'todo', pending: 'todo', pinreset: 'todo', reports: 'todo', held: 'todo', smsrec: 'todo', stale: 'todo', editrev: 'todo', adminmsg: 'todo',
     seen: 'mem', deaclist: 'mem', active: 'rec', connlog: 'rec', couple: 'rec', behavior: 'rec', dellog: 'rec', usage: 'rec', cap: 'rec', log: 'rec' };
   function memberTabHtml(order, secHtml, state) {
     var pend = (state.pendingEntries || []).filter(function (e) { return !e.heldReason; }).length;
     return (pend ? '<button type="button" class="card-btn primary" data-tab="admin" style="flex:none;margin:0 0 8px;">⏳ 승인 대기 ' + pend + '명 → 관리자 탭</button>' : '') +
       (secHtml.seen || '') + order.filter(function (k) { return k !== 'seen' && SEC_GROUP[k] === 'mem'; }).map(function (k) { return secHtml[k] || ''; }).join('');
   }
+  /* 할 일 세 단계 (2026-11-06 Benny '해야 할 거랑 추천이거나 안 해도 되는 거 구분이 안 돼'):
+     1 🔴 꼭 할 일 = 누가 관리자를 기다림 · 2 🟡 하면 좋은 일 = 안 해도 큰일 없음 · 3 ⚪ 안 해도 돼요 = 저절로 정리되거나 상대 차례(접어 둠) */
+  var SEC_TIER = { security: 1, pending: 1, pinreset: 1, reports: 1, adminmsg: 1, smsrec: 2, editrev: 2, held: 3, stale: 3 };
   function adminGroupsHtml(order, secHtml, todoN, aiBoard, extra) {
-    var g = { todo: [], mem: [], rec: [] };
+    var g = { todo: [], mem: [], rec: [] }, t = { 1: [], 2: [], 3: [] };
     var head = function (k) { var m = /class="pending-count">(\d+)</.exec(secHtml[k] || ''); return m ? +m[1] : 0; };
     order.forEach(function (k) {
       var grp = SEC_GROUP[k] || 'rec', html = secHtml[k] || '';
@@ -9594,12 +9673,15 @@
         var n = (k in todoN) ? todoN[k] : head(k);
         if (!n) return;
         if (extra.sub[k]) html = html.replace('</summary>', '<span class="adm-fold-sub">' + escapeHtml(extra.sub[k]) + '</span></summary>');
+        t[SEC_TIER[k] || 1].push(html); return;
       }
       if (k === 'active') g.rec.unshift(html); else g[grp].push(html);
     });
-    if (extra.first) g.todo.unshift(extra.first);
-    return '<h3 class="adm-group">🔔 지금 할 일 <small>' + (g.todo.length ? g.todo.length + '가지' : '') + '</small></h3>' +
-      (g.todo.length ? g.todo.join('') : '<p class="adm-calm">✅ 지금 처리할 일이 없어요.</p>') +
+    if (extra.first) t[2].unshift(extra.first);
+    return '<h3 class="adm-group">🔴 꼭 할 일 <small>' + (t[1].length ? t[1].length + '가지 · 누가 기다려요' : '') + '</small></h3>' +
+      (t[1].length ? '<div class="adm-tier adm-t1">' + t[1].join('') + '</div>' : '<p class="adm-calm">✅ 꼭 할 일은 없어요.</p>') +
+      (t[2].length ? '<h3 class="adm-group">🟡 하면 좋은 일 <small>' + t[2].length + '가지 · 안 해도 큰일은 없어요</small></h3><div class="adm-tier adm-t2">' + t[2].join('') + '</div>' : '') +
+      (t[3].length ? '<details class="adm-auto" data-fk="adm-auto"><summary class="adm-group">⚪ 안 해도 돼요 <small>' + t[3].length + '가지 · 저절로 정리되거나 상대 차례</small></summary><div class="adm-tier adm-t3">' + t[3].join('') + '</div></details>' : '') +
       '<h3 class="adm-group">🧰 보내기 · 설정</h3>' + extra.tools +
       '<h3 class="adm-group">📊 요청 · 기록</h3>' + g.rec.join('') + (aiBoard || '');
   }
@@ -9757,7 +9839,7 @@
     if (newThisWeek > 0) liveBits.push('이번 주 새 멤버 <b>' + newThisWeek + '</b>명');
     if (connCount > 0) liveBits.push('누적 연결 <b>' + connCount + '</b>쌍');
     if (memberTotal > 0) liveBits.push('누적 가입 <b>' + memberTotal + '</b>명');
-    if (coupleCount > 0) liveBits.push('🎉 커플 탄생 <b>' + coupleCount + '</b>쌍');
+    if (coupleCount > 0) liveBits.push('💕 베니브릿지에서 맺어진 커플 <b>' + coupleCount + '</b>쌍');
     /* 한 번에 하나씩, 몇 초마다 바뀜 (startLiveRotator) */
     var liveIdx = liveBits.length ? (_liveRotIdx % liveBits.length) : 0;
     var liveBanner = (liveBits.length
@@ -13656,6 +13738,7 @@
       else if (action === 'notify-connected') showConnectedMembers(id);
       else if (action === 'sms-native') { if (isAdminUnlocked) openSmsNative(id); }
       else if (action === 'contact-sms') { if (isAdminUnlocked) openSmsNative(id, null, actionBtn.getAttribute('data-kind')); }
+      else if (action === 'rec-sms-mm') { if (isAdminUnlocked) sendRecSmsMm((actionBtn.getAttribute('data-ids') || '').split(',')); }
       else if (action === 'contact-tpl') { openSmsTplEditor(); return; }
       else if (action === 'privacy-policy') { e.preventDefault(); showPrivacyPolicy(); return; }
       else if (action === 'pinreset-temp') handleAdminPinTemp(id);
