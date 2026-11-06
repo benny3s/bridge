@@ -9629,18 +9629,23 @@
     if (deacReqs.length) _pendBits.push('보관 ' + _who3(deacReqs));
     var _drafts = smsDrafts();
     var _draftWho = _drafts.map(function (d) { var e = allEntries.find(function (x) { return x.id === d.entryId; }); return { nickname: (e && e.nickname) || d.nick }; });
+    /* 🔑 PIN: 요청이 있으면 🔴(요청 수만), 임시 PIN 보내고 회원이 새 PIN 정하길 기다리는 것만 남으면 ⚪ (11-06: 요청 1 + 기다림 2 가 '3' 으로 할 일처럼 보였음) */
+    var _pinPend = pinResetPending(state), _pinForced = (state.entries || []).concat(state.pendingEntries || []).filter(function (e) { return e.pinMustChange && !e.deactivated; });
     return (
       '<div class="admin-panel">' +
         adminGroupsHtml(order, secHtml, {
           security: _secOpenN, pending: approvalTotal, smsrec: recRows.length, stale: contactRows.length, adminmsg: adminMsgUnreadTotal,   /* pending: 삭제·보관 요청까지 — 가입만 세면 '비어 있음'으로 칸이 숨었음 */
-          held: heldPending.length, editrev: editRevList.length, reports: repRooms.length
+          held: heldPending.length, editrev: editRevList.length, reports: repRooms.length, pinreset: _pinPend.length || _pinForced.length
         }, adminAiIntelBoardHtml(state), {
+          tier: { pinreset: _pinPend.length ? 1 : 3 },
           first: _drafts.length ? adminFold('📨 보낼 문자', _drafts.length, smsDraftsHtml(state), false, 'smsdrafts').replace('</summary>', '<span class="adm-fold-sub">' + escapeHtml(_who3(_draftWho)) + '</span></summary>') : '',
           tools: headerBtns,
           sub: {
             security: secOpen.length ? secWho(secOpen[0]) + ' · ' + secWhat(secOpen[0]) + ' ' + _wnTime(secOpen[0].at) : '',
             pending: _pendBits.join(' · '), reports: repRooms.length ? '신고 ' + repRooms.length + '건' : '',
             adminmsg: adminMsgUnreadTotal ? '안 읽은 Q&A ' + adminMsgUnreadTotal + '건' : '',
+            pinreset: _pinPend.length ? '요청 ' + _who3(_pinPend) + ' · 번호 ✅ 면 임시 PIN 보내기' + (_pinForced.length ? ' · 새 PIN 기다림 ' + _pinForced.length + '명은 회원 차례' : '')
+              : (_pinForced.length ? '임시 PIN 보냄 · 새 PIN 은 회원 차례: ' + _who3(_pinForced) : ''),
             smsrec: recRows.length ? _who3(recRows.map(function (g) { return { nickname: g.mm ? '주선자 ' + (g.mm.nickname || '') : g.list[0].e.nickname }; })) + ' · 가장 빠른 마감 ' + _wnTime(recRows[0].closeAt) : '',
             editrev: editRevList.length ? '이미 바뀐 채 보여요 · 훑어보기: ' + _who3(editRevList) : '',
             held: heldPending.length ? '신청자가 고칠 차례 · ' + _who3(heldPending) + ' · 안 고치면 ' + mdText(Math.min.apply(null, heldPending.map(heldCloseAt))) + '부터 저절로 정리' : '',
@@ -9673,7 +9678,7 @@
         var n = (k in todoN) ? todoN[k] : head(k);
         if (!n) return;
         if (extra.sub[k]) html = html.replace('</summary>', '<span class="adm-fold-sub">' + escapeHtml(extra.sub[k]) + '</span></summary>');
-        t[SEC_TIER[k] || 1].push(html); return;
+        t[(extra.tier && extra.tier[k]) || SEC_TIER[k] || 1].push(html); return;
       }
       if (k === 'active') g.rec.unshift(html); else g[grp].push(html);
     });
@@ -13147,7 +13152,7 @@
       : '';
     /* 요청은 없고 임시 PIN 받은 회원만 남았으면 제목도 그대로 — 'PIN 재설정 요청 2'로 보여 할 일처럼 보였음 (2026-11-04) */
     var _pinReqs = list.length > 0 || !forced.length;
-    return adminFold(_pinReqs ? '🔑 PIN 재설정 요청' : '🔐 새 PIN 정하기 대기', list.length + forced.length,
+    return adminFold(_pinReqs ? '🔑 PIN 재설정 요청' : '🔐 새 PIN 정하기 대기', list.length || forced.length,   /* 요청이 있으면 요청 수만 (기다림은 제목 아래 줄에) */
       (_pinReqs ? '<p class="sub">번호가 <b>✅ 일치</b>하면 <b>임시 PIN 보내기</b>만 누르세요. 6자리 임시 PIN이 걸리고, 내 폰 문자앱이 <b>가입 때 등록한 번호</b>·문구까지 채워진 채 열려요. 회원이 로그인하면 새 PIN을 정하게 돼요.</p>' +
       (rows || '<p class="sub">대기 중인 요청이 없어요 🙆</p>') : '') + forcedBlock, (list.length + forced.length) > 0, 'pinreset');
   }
