@@ -29,6 +29,8 @@ messaging.onBackgroundMessage(function (payload) {
     body: n.body || '',
     icon: n.icon || NOTIF_ICON,
     badge: NOTIF_BADGE,
+    /* 관리자 소식(새 신청서·주간 보고 — 할 일 아님)은 소리·진동 없이. 꼭 할 일은 그대로 소리 (2026-11-06) */
+    silent: d.quiet === '1',
     /* route/focusId: 클릭 시 앱이 해당 화면으로 이동하는 데 사용 (서버가 넣어주면 정밀, 없으면 앱이 로그인 기준 기본값) */
     data: { url: d.url || APP_URL, route: d.route || '', focusId: d.focusId || '', actAs: d.actAs || '' }
   };

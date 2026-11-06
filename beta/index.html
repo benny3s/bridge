@@ -1169,7 +1169,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-06-535';
+  var APP_VERSION = '2026-11-06-536';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -14798,7 +14798,7 @@
     }).then(function () {
       try { localStorage.setItem('adminNotifOn', '1'); } catch (e) {}
       paint(currentState);
-      modalNotice('관리자 알림 켜짐 🔔', '새 신청서가 들어오면 이 기기로 바로 알림이 와요!');
+      modalNotice('관리자 알림 켜짐 🔔', '꼭 할 일(승인·PIN·문의·신고·보안)은 소리로, 새 신청서·주간 보고 같은 소식은 소리 없이 이 기기로 와요.');
     }).catch(function (err) {
       modalNotice('오류', '관리자 알림을 켜지 못했어요: ' + (err.message || err));
     });
@@ -14824,6 +14824,7 @@
       fcmMessaging.onMessage(function (payload) {
         var n = (payload && payload.notification) || (payload && payload.data) || {};
         try { if (!isEditingForm()) refreshNow(); } catch (e) {} /* 알림 오면 화면도 즉시 최신화 (폼 작성 중이면 제외) */
+        if (payload && payload.data && payload.data.quiet === '1') return;   /* 관리자 소식은 창을 안 띄움 — 화면만 새로 (2026-11-06) */
         modalNotice(n.title || '새 알림', n.body || '');
       });
     } catch (e) {}
