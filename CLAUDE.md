@@ -69,7 +69,8 @@
 - 규칙: `isFullAdmin`(ao 없음)만 adminKey 쓰기·adminAuth 바꾸기·app/state 만들기/지우기. `isSelf` 는 'admin' 제외.
 - **운영 배포 순서(지킬 것)**: ① 포털 `admin-login.js` push(옛 서버와도 맞음) ② 규칙(Windows MCP) ③ 함수 **전체** `--only functions`(일부만 배포하면 이번만 토큰이 끝나도 옛 함수가 관리자로 봄 — 22개 다 새로 됐는지 확인)
   ④ Music Lab 재시작(`Start-ScheduledTask "MusicLab Server"`, 첫 관리자 로그인 때 베니 폰 [허용] 한 번) ⑤ master 병합(화면) ⑥ **베니 폰에서 앱 먼저 열기**(첫 열쇠) ⑦ 다른 기기는 [이 기기 열쇠 받기] ⑧ 쓰는 기기에 🔔 보이면 [옛 방식 비우기].
-- 시험: `node tools/test-admin/keytest.js`(45) · `pushtest.js`(32) · `admintest.js`(18) — 가짜 DB 로 `functions/index.js` 를 그대로 불러 돌림(관리자 기기·알림·App Check 고치면 돌릴 것).
+- 시험: `node tools/test-admin/keytest.js`(45) · `pushtest.js`(32) · `admintest.js`(18) · `notiftest.js`(19, 관리자 알림 소리/소식) — 가짜 DB 로 `functions/index.js` 를 그대로 불러 돌림(관리자 기기·알림·App Check 고치면 돌릴 것).
+- **관리자 폰 알림 두 단계** (2026-11-06 Benny '관리자 폰 알림 정리'): 소리 = 관리자 탭 🔴 꼭 할 일(보안 · 승인 대기 · 🔑 PIN 요청 · 🗑 삭제/🤝 주선자로만/🗄 보관 요청 · 💬 Q&A · 🚨 신고 · 🛂 AI 보류 · 🤖 AI 멈춤 · ⚠️ 프로필 변경 위험). 소식(소리 없이) = `sendToAdmin(…, { quiet: true })` → data.quiet='1' → 서비스워커 `silent`, 앱이 열려 있으면 창 안 띄움: 새 신청서(AI 가 먼저 심사) · 🧭 주간 행동 보고. 새 관리자 알림을 만들면 둘 중 하나로 정하고 notiftest 9번(quiet 목록)을 고칠 것. 앱의 `notifyAdmin()` 은 아무것도 안 보냄(ntfy 끔) — 관리자 알림은 서버 onStateChange 에서.
 
 ## 환경별 주의 (로컬 데스크톱 vs 클라우드/샌드박스)
 이 프로젝트의 풀 워크플로(배포·라이브확인·QA·라이브 데이터)는 **로컬 데스크톱 세션**을 전제로 한다. 클라우드/샌드박스(원격) 세션은 제약이 있으니 주의:

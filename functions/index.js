@@ -1033,6 +1033,7 @@ function navData(nav) {
   if (nav && nav.route) o.route = String(nav.route);
   if (nav && nav.focusId) o.focusId = String(nav.focusId);
   if (nav && nav.actAs) o.actAs = String(nav.actAs);
+  if (nav && nav.quiet) o.quiet = '1';   /* 소식(할 일 아님): 서비스워커가 소리·진동 없이 띄움 (2026-11-06) */
   return o;
 }
 async function sendTo(id, title, body, nav) {
@@ -1066,7 +1067,8 @@ async function notifyRecipient(entries, id, title, body, nav) {
   }
 }
 /* 관리자에게: 믿을 기기에 묶인 알림(adminDevices/{기기}.push) + 아직 안 옮겨진 옛 목록(pushTokens/admin, 기기 구분 없음).
-   못 쓰게 된 묶음은 그 기기에서 지움 */
+   못 쓰게 된 묶음은 그 기기에서 지움.
+   소리 = 관리자 탭 🔴 꼭 할 일(보안·승인 대기·PIN 요청·Q&A·신고·AI 보류/멈춤). nav.quiet = 소식(새 신청서·주간 행동 보고) — 소리 없이 (2026-11-06 Benny '관리자 폰 알림 정리') */
 async function sendToAdmin(title, body, nav) {
   const [legacy, dv] = await Promise.all([tokensFor('admin'),
     db.collection('adminDevices').where('status', '==', 'trusted').get().catch(() => ({ docs: [] }))]);
@@ -1138,11 +1140,11 @@ exports.onStateChange = functions
       }
     });
 
-    /* 새 신청서(승인 대기) → 관리자에게 */
+    /* 새 신청서(승인 대기) → 관리자에게 소식(소리 없이): AI 가 먼저 심사하고, 막히면 🛂 AI 보류 · 🤖 40분 멈춤이 소리로 따로 감 */
     const beforePend = {};
     (before.pendingEntries || []).forEach((p) => { beforePend[p.id] = true; });
     (after.pendingEntries || []).forEach((p) => {
-      if (!beforePend[p.id]) jobs.push(sendToAdmin('새 신청서 📝', (p.nickname || '누군가') + '님이 신청서를 냈어요 (승인 대기)'));
+      if (!beforePend[p.id]) jobs.push(sendToAdmin('새 신청서 📝', (p.nickname || '누군가') + '님이 신청서를 냈어요 — AI 가 먼저 심사해요(막히면 따로 알림)', { route: 'admin', quiet: true }));
     });
 
     /* 주선자 요청(joinRequests): 새 요청 → 주선자에게 / 승인(회원이 managedBy 얻음) → 회원에게 */
@@ -1159,6 +1161,29 @@ exports.onStateChange = functions
          본인이 주선자로 전환하면 자기 프로필이 ownerSelf 관리 프로필이 되는데(=자기 자신), 그건 승인이 아니므로 제외 */
       if (prev && !prev.managedBy && e.managedBy && !e.ownerSelf) {
         jobs.push(sendTo(e.id, '🤝 주선자 요청 승인', '주선자님이 요청을 승인했어요. 이제 함께 관리돼요'));
+      }
+    });
+
+    /* 🔴 관리자 할 일 알림 (2026-11-06 Benny '관리자 폰 알림 정리'): PIN 재설정 요청 · 삭제(탈퇴)·주선자로만 남기 · 보관 요청.
+       앱의 notifyAdmin 은 ntfy 를 끈 뒤로 아무것도 안 보내 이 요청들은 폰 알림이 없었음 (11-05 23:53 PIN 요청이 아침까지 그대로).
+       PIN 은 같은 회원이 다시 요청해도(기다리던 요청이 바뀜) 한 번만 */
+    const pinWaiting = {};
+    (before.pinResetReqs || []).forEach((q) => { if (q && q.status === 'pending') pinWaiting[q.entryId] = true; });
+    (after.pinResetReqs || []).forEach((q) => {
+      if (!q || q.status !== 'pending' || pinWaiting[q.entryId]) return;
+      pinWaiting[q.entryId] = true;
+      jobs.push(sendToAdmin('🔑 PIN 재설정 요청 · ' + (q.nickname || '회원'), '관리자 탭에서 번호 확인 후 [임시 PIN 보내기]', { route: 'admin' }));
+    });
+    (after.entries || []).forEach((e) => {
+      const prev = beforeEntryMap[e.id];
+      if (!prev) return;
+      const why = (t) => (t ? String(t).slice(0, 40) + ' — ' : '');
+      if (e.deleteRequested && !prev.deleteRequested) {
+        const mmOnly = /^주선자로만 남기/.test(e.deleteReason || '');
+        jobs.push(sendToAdmin((mmOnly ? '🤝 주선자로만 남기 요청 · ' : '🗑 삭제 요청 · ') + (e.nickname || '회원'), (mmOnly ? '' : why(e.deleteReason)) + '관리자 탭 승인 대기에서 처리', { route: 'admin' }));
+      }
+      if (e.deactivateRequested && !prev.deactivateRequested) {
+        jobs.push(sendToAdmin('🗄 보관 요청 · ' + (e.nickname || '회원'), why(e.deactivateReason) + '관리자 탭 승인 대기에서 처리', { route: 'admin' }));
       }
     });
 
@@ -2809,7 +2834,7 @@ async function weeklyBehaviorReport() {
   const state = (await db.doc('app/state').get()).data() || {};
   const doc = await makeBehaviorReport(state, true);
   const n = doc.baseIds ? doc.rows.filter((r) => r.isNew).length : doc.rows.length;
-  if (n) await sendToAdmin('🧭 주간 행동 보고', '살펴볼 회원 ' + n + '명이 새로 올랐어요. 관리자 탭에서 볼 수 있어요.', { route: 'admin' });
+  if (n) await sendToAdmin('🧭 주간 행동 보고', '살펴볼 회원 ' + n + '명이 새로 올랐어요. 관리자 탭에서 볼 수 있어요.', { route: 'admin', quiet: true });   /* 소식 — 소리 없이 */
 }
 async function maskOldContacts(nowMs) {
   const now = nowMs || Date.now();
