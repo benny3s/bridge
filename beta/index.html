@@ -132,6 +132,7 @@
   .masthead-note { margin: 4px 0 0; color: var(--gold); opacity: 0.92; font-size: 0.82rem; line-height: 1.45; }
   .leave-mm { background: var(--gold-soft); border: 1px solid var(--gold); border-radius: 10px; padding: 10px 12px; font-size: 0.86rem; line-height: 1.5; margin: 4px 0 10px; color: var(--ink); }
   .leave-lbl { display: block; font-weight: 600; margin: 6px 0 2px; } .leave-lbl span { color: var(--muted); font-weight: 400; }
+  .leave-cp { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; } .leave-cp button { flex: 1 1 auto; padding: 9px 10px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.16); background: #fff; font-size: 0.9rem; cursor: pointer; color: var(--ink); } .leave-cp button.on { background: var(--gold-soft); border-color: var(--gold); font-weight: 700; }
   .leave-stars { display: flex; gap: 2px; margin: 0 0 8px; } .leave-stars button { font-size: 1.9rem; line-height: 1; background: none; border: 0; cursor: pointer; color: var(--gold); padding: 2px 4px; }
   .adm-head { display: grid; gap: 10px; margin-bottom: 14px; }
   .seen-filters { display: flex; gap: 5px; flex-wrap: wrap; margin: 0 0 8px; } .seen-filters .filter-btn { padding: 4px 10px; font-size: 0.82rem; min-height: 0; }
@@ -1169,7 +1170,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-06-537';
+  var APP_VERSION = '2026-11-12-538';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -7934,27 +7935,41 @@
   function coupleSectionHtml(state) {
     var list = (state.coupleReports || []).slice().sort(function (a, b) { return (b.at || '').localeCompare(a.at || ''); });
     var confirmed = list.filter(function (r) { return r.confirmed; }).length;
+    var rows = list.map(function (r) { return coupleRowHtml(state, r, 'cp'); }).join('');
+    var body = '<p class="sub">회원이 알려온 소개팅 성공 소식이에요. <b>확인 ' + confirmed + '</b>쌍이 공개 배너 "베니브릿지에서 맺어진 커플"에 반영돼요. \'앱 밖\' 인연과 이미 센 쌍은 세지 않아요. 공개(익명)로 표시한 후기는 메인 화면에 노출돼요.</p>' +
+      (list.length ? rows : '<p class="sub">아직 신고된 커플이 없어요.</p>');
+    return '<details class="admin-fold" data-sec="couple"' + secOpenAttr('couple', false) + '><summary>💕 커플 성사<span class="pending-count">' + list.length + '</span></summary><div class="admin-fold-body">' + body + '</div></details>';
+  }
+  /* 커플 기록 한 줄 (💕 커플 성사 칸 · 🟡 커플 소식 확인 칸 공용, fk 로 접힘 열쇠만 다르게) */
+  function coupleRowHtml(state, r, fk) {
     var visLabel = { private: '비공개', anon: '익명공개', public: '공개' };
-    var rows = list.map(function (r) {
-      var on = r.confirmed;
-      var chip = on ? '<span class="chip" style="background:#e9f6ee;color:#2e8b52;">✅ 확인됨</span>' : '<span class="chip" style="background:#fef7e0;color:#b06000;">미확인</span>';
-      return '<details class="req-fold' + (on ? ' req-yesterday' : '') + '" data-fk="cp:' + escapeHtml(r.id || '') + '">' +
+    {
+      var on = r.confirmed, out = r.where === 'out', dup = !on && coupleDupConfirmed(state, r);
+      var chip = on ? '<span class="chip" style="background:#e9f6ee;color:#2e8b52;">✅ 확인됨</span>'
+        : out ? '<span class="chip" style="background:#f1f3f4;color:#777;">앱 밖</span>'
+        : dup ? '<span class="chip" style="background:#f1f3f4;color:#777;">같은 쌍</span>'
+        : '<span class="chip" style="background:#fef7e0;color:#b06000;">미확인</span>';
+      var linked = r.partnerId ? (state.connLog || []).some(function (c) { return c && ((c.a === r.byId && c.b === r.partnerId) || (c.b === r.byId && c.a === r.partnerId)); }) : null;
+      var src = out ? '다른 곳에서 만났다고 알려 왔어요 · 배너에 세지 않아요'
+        : r.where === 'in' ? (linked === true ? '🔗 두 분의 대화 연결 이력이 있어요' : linked === false ? '⚠️ 두 분의 대화 연결 이력은 없어요 — 사진 요청만 오갔을 수 있으니 확인해 보세요' : '⚠️ 상대를 직접 적었어요 — 닉네임이 맞는지 확인해 보세요')
+        : (r.partner ? '' : '어디서 만났는지 묻기 전(11-12 이전) 기록이에요');
+      var via = { leave: '탈퇴하며 알림', rest: '쉬면서 알림', menu: '💕 메뉴' }[r.via] || '';
+      return '<details class="req-fold' + (on ? ' req-yesterday' : '') + '" data-fk="' + fk + ':' + escapeHtml(r.id || '') + '">' +
         '<summary>' + chip + '<span class="req-sum-who">💕 ' + escapeHtml(r.byNick || '') + (r.partner ? ' ↔ ' + escapeHtml(r.partner) : '') + '</span>' +
           '<span class="req-sum-when">' + (r.at ? new Date(r.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric' }) : '') + '</span></summary>' +
         '<div class="req-fold-body">' +
+          (src ? '<p class="sub" style="margin:0 0 6px;">' + src + '</p>' : '') +
           (r.review ? '<div class="note">"' + escapeHtml(r.review) + '"</div>' : '<p class="sub">후기 없음</p>') +
-          '<div class="req-foot"><span class="when">공개범위: ' + (visLabel[r.vis || 'private']) + (r.confirmedAt ? ' · 확인 ' + new Date(r.confirmedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric' }) : '') + '</span>' +
+          '<div class="req-foot"><span class="when">' + (via ? via + ' · ' : '') + '공개범위: ' + (visLabel[r.vis || 'private']) + (r.confirmedAt ? ' · 확인 ' + new Date(r.confirmedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric' }) : '') + '</span>' +
             '<div class="req-foot-btns">' +
-              '<button type="button" class="card-btn approve" data-action="couple-confirm" data-id="' + escapeHtml(r.id) + '" style="flex:none;">' + (on ? '확인 취소' : '✅ 확인(카운트)') + '</button>' +
+              (out && !on ? '' : dup ? '<span class="when">같은 쌍이 이미 확인돼 한 번만 세요</span>'
+                : '<button type="button" class="card-btn approve" data-action="couple-confirm" data-id="' + escapeHtml(r.id) + '" style="flex:none;">' + (on ? '확인 취소' : '✅ 확인(카운트)') + '</button>') +
               '<button type="button" class="card-btn" data-action="couple-vis" data-id="' + escapeHtml(r.id) + '" style="flex:none;">공개범위 변경</button>' +
               '<button type="button" class="card-btn danger" data-action="couple-del" data-id="' + escapeHtml(r.id) + '" style="flex:none;">🗑 삭제</button>' +
             '</div>' +
           '</div>' +
         '</div></details>';
-    }).join('');
-    var body = '<p class="sub">회원이 알려온 소개팅 성공 소식이에요. <b>확인 ' + confirmed + '</b>쌍이 공개 배너 "베니브릿지에서 맺어진 커플"에 반영돼요. 공개(익명)로 표시한 후기는 메인 화면에 노출돼요.</p>' +
-      (list.length ? rows : '<p class="sub">아직 신고된 커플이 없어요.</p>');
-    return '<details class="admin-fold" data-sec="couple"' + secOpenAttr('couple', false) + '><summary>💕 커플 성사<span class="pending-count">' + list.length + '</span></summary><div class="admin-fold-body">' + body + '</div></details>';
+    }
   }
   /* 메인 화면 공개 후기 카드: 관리자가 확인한 커플 중 공개(anon/public) 후기만 노출 */
   function coupleReviewsHtml(state) {
@@ -9630,6 +9645,7 @@
     var _drafts = smsDrafts();
     var _draftWho = _drafts.map(function (d) { var e = allEntries.find(function (x) { return x.id === d.entryId; }); return { nickname: (e && e.nickname) || d.nick }; });
     /* 🔑 PIN: 요청이 있으면 🔴(요청 수만), 임시 PIN 보내고 회원이 새 PIN 정하길 기다리는 것만 남으면 ⚪ (11-06: 요청 1 + 기다림 2 가 '3' 으로 할 일처럼 보였음) */
+    var _cpNew = coupleTodoList(state);
     var _pinPend = pinResetPending(state), _pinForced = (state.entries || []).concat(state.pendingEntries || []).filter(function (e) { return e.pinMustChange && !e.deactivated; });
     return (
       '<div class="admin-panel">' +
@@ -9638,6 +9654,8 @@
           held: heldPending.length, editrev: editRevList.length, reports: repRooms.length, pinreset: _pinPend.length || _pinForced.length
         }, adminAiIntelBoardHtml(state), {
           tier: { pinreset: _pinPend.length ? 1 : 3 },
+          t2: [_cpNew.length ? adminFold('💕 커플 소식 확인', _cpNew.length, '<p class="sub">베니브릿지에서 만났다고 알려 온 소식이에요. 맞으면 [✅ 확인(카운트)] → 공개 배너 숫자에 더해져요.</p>' +
+            _cpNew.map(function (r) { return coupleRowHtml(state, r, 'cpn'); }).join(''), false, 'couplenew').replace('</summary>', '<span class="adm-fold-sub">' + escapeHtml(_who3(_cpNew.map(function (r) { return { nickname: r.byNick }; })) + ' · 맞으면 확인 → 배너 숫자') + '</span></summary>') : ''],
           first: _drafts.length ? adminFold('📨 보낼 문자', _drafts.length, smsDraftsHtml(state), false, 'smsdrafts').replace('</summary>', '<span class="adm-fold-sub">' + escapeHtml(_who3(_draftWho)) + '</span></summary>') : '',
           tools: headerBtns,
           sub: {
@@ -9683,6 +9701,7 @@
       if (k === 'active') g.rec.unshift(html); else g[grp].push(html);
     });
     if (extra.first) t[2].unshift(extra.first);
+    (extra.t2 || []).forEach(function (h) { if (h) t[2].push(h); });
     return '<h3 class="adm-group">🔴 꼭 할 일 <small>' + (t[1].length ? t[1].length + '가지 · 누가 기다려요' : '') + '</small></h3>' +
       (t[1].length ? '<div class="adm-tier adm-t1">' + t[1].join('') + '</div>' : '<p class="adm-calm">✅ 꼭 할 일은 없어요.</p>') +
       (t[2].length ? '<h3 class="adm-group">🟡 하면 좋은 일 <small>' + t[2].length + '가지 · 안 해도 큰일은 없어요</small></h3><div class="adm-tier adm-t2">' + t[2].join('') + '</div>' : '') +
@@ -10994,8 +11013,9 @@
     if (!entry) return;
     if (entry.deleteRequested) { modalNotice('안내', '이미 삭제 요청됐어요. 관리자 확인 중이에요.'); return; }
     openLeaveSheet({ title: '🗑 탈퇴하기', okLabel: '탈퇴 요청', okClass: 'danger', requireReason: true, selfAccount: !!currentUser && currentUser.id === id && !entry.managedBy,
+      askCouple: isMatchmakerEntry(entry) ? '' : id,
       msg: escapeHtml(entry.nickname) + '님 프로필 삭제(탈퇴)를 요청할까요? 요청하면 바로 명단에서 숨겨지고, 관리자 확인 후 완전히 지워져요. 이유를 짧게 남겨 주세요.<br>(잠깐 쉬고 싶은 거라면 \'💤 잠시 쉬기\'로 명단에서만 숨길 수도 있어요)',
-      placeholder: '예: 좋은 인연을 만났어요 / 개인 사정' }).then(function (res) {
+      placeholder: '예: 개인 사정 / 아쉬웠던 점' }).then(function (res) {
       if (!res) return;
       if (res.mmOnly) { leaveAsMatchmakerOnly(res); return; }
       var reason = res.reason + ratingTag(res.rating);
@@ -11006,14 +11026,17 @@
             if (e.id !== id) return e;
             var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString(); c.deleteReason = reason; if (res.rating) c.leaveRating = res.rating; return c;
           });
-          tx.update(stateRef, { entries: entries });
+          var patch = { entries: entries };
+          if (res.couple && res.couple.where === 'in') { var cl = coupleRecAdd(s, entry, res.couple, 'leave'); if (cl) patch.coupleReports = cl; }
+          tx.update(stateRef, patch);
         });
       }).then(function () {
+        if (res.couple && res.couple.where === 'in') appendLog('couple', entry.nickname, '커플 소식 (탈퇴하며 알림 · 상대: ' + res.couple.partner + ')');
         appendLog('request', entry.nickname, '프로필 삭제 요청 · ' + reason);
         notifyAdmin('🗑 삭제 요청', entry.nickname + '님이 프로필 삭제를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        leaveThanks('탈퇴 요청 접수', '명단에서 바로 숨겨졌고, 관리자 확인 후 완전히 삭제돼요. 그 전엔 ⚙️ 내 계정에서 취소할 수 있어요. 그동안 함께해 주셔서 고마웠어요.');
+        leaveThanks('탈퇴 요청 접수', (res.couple && res.couple.where === 'in' ? '축하드려요 💕 좋은 소식은 관리자에게 전했어요. ' : '') + '명단에서 바로 숨겨졌고, 관리자 확인 후 완전히 삭제돼요. 그 전엔 ⚙️ 내 계정에서 취소할 수 있어요. 그동안 함께해 주셔서 고마웠어요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
@@ -11459,6 +11482,79 @@
   /* ── 비활성화(보관) 흐름 — 본인이 요청 → 관리자 승인 시 보관(테스트 계정) 처리 ── */
   /* 💤 쉬기 · 🗑 탈퇴 · 🗄 휴면 공통 창 (2026-10-31 Benny: '앱 만족 별점, 주변 친구 소개 부탁, 굳이 쉬지 않아도 주선자 계정이 되면 프로필 지우고 안 보인다고 안내')
      resolve: {reason, rating} · {mmOnly:true, reason, rating}(주선자로만 남기) · null(닫기). 별점은 선택 */
+  /* 💕 커플 확인 (2026-11-12 Benny '탈퇴할 때 베니브릿지 내에서 커플 되었는지 확인'): 탈퇴·쉬기 창과 💕 메뉴가 같은 질문을 씀.
+     in = 여기서 만남(상대 → coupleReports 미확인 기록, 관리자 확인 뒤 배너) · out = 다른 곳(배너에 안 셈) · no = 아님 */
+  function couplePartnerOptions(state, id) {
+    var seen = {}, out = [];
+    (state.dateRequests || []).forEach(function (r) {
+      if (!r || !r.approved) return;
+      var other = r.fromId === id ? r.toId : (r.toId === id ? r.fromId : '');
+      if (!other || seen[other]) return;
+      var e = (state.entries || []).find(function (x) { return x.id === other; });
+      if (!e || !e.nickname) return;
+      seen[other] = 1; out.push({ id: other, nickname: e.nickname });
+    });
+    return out;
+  }
+  function coupleAskHtml(state, id, withNo) {
+    var opts = couplePartnerOptions(state, id);
+    return '<div class="leave-cp" id="cp-where">' +
+        '<button type="button" data-cp="in">💕 네, 여기서 만났어요</button>' +
+        '<button type="button" data-cp="out">다른 곳에서 만났어요</button>' +
+        (withNo ? '<button type="button" data-cp="no">아니요</button>' : '') +
+      '</div>' +
+      '<div id="cp-in" style="display:none;">' +
+        '<label class="leave-lbl">상대는 누구인가요? <span>(관리자만 봐요)</span></label>' +
+        (opts.length ? '<select class="modal-input" id="cp-partner-sel"><option value="">골라 주세요</option>' +
+          opts.map(function (p) { return '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.nickname) + '</option>'; }).join('') +
+          '<option value="__other">목록에 없어요 (직접 적기)</option></select>' : '') +
+        '<input type="text" class="modal-input" id="cp-partner-txt" maxlength="30" placeholder="상대 닉네임"' + (opts.length ? ' style="display:none;"' : '') + '>' +
+        '<p class="sub" style="margin:4px 0 8px;">관리자가 확인한 뒤 \'베니브릿지에서 맺어진 커플\' 숫자에 더해요.</p>' +
+      '</div>';
+  }
+  function coupleAskBind(ov, state) {
+    var where = '', box = ov.querySelector('#cp-where'), inBox = ov.querySelector('#cp-in'), sel = ov.querySelector('#cp-partner-sel'), txt = ov.querySelector('#cp-partner-txt');
+    box.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-cp]'); if (!b) return;
+      where = b.getAttribute('data-cp');
+      box.querySelectorAll('[data-cp]').forEach(function (x) { x.classList.toggle('on', x === b); });
+      inBox.style.display = where === 'in' ? '' : 'none';
+    });
+    if (sel) sel.addEventListener('change', function () { txt.style.display = sel.value === '__other' ? '' : 'none'; if (sel.value === '__other') txt.focus(); });
+    return function () {
+      var v = { where: where, partner: '', partnerId: '' };
+      if (where !== 'in') return v;
+      if (sel && sel.value && sel.value !== '__other') {
+        v.partnerId = sel.value;
+        var e = (state.entries || []).find(function (x) { return x.id === sel.value; });
+        v.partner = (e && e.nickname) || '';
+      } else v.partner = (txt.value || '').trim();
+      return v;
+    };
+  }
+  /* 미확인 커플 기록 한 줄 붙인 새 목록. 같은 회원이 같은 상대로 이미 알린 게 있으면 null (다시 쌓지 않음) */
+  function coupleRecAdd(s, entry, c, via) {
+    var list = Array.isArray(s.coupleReports) ? s.coupleReports.slice() : [];
+    if (list.some(function (r) { return r.byId === entry.id && (r.partner || '') === (c.partner || '') && (r.where || '') === c.where; })) return null;
+    list.push({ id: genId(), byId: entry.id, byNick: entry.nickname || '', partner: c.partner || '', partnerId: c.partnerId || '', where: c.where, review: c.review || '', vis: c.vis || 'private', at: new Date().toISOString(), confirmed: false, via: via });
+    if (list.length > 1000) list = list.slice(list.length - 1000);
+    return list;
+  }
+  /* 관리자: 두 사람이 각자 알려도 한 쌍 — 쌍 열쇠(상대를 못 찾으면 닉네임 그대로) */
+  function couplePairKey(state, r) {
+    if (!r || !r.partner) return '';
+    var pid = r.partnerId || '';
+    if (!pid) { var e = (state.entries || []).find(function (x) { return x.nickname === r.partner; }); pid = e ? e.id : 'n:' + r.partner; }
+    return [r.byId || ('n:' + (r.byNick || '')), pid].sort().join('|');
+  }
+  function coupleDupConfirmed(state, r) {
+    var k = couplePairKey(state, r); if (!k) return false;
+    return (state.coupleReports || []).some(function (x) { return x.id !== r.id && x.confirmed && couplePairKey(state, x) === k; });
+  }
+  /* 관리자 🟡 할 일: 아직 확인 안 한 '여기서 만났어요' (앱 밖 · 이미 센 쌍은 뺌) */
+  function coupleTodoList(state) {
+    return (state.coupleReports || []).filter(function (r) { return r && !r.confirmed && r.where !== 'out' && !coupleDupConfirmed(state, r); });
+  }
   function ratingTag(r) { return r ? ' · 만족도 ⭐' + r : ''; }
   function openLeaveSheet(o) {
     return new Promise(function (resolve) {
@@ -11469,6 +11565,7 @@
         '<p class="modal-msg">' + o.msg + '</p>' +
         (canMm ? '<div class="leave-mm"><b>💡 ' + (o.mmLead || '쉬거나 탈퇴하지 않아도 돼요') + '</b><br>주선자 계정으로만 남으면 내 소개팅 프로필(사진·소개·직장 등)은 지워지고 회원 명단에도 보이지 않아요. 계정은 남아서 좋은 친구를 대신 소개할 수 있어요.' +
           '<button type="button" class="card-btn" id="lv-mm" style="width:100%;margin-top:8px;">🤝 주선자로만 남기</button></div>' : '') +
+        (o.askCouple ? '<label class="leave-lbl">베니브릿지에서 만난 분과 커플이 되셨나요?</label>' + coupleAskHtml(currentState, o.askCouple, true) : '') +
         '<label class="leave-lbl">베니브릿지 어떠셨어요? <span>(별점, 선택)</span></label>' +
         '<div class="leave-stars" id="lv-stars">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" data-star="' + n + '" aria-label="' + n + '점">☆</button>'; }).join('') + '</div>' +
         '<textarea class="modal-input" id="lv-reason" rows="3" maxlength="200" placeholder="' + escapeHtml(o.placeholder || '하고 싶은 말 (선택)') + '"></textarea>' +
@@ -11478,15 +11575,21 @@
       var rating = 0, starsEl = ov.querySelector('#lv-stars'), ta = ov.querySelector('#lv-reason'), warn = ov.querySelector('#lv-warn');
       function drawStars() { starsEl.querySelectorAll('[data-star]').forEach(function (b) { var on = +b.getAttribute('data-star') <= rating; b.textContent = on ? '★' : '☆'; b.classList.toggle('on', on); }); }
       starsEl.addEventListener('click', function (e) { var b = e.target.closest('[data-star]'); if (!b) return; var n = +b.getAttribute('data-star'); rating = (rating === n ? 0 : n); drawStars(); });
+      var cpGet = o.askCouple ? coupleAskBind(ov, currentState) : null;
       function done(v) { closeModal(ov); resolve(v); }
       ov.querySelector('#lv-cancel').addEventListener('click', function () { done(null); });
       var mmBtn = ov.querySelector('#lv-mm');
       if (mmBtn) mmBtn.addEventListener('click', function () { done({ mmOnly: true, rating: rating, reason: (ta.value || '').trim() }); });
       ov.querySelector('#lv-ok').addEventListener('click', function () {
         var reason = (ta.value || '').trim();
-        if (o.requireReason && !reason) { warn.textContent = '이유를 짧게 남겨 주세요.'; warn.hidden = false; return; }
+        var cp = cpGet ? cpGet() : null;
+        if (cp && !cp.where) { warn.textContent = '커플이 되셨는지 위에서 골라 주세요.'; warn.hidden = false; return; }
+        if (cp && cp.where === 'in' && !cp.partner) { warn.textContent = '상대가 누구인지 알려 주세요.'; warn.hidden = false; return; }
+        var met = !!cp && (cp.where === 'in' || cp.where === 'out');   /* 인연을 만났다면 그게 이유 — 글은 안 적어도 됨 */
+        if (o.requireReason && !reason && !met) { warn.textContent = '이유를 짧게 남겨 주세요.'; warn.hidden = false; return; }
         if (o.requireSomething && !reason && !rating) { warn.textContent = '별점이나 하고 싶은 말을 남겨 주세요.'; warn.hidden = false; return; }
-        done({ reason: reason, rating: rating });
+        if (met) reason = (cp.where === 'in' ? '베니브릿지에서 좋은 인연을 만났어요' : '다른 곳에서 좋은 인연을 만났어요') + (reason ? ' · ' + reason : '');
+        done({ reason: reason, rating: rating, couple: cp });
       });
     });
   }
@@ -11558,8 +11661,9 @@
     }
     if (entry.deactivated) { modalNotice('안내', '이미 쉬는 중이에요.'); return; }
     openLeaveSheet({ title: '💤 잠시 쉬기', okLabel: '잠시 쉬기', requireReason: true, selfAccount: currentUser.id === id && !entry.managedBy,
+      askCouple: isMatchmakerEntry(entry) ? '' : id,
       msg: '소개팅을 잠시 쉬는 동안 다른 회원에게 내 프로필이 보이지 않아요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있고, 언제든 ⚙️ 내 계정의 [다시 활동하기]로 돌아올 수 있어요. 이유를 짧게 남겨 주세요.',
-      placeholder: '예: 좋은 인연을 만났어요 / 잠시 쉬어갈게요' }).then(function (res) {
+      placeholder: '예: 잠시 쉬어갈게요 / 바빠서요' }).then(function (res) {
       if (!res) return;
       if (res.mmOnly) { leaveAsMatchmakerOnly(res); return; }
       var reason = res.reason + ratingTag(res.rating);
@@ -11574,14 +11678,17 @@
             delete c.returnNudged; c.returnAt = new Date(Date.now() + 14 * 86400000).toISOString();   /* 2주 뒤 서버가 '다시 활동해 볼까요?' 한 번 (고르기는 뺌 11-01) */
             return c;
           });
-          tx.update(stateRef, { entries: entries });
+          var patch = { entries: entries };
+          if (res.couple && res.couple.where === 'in') { var cl = coupleRecAdd(s, entry, res.couple, 'rest'); if (cl) patch.coupleReports = cl; }
+          tx.update(stateRef, patch);
         });
       }).then(function () {
+        if (res.couple && res.couple.where === 'in') appendLog('couple', entry.nickname, '커플 소식 (쉬면서 알림 · 상대: ' + res.couple.partner + ')');
         appendLog('request', entry.nickname, '잠시 쉬기 · ' + reason);
         notifyAdmin('🗄 비활성화 요청', entry.nickname + '님이 프로필 비활성화(보관)를 요청했어요. (' + reason + ')');
         return refreshNow();
       }).then(function () {
-        leaveThanks('잠시 쉬는 중 💤', '지금부터 다른 회원에게 내 프로필이 보이지 않아요. 2주 뒤에 새 소식과 함께 한 번 알려 드릴게요. 돌아오고 싶을 땐 언제든 ⚙️ 내 계정의 [♻️ 다시 활동하기]를 누르면 돼요.');
+        leaveThanks('잠시 쉬는 중 💤', (res.couple && res.couple.where === 'in' ? '축하드려요 💕 좋은 소식은 관리자에게 전했어요. ' : '') + '지금부터 다른 회원에게 내 프로필이 보이지 않아요. 2주 뒤에 새 소식과 함께 한 번 알려 드릴게요. 돌아오고 싶을 땐 언제든 ⚙️ 내 계정의 [♻️ 다시 활동하기]를 누르면 돼요.');
       }).catch(function (err) { modalNotice('오류', '요청 실패: ' + (err.message || err)); });
     });
   }
@@ -11650,31 +11757,36 @@
         '<label><input type="radio" name="cpvis" value="anon"> 익명 공개 (닉네임 없이 후기만)</label>' +
         '<label><input type="radio" name="cpvis" value="public"> 공개 (닉네임과 함께)</label>' +
       '</div>' +
-      '<label style="display:block;font-weight:600;margin:10px 0 4px;">상대가 이 앱 회원인가요? <span style="color:var(--muted);font-weight:400;">(선택)</span></label>' +
-      '<input type="text" class="modal-input" id="cp-partner" maxlength="30" placeholder="상대 닉네임 (앱 밖이면 비워두세요)">' +
+      '<label style="display:block;font-weight:600;margin:10px 0 4px;">어디서 만나셨어요?</label>' +
+      coupleAskHtml(currentState, me.id, false) +
       '<label style="display:block;font-weight:600;margin:12px 0 4px;">내 프로필은</label>' +
       '<div style="display:flex;flex-direction:column;gap:6px;font-size:0.92rem;">' +
         '<label><input type="radio" name="cpafter" value="hide" checked> 💤 명단에서 내리기 <span style="color:var(--muted);">(나중에 다시 활동 가능)</span></label>' +
         '<label><input type="radio" name="cpafter" value="delete"> 🗑 탈퇴하기 <span style="color:var(--muted);">(프로필 삭제)</span></label>' +
         '<label><input type="radio" name="cpafter" value="keep"> 그대로 두기</label>' +
       '</div>' +
+      '<p class="modal-msg" id="cp-warn" style="color:var(--accent);font-size:0.82rem;margin:4px 0 0;" hidden></p>' +
       '<div class="modal-actions">' +
         '<button type="button" class="card-btn" id="cp-cancel">취소</button>' +
         '<button type="button" class="card-btn primary" id="cp-ok">보내기</button>' +
       '</div>'
     );
+    var cpGet = coupleAskBind(overlay, currentState);
     overlay.querySelector('#cp-cancel').addEventListener('click', function () { closeModal(overlay); });
     overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(overlay); });
     overlay.querySelector('#cp-ok').addEventListener('click', function () {
       var review = (overlay.querySelector('#cp-review').value || '').trim();
       var visEl = overlay.querySelector('input[name="cpvis"]:checked');
       var vis = visEl ? visEl.value : 'private';
-      var partner = (overlay.querySelector('#cp-partner').value || '').trim();
+      var cp = cpGet(), cpWarn = overlay.querySelector('#cp-warn');
+      if (!cp.where) { cpWarn.textContent = '어디서 만나셨는지 골라 주세요.'; cpWarn.hidden = false; return; }
+      if (cp.where === 'in' && !cp.partner) { cpWarn.textContent = '상대가 누구인지 알려 주세요.'; cpWarn.hidden = false; return; }
+      var partner = cp.partner, cpWhy = cp.where === 'in' ? '베니브릿지에서 좋은 인연을 만났어요 (커플 성사)' : '다른 곳에서 좋은 인연을 만났어요';
       var afterEl = overlay.querySelector('input[name="cpafter"]:checked');
       var after = afterEl ? afterEl.value : 'hide';
       var hide = after === 'hide';
       closeModal(overlay);
-      var rec = { id: genId(), byId: me.id, byNick: me.nickname || '', partner: partner, review: review, vis: vis, at: new Date().toISOString(), confirmed: false };
+      var rec = { id: genId(), byId: me.id, byNick: me.nickname || '', partner: partner, partnerId: cp.partnerId || '', where: cp.where, review: review, vis: vis, at: new Date().toISOString(), confirmed: false, via: 'menu' };
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
@@ -11685,18 +11797,18 @@
           if (after === 'delete' && !me.deleteRequested) {
             patch.entries = (s.entries || []).map(function (e) {
               if (e.id !== me.id) return e;
-              var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString(); c.deleteReason = '좋은 인연을 만났어요 (커플 성사)'; return c;
+              var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString(); c.deleteReason = cpWhy; return c;
             });
           } else if (hide && !me.deactivateRequested && !me.deactivated) {
             patch.entries = (s.entries || []).map(function (e) {
               if (e.id !== me.id) return e;
-              var c = JSON.parse(JSON.stringify(e)); c.deactivateRequested = true; c.deactivateReqAt = new Date().toISOString(); c.deactivateReason = '좋은 인연을 만났어요 (커플 성사)'; return c;
+              var c = JSON.parse(JSON.stringify(e)); c.deactivateRequested = true; c.deactivateReqAt = new Date().toISOString(); c.deactivateReason = cpWhy; return c;
             });
           }
           tx.update(stateRef, patch);
         });
       }).then(function () {
-        appendLog('couple', me.nickname || '회원', '커플 성사 신고' + (partner ? ' (상대: ' + partner + ')' : '') + (hide ? ' · 보관 요청' : (after === 'delete' ? ' · 탈퇴 요청' : '')));
+        appendLog('couple', me.nickname || '회원', (cp.where === 'in' ? '커플 성사 신고' : '앱 밖 인연 소식') + (partner ? ' (상대: ' + partner + ')' : '') + (hide ? ' · 보관 요청' : (after === 'delete' ? ' · 탈퇴 요청' : '')));
         if (after === 'delete') notifyAdmin('🗑 탈퇴 요청', (me.nickname || '회원') + '님이 좋은 인연을 만나 탈퇴를 요청했어요.');
         notifyAdmin('💕 커플 성사!', (me.nickname || '회원') + '님이 좋은 인연을 만났다고 알려왔어요' + (review ? ': "' + review.slice(0, 40) + '"' : '.'));
         return refreshNow();
@@ -11707,6 +11819,9 @@
   }
   function handleConfirmCouple(id) {
     if (!isAdminUnlocked) return;
+    var r0 = (currentState.coupleReports || []).find(function (r) { return r.id === id; });
+    if (r0 && !r0.confirmed && r0.where === 'out') { modalNotice('안내', '다른 곳에서 만난 인연이라 배너 숫자에는 세지 않아요.'); return; }
+    if (r0 && !r0.confirmed && coupleDupConfirmed(currentState, r0)) { modalNotice('안내', '같은 두 분이 이미 확인돼 있어요. 한 쌍은 한 번만 세요.'); return; }
     db.runTransaction(function (tx) {
       return tx.get(stateRef).then(function (doc) {
         var s = doc.data();
