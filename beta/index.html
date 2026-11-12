@@ -11563,13 +11563,14 @@
       var ov = openModal(
         '<h3>' + o.title + '</h3>' +
         '<p class="modal-msg">' + o.msg + '</p>' +
-        (canMm ? '<div class="leave-mm"><b>💡 ' + (o.mmLead || '쉬거나 탈퇴하지 않아도 돼요') + '</b><br>주선자 계정으로만 남으면 내 소개팅 프로필(사진·소개·직장 등)은 지워지고 회원 명단에도 보이지 않아요. 계정은 남아서 좋은 친구를 대신 소개할 수 있어요.' +
-          '<button type="button" class="card-btn" id="lv-mm" style="width:100%;margin-top:8px;">🤝 주선자로만 남기</button></div>' : '') +
         (o.askCouple ? '<label class="leave-lbl">베니브릿지에서 만난 분과 커플이 되셨나요?</label>' + coupleAskHtml(currentState, o.askCouple, true) : '') +
         '<label class="leave-lbl">베니브릿지 어떠셨어요? <span>(별점, 선택)</span></label>' +
         '<div class="leave-stars" id="lv-stars">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" data-star="' + n + '" aria-label="' + n + '점">☆</button>'; }).join('') + '</div>' +
         '<textarea class="modal-input" id="lv-reason" rows="3" maxlength="200" placeholder="' + escapeHtml(o.placeholder || '하고 싶은 말 (선택)') + '"></textarea>' +
         '<p class="modal-msg" id="lv-warn" style="color:var(--accent);font-size:0.82rem;margin:4px 0 0;" hidden></p>' +
+        /* 2026-11-12 Benny '주선자로 남아도 설문은 쭉 하는 거지?': 상자를 설문 아래로 — 커플 질문·별점·글을 먼저 지나고 고르게 */
+        (canMm ? '<div class="leave-mm" style="margin-top:10px;"><b>💡 ' + (o.mmLead || '쉬거나 탈퇴하지 않아도 돼요') + '</b><br>주선자 계정으로만 남으면 내 소개팅 프로필(사진·소개·직장 등)은 지워지고 회원 명단에도 보이지 않아요. 계정은 남아서 좋은 친구를 대신 소개할 수 있어요.' +
+          '<button type="button" class="card-btn" id="lv-mm" style="width:100%;margin-top:8px;">🤝 주선자로만 남기</button></div>' : '') +
         '<div class="modal-actions"><button type="button" class="card-btn" id="lv-cancel">닫기</button><button type="button" class="card-btn ' + (o.okClass || 'primary') + '" id="lv-ok">' + o.okLabel + '</button></div>'
       );
       var rating = 0, starsEl = ov.querySelector('#lv-stars'), ta = ov.querySelector('#lv-reason'), warn = ov.querySelector('#lv-warn');
@@ -11579,7 +11580,12 @@
       function done(v) { closeModal(ov); resolve(v); }
       ov.querySelector('#lv-cancel').addEventListener('click', function () { done(null); });
       var mmBtn = ov.querySelector('#lv-mm');
-      if (mmBtn) mmBtn.addEventListener('click', function () { done({ mmOnly: true, rating: rating, reason: (ta.value || '').trim() }); });
+      if (mmBtn) mmBtn.addEventListener('click', function () {
+        var cp = cpGet ? cpGet() : null;
+        if (cp && !cp.where) { warn.textContent = '커플이 되셨는지 위에서 골라 주세요.'; warn.hidden = false; return; }
+        if (cp && cp.where === 'in' && !cp.partner) { warn.textContent = '상대가 누구인지 알려 주세요.'; warn.hidden = false; return; }
+        done({ mmOnly: true, rating: rating, reason: (ta.value || '').trim(), couple: cp });
+      });
       ov.querySelector('#lv-ok').addEventListener('click', function () {
         var reason = (ta.value || '').trim();
         var cp = cpGet ? cpGet() : null;
@@ -11606,22 +11612,27 @@
   function leaveAsMatchmakerOnly(res) {
     var me = myAuthEntry(currentState); if (!me) return;
     var oldId = me.id, nick = me.nickname || '회원';
+    var cpIn = !!(res.couple && res.couple.where === 'in');
+    var cpWhy = cpIn ? '베니브릿지에서 좋은 인연을 만났어요' : (res.couple && res.couple.where === 'out' ? '다른 곳에서 좋은 인연을 만났어요' : '');
     modalConfirm('🤝 주선자로만 남기', '내 소개팅 프로필(사진·소개·직장 등)은 회원 명단에서 바로 내려가고, 관리자 확인 후 완전히 지워져요. 로그인 PIN은 그대로이고, 주선자 계정으로 친구를 대신 소개할 수 있어요. 진행할까요?', '주선자로만 남기', 'primary').then(function (ok) {
       if (!ok) return;
       convertToMatchmakerTx().then(function () {
         return db.runTransaction(function (tx) {
           return tx.get(stateRef).then(function (doc) {
             var s = doc.data();
-            tx.update(stateRef, { entries: (s.entries || []).map(function (e) {
+            var patch = { entries: (s.entries || []).map(function (e) {
               if (e.id !== oldId) return e;
               var c = JSON.parse(JSON.stringify(e)); c.deleteRequested = true; c.deleteReqAt = new Date().toISOString();
-              c.deleteReason = '주선자로만 남기 (내 프로필 삭제)' + (res.reason ? ' · ' + res.reason : '') + ratingTag(res.rating);
+              c.deleteReason = '주선자로만 남기 (내 프로필 삭제)' + (cpWhy ? ' · ' + cpWhy : '') + (res.reason ? ' · ' + res.reason : '') + ratingTag(res.rating);
               if (res.rating) c.leaveRating = res.rating;
               return c;
-            }) });
+            }) };
+            if (cpIn) { var cl = coupleRecAdd(s, { id: oldId, nickname: nick }, res.couple, 'leave'); if (cl) patch.coupleReports = cl; }
+            tx.update(stateRef, patch);
           });
         });
       }).then(function () {
+        if (cpIn) appendLog('couple', nick, '커플 소식 (주선자로만 남으며 알림 · 상대: ' + res.couple.partner + ')');
         appendLog('request', nick, '주선자로만 남기 (내 프로필 삭제 요청)' + ratingTag(res.rating));
         notifyAdmin('🤝 주선자로만 남기', nick + '님이 주선자 계정만 남기고 소개팅 프로필 삭제를 요청했어요.' + ratingTag(res.rating) + (res.reason ? ' (' + res.reason + ')' : ''));
         return refreshNow();
