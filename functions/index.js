@@ -1174,6 +1174,16 @@ exports.onStateChange = functions
       pinWaiting[q.entryId] = true;
       jobs.push(sendToAdmin('🔑 PIN 재설정 요청 · ' + (q.nickname || '회원'), '관리자 탭에서 번호 확인 후 [임시 PIN 보내기]', { route: 'admin' }));
     });
+    /* 💕 커플 소식 (2026-11-12 Benny '탈퇴할 때 베니브릿지 내에서 커플 되었는지 확인'): 탈퇴·쉬기 창과 💕 메뉴의 답이 미확인 기록으로 들어옴.
+       급한 일은 아니라 소식(소리 없이) — 관리자 탭 🟡 '커플 소식 확인' 에서 맞는지 보고 확인해야 배너 숫자에 들어감 */
+    const cpSeen = {};
+    (before.coupleReports || []).forEach((r) => { if (r && r.id) cpSeen[r.id] = true; });
+    (after.coupleReports || []).forEach((r) => {
+      if (!r || !r.id || cpSeen[r.id] || r.confirmed) return;
+      const cpBody = r.where === 'out' ? '다른 곳에서 좋은 인연을 만났대요 (배너에는 안 세요)'
+        : '베니브릿지에서 만났대요' + (r.partner ? ' · 상대 ' + r.partner : '') + ' · 관리자 탭에서 확인';
+      jobs.push(sendToAdmin('💕 커플 소식 · ' + (r.byNick || '회원'), cpBody, { route: 'admin', quiet: true }));
+    });
     (after.entries || []).forEach((e) => {
       const prev = beforeEntryMap[e.id];
       if (!prev) return;

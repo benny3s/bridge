@@ -1,5 +1,5 @@
 // 실행: 프로젝트 루트에서 node tools/test-admin/notiftest.js (가짜 DB, 네트워크 없음)
-// 관리자 폰 알림 정리 시험 (2026-11-06): 🔴 꼭 할 일은 소리, 소식(새 신청서·주간 행동 보고)은 quiet → 서비스워커가 소리 없이
+// 관리자 폰 알림 정리 시험 (2026-11-06): 🔴 꼭 할 일은 소리, 소식(새 신청서·주간 행동 보고·💕 커플 소식 11-12)은 quiet → 서비스워커가 소리 없이
 const fs = require('fs'), path = require('path'), Module = require('module'), crypto = require('crypto'), vm = require('vm');
 process.env.NUM_ENC_KEY = crypto.randomBytes(32).toString('hex');
 let DB = {}; let sent = [];
@@ -102,6 +102,23 @@ async function run(before, after) {
   p = await run(b, a);
   ok(p.length === 0, '기록만 바뀜 = 조용히');
 
+  console.log('7-2) 💕 커플 소식 = 소식(quiet), 이미 있던 기록·확인된 기록은 조용히');
+  b = base(); a = base(); a._w = 'm1'; a._wn = 'n1';   /* 회원 본인이 쓴 것 — 조작 검사도 지나야 함 */
+  a.coupleReports = [{ id: 'c1', byId: 'm1', byNick: '겨울', partner: '소금', partnerId: 'm2', where: 'in', review: '', vis: 'private', at: now, confirmed: false, via: 'leave' }];
+  a.entries[0] = Object.assign({}, a.entries[0], { deleteRequested: true, deleteReason: '베니브릿지에서 좋은 인연을 만났어요' });
+  p = await run(b, a);
+  const cpn = p.find((x) => /커플 소식/.test(x.title));
+  ok(cpn && cpn.title === '💕 커플 소식 · 겨울', '커플 소식 알림 제목');
+  ok(cpn && cpn.quiet === '1' && cpn.route === 'admin', '커플 소식은 quiet, 누르면 관리자 탭');
+  ok(cpn && /베니브릿지에서 만났대요/.test(cpn.body) && /소금/.test(cpn.body), '본문에 여기서 만남 · 상대');
+  ok(p.some((x) => x.title === '🗑 삭제 요청 · 겨울' && !x.quiet), '같이 온 탈퇴 요청은 소리 그대로');
+  ok(!p.some((x) => /조작|보안/.test(x.title)), '본인 커플 기록은 조작 경고 없음');
+  b = clone(a); p = await run(b, a);
+  ok(!p.some((x) => /커플 소식/.test(x.title)), '이미 있던 기록은 다시 안 알림');
+  b = base(); a = base(); a.coupleReports = [{ id: 'c2', byId: 'm3', byNick: '석지', partner: '', where: 'out', at: now, confirmed: false, via: 'menu' }];
+  p = await run(b, a);
+  ok(p.length === 1 && p[0].quiet === '1' && /다른 곳/.test(p[0].body), '앱 밖 인연도 소식으로, 배너에 안 센다고 알림');
+
   console.log('8) sendToAdmin: quiet 는 nav 로 넘기면 data.quiet=1, 아니면 없음');
   sent = []; DB = { adminDevices: { D1: { status: 'trusted', push: { token: ADMIN_TOK } } }, pushTokens: {} };
   await m.__sendToAdmin('🧭 시험', '본문', { route: 'admin', quiet: true });
@@ -109,9 +126,9 @@ async function run(before, after) {
   await m.__sendToAdmin('🚨 시험', '본문');
   ok(sent[0].data.quiet === '1' && !('quiet' in sent[1].data) && !('quiet' in sent[2].data), 'quiet 는 고른 것만');
 
-  console.log('9) 코드 전체: quiet 를 쓰는 관리자 알림은 새 신청서 · 주간 행동 보고 둘뿐');
+  console.log('9) 코드 전체: quiet 를 쓰는 관리자 알림은 새 신청서 · 주간 행동 보고 · 커플 소식 셋뿐');
   const quietCalls = (fnSrc.match(/sendToAdmin\([^\n]*quiet: true/g) || []).map((s) => (s.match(/sendToAdmin\('([^']*)'/) || [])[1]);
-  ok(quietCalls.length === 2 && quietCalls.includes('새 신청서 📝') && quietCalls.includes('🧭 주간 행동 보고'), 'quiet 호출 = ' + quietCalls.join(', '));
+  ok(quietCalls.length === 3 && quietCalls.includes('새 신청서 📝') && quietCalls.includes('🧭 주간 행동 보고') && quietCalls.includes('💕 커플 소식 · '), 'quiet 호출 = ' + quietCalls.join(', '));
 
   console.log('10) 서비스워커: quiet=1 이면 silent, 아니면 소리');
   const swSrc = fs.readFileSync(path.join(root, 'firebase-messaging-sw.js'), 'utf8');
