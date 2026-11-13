@@ -119,6 +119,18 @@ async function run(before, after) {
   p = await run(b, a);
   ok(p.length === 1 && p[0].quiet === '1' && /다른 곳/.test(p[0].body), '앱 밖 인연도 소식으로, 배너에 안 센다고 알림');
 
+  console.log('7-3) 💕 커플 소식: 상대 안 밝힘 문구 · 한 번에 여러 건이면 한 통 (11-13)');
+  b = base(); a = base(); a.coupleReports = [{ id: 'c3', byId: 'm1', byNick: '겨울', partner: '', partnerHidden: true, where: 'in', at: now, confirmed: false, via: 'rest' }];
+  p = await run(b, a);
+  ok(p.length === 1 && /상대는 안 밝힘/.test(p[0].body), '상대 안 밝힘이 본문에');
+  b = base(); a = base(); a.coupleReports = [1, 2, 3, 4, 5].map((i) => ({ id: 'cm' + i, byId: 'm1', byNick: '겨울', partner: 'x' + i, where: 'in', at: now, confirmed: false }));
+  p = await run(b, a);
+  const cpm = p.filter((x) => /커플 소식/.test(x.title));
+  ok(cpm.length === 1 && /한 번에 5건/.test(cpm[0].body) && cpm[0].quiet === '1', '다섯 건이 한 번에 들어오면 알림 한 통 (' + cpm.length + ')');
+  b = base(); a = base(); a.coupleReports = [1, 2].map((i) => ({ id: 'cn' + i, byId: 'm1', byNick: '겨울', partner: 'y' + i, where: 'in', at: now, confirmed: false }));
+  p = await run(b, a);
+  ok(p.filter((x) => /커플 소식/.test(x.title)).length === 2, '두 건은 따로따로');
+
   console.log('8) sendToAdmin: quiet 는 nav 로 넘기면 data.quiet=1, 아니면 없음');
   sent = []; DB = { adminDevices: { D1: { status: 'trusted', push: { token: ADMIN_TOK } } }, pushTokens: {} };
   await m.__sendToAdmin('🧭 시험', '본문', { route: 'admin', quiet: true });

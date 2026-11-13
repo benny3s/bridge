@@ -1141,7 +1141,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-13-539';
+  var APP_VERSION = '2026-11-13-542';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -7918,12 +7918,12 @@
       var on = r.confirmed, out = r.where === 'out', dup = !on && coupleDupConfirmed(state, r);
       var chip = on ? '<span class="chip" style="background:#e9f6ee;color:#2e8b52;">✅ 확인됨</span>'
         : out ? '<span class="chip" style="background:#f1f3f4;color:#777;">앱 밖</span>'
-        : dup ? '<span class="chip" style="background:#f1f3f4;color:#777;">같은 쌍</span>'
+        : dup ? '<span class="chip" style="background:#f1f3f4;color:#777;">이미 셈</span>'
         : '<span class="chip" style="background:#fef7e0;color:#b06000;">미확인</span>';
       var linked = r.partnerId ? (state.connLog || []).some(function (c) { return c && ((c.a === r.byId && c.b === r.partnerId) || (c.b === r.byId && c.a === r.partnerId)); }) : null;
       var src = out ? '다른 곳에서 만났다고 알려 왔어요 · 배너에 세지 않아요'
-        : r.where === 'in' ? (linked === true ? '🔗 두 분의 대화 연결 이력이 있어요' : linked === false ? '⚠️ 두 분의 대화 연결 이력은 없어요 — 사진 요청만 오갔을 수 있으니 확인해 보세요' : '⚠️ 상대를 직접 적었어요 — 닉네임이 맞는지 확인해 보세요')
-        : (r.partner ? '' : '어디서 만났는지 묻기 전(11-12 이전) 기록이에요');
+        : r.where === 'in' ? (!r.partner ? '🤐 상대는 밝히지 않았어요' : linked === true ? '🔗 두 분의 대화 연결 이력이 있어요' : linked === false ? '⚠️ 두 분의 대화 연결 이력은 없어요 — 사진 요청만 오갔을 수 있으니 확인해 보세요' : '⚠️ 상대를 직접 적었어요 — 닉네임이 맞는지 확인해 보세요')
+        : (r.partner ? '' : '어디서 만났는지 묻기 전(11-12 이전) 기록이에요' + (on ? '' : ' — 그때는 앱 밖 인연도 상대 칸을 비워 보냈어요'));
       var via = { leave: '탈퇴하며 알림', rest: '쉬면서 알림', menu: '💕 메뉴' }[r.via] || '';
       return '<details class="req-fold' + (on ? ' req-yesterday' : '') + '" data-fk="' + fk + ':' + escapeHtml(r.id || '') + '">' +
         '<summary>' + chip + '<span class="req-sum-who">💕 ' + escapeHtml(r.byNick || '') + (r.partner ? ' ↔ ' + escapeHtml(r.partner) : '') + '</span>' +
@@ -7933,7 +7933,7 @@
           (r.review ? '<div class="note">"' + escapeHtml(r.review) + '"</div>' : '<p class="sub">후기 없음</p>') +
           '<div class="req-foot"><span class="when">' + (via ? via + ' · ' : '') + '공개범위: ' + (visLabel[r.vis || 'private']) + (r.confirmedAt ? ' · 확인 ' + new Date(r.confirmedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric' }) : '') + '</span>' +
             '<div class="req-foot-btns">' +
-              (out && !on ? '' : dup ? '<span class="when">같은 쌍이 이미 확인돼 한 번만 세요</span>'
+              (out && !on ? '' : dup ? '<span class="when">두 분 중 한 분의 커플이 이미 확인돼 있어 한 번만 세요</span>'
                 : '<button type="button" class="card-btn approve" data-action="couple-confirm" data-id="' + escapeHtml(r.id) + '" style="flex:none;">' + (on ? '확인 취소' : '✅ 확인(카운트)') + '</button>') +
               '<button type="button" class="card-btn" data-action="couple-vis" data-id="' + escapeHtml(r.id) + '" style="flex:none;">공개범위 변경</button>' +
               '<button type="button" class="card-btn danger" data-action="couple-del" data-id="' + escapeHtml(r.id) + '" style="flex:none;">🗑 삭제</button>' +
@@ -10984,7 +10984,7 @@
     if (!entry) return;
     if (entry.deleteRequested) { modalNotice('안내', '이미 삭제 요청됐어요. 관리자 확인 중이에요.'); return; }
     openLeaveSheet({ title: '🗑 탈퇴하기', okLabel: '탈퇴 요청', okClass: 'danger', requireReason: true, selfAccount: !!currentUser && currentUser.id === id && !entry.managedBy,
-      askCouple: isMatchmakerEntry(entry) ? '' : id,
+      askCouple: isMatchmakerEntry(entry) ? '' : id, coupleWho: (currentUser && currentUser.id !== id) ? (entry.nickname || '친구') : '',   /* 주선자가 친구 프로필을 대신 처리할 때는 '친구님이 …' 로 */
       msg: escapeHtml(entry.nickname) + '님 프로필 삭제(탈퇴)를 요청할까요? 요청하면 바로 명단에서 숨겨지고, 관리자 확인 후 완전히 지워져요. 이유를 짧게 남겨 주세요.<br>(잠깐 쉬고 싶은 거라면 \'💤 잠시 쉬기\'로 명단에서만 숨길 수도 있어요)',
       placeholder: '예: 개인 사정 / 아쉬웠던 점' }).then(function (res) {
       if (!res) return;
@@ -11002,7 +11002,7 @@
           tx.update(stateRef, patch);
         });
       }).then(function () {
-        if (res.couple && res.couple.where === 'in') appendLog('couple', entry.nickname, '커플 소식 (탈퇴하며 알림 · 상대: ' + res.couple.partner + ')');
+        if (res.couple && res.couple.where === 'in') appendLog('couple', entry.nickname, '커플 소식 (탈퇴하며 알림 · 상대: ' + (res.couple.partner || '안 밝힘') + ')');
         appendLog('request', entry.nickname, '프로필 삭제 요청 · ' + reason);
         notifyAdmin('🗑 삭제 요청', entry.nickname + '님이 프로필 삭제를 요청했어요. (' + reason + ')');
         return refreshNow();
@@ -11480,21 +11480,28 @@
           opts.map(function (p) { return '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.nickname) + '</option>'; }).join('') +
           '<option value="__other">목록에 없어요 (직접 적기)</option></select>' : '') +
         '<input type="text" class="modal-input" id="cp-partner-txt" maxlength="30" placeholder="상대 닉네임"' + (opts.length ? ' style="display:none;"' : '') + '>' +
+        /* 11-13 검토: 밝히기 싫은 분이 '.' 같은 글자로 칸만 채우던 것 → 그냥 고를 수 있게 */
+        '<label class="sub" style="display:flex;align-items:center;gap:6px;margin:6px 0 0;cursor:pointer;"><input type="checkbox" id="cp-partner-skip"> 상대는 밝히지 않을게요</label>' +
         '<p class="sub" style="margin:4px 0 8px;">관리자가 확인한 뒤 \'베니브릿지에서 맺어진 커플\' 숫자에 더해요.</p>' +
       '</div>';
   }
   function coupleAskBind(ov, state) {
-    var where = '', box = ov.querySelector('#cp-where'), inBox = ov.querySelector('#cp-in'), sel = ov.querySelector('#cp-partner-sel'), txt = ov.querySelector('#cp-partner-txt');
+    var where = '', box = ov.querySelector('#cp-where'), inBox = ov.querySelector('#cp-in'), sel = ov.querySelector('#cp-partner-sel'), txt = ov.querySelector('#cp-partner-txt'), skip = ov.querySelector('#cp-partner-skip');
+    function hideWarn() { var w = ov.querySelector('#lv-warn, #cp-warn'); if (w) w.hidden = true; }   /* 고쳐 고르면 지난 안내 글은 지움 */
+    if (skip) skip.addEventListener('change', function () { if (sel) sel.disabled = skip.checked; txt.disabled = skip.checked; hideWarn(); });
+    txt.addEventListener('input', hideWarn);
     box.addEventListener('click', function (e) {
       var b = e.target.closest('[data-cp]'); if (!b) return;
       where = b.getAttribute('data-cp');
       box.querySelectorAll('[data-cp]').forEach(function (x) { x.classList.toggle('on', x === b); });
       inBox.style.display = where === 'in' ? '' : 'none';
+      hideWarn();
     });
-    if (sel) sel.addEventListener('change', function () { txt.style.display = sel.value === '__other' ? '' : 'none'; if (sel.value === '__other') txt.focus(); });
+    if (sel) sel.addEventListener('change', function () { txt.style.display = sel.value === '__other' ? '' : 'none'; if (sel.value === '__other') txt.focus(); hideWarn(); });
     return function () {
       var v = { where: where, partner: '', partnerId: '' };
       if (where !== 'in') return v;
+      if (skip && skip.checked) { v.hidden = true; return v; }
       if (sel && sel.value && sel.value !== '__other') {
         v.partnerId = sel.value;
         var e = (state.entries || []).find(function (x) { return x.id === sel.value; });
@@ -11503,28 +11510,48 @@
       return v;
     };
   }
+  /* '여기서 만났어요' 의 상대 칸 검사 — 고르거나, 글자로 적거나, '밝히지 않을게요' */
+  function coupleAskWarn(cp) {
+    if (!cp || cp.where !== 'in' || cp.hidden) return '';
+    var tail = ' 밝히기 싫으면 \'상대는 밝히지 않을게요\'를 눌러 주세요.';
+    if (!cp.partner) return '상대를 고르거나 닉네임을 적어 주세요.' + tail;
+    if (!cp.partnerId && !/[0-9A-Za-z가-힣ㄱ-ㅎㅏ-ㅣ]/.test(cp.partner)) return '상대 닉네임을 글자로 적어 주세요.' + tail;
+    return '';
+  }
   /* 미확인 커플 기록 한 줄 붙인 새 목록. 같은 회원이 같은 상대로 이미 알린 게 있으면 null (다시 쌓지 않음) */
   function coupleRecAdd(s, entry, c, via) {
     var list = Array.isArray(s.coupleReports) ? s.coupleReports.slice() : [];
     if (list.some(function (r) { return r.byId === entry.id && (r.partner || '') === (c.partner || '') && (r.where || '') === c.where; })) return null;
-    list.push({ id: genId(), byId: entry.id, byNick: entry.nickname || '', partner: c.partner || '', partnerId: c.partnerId || '', where: c.where, review: c.review || '', vis: c.vis || 'private', at: new Date().toISOString(), confirmed: false, via: via });
-    if (list.length > 1000) list = list.slice(list.length - 1000);
+    var rec = { id: genId(), byId: entry.id, byNick: entry.nickname || '', partner: c.partner || '', partnerId: c.partnerId || '', where: c.where, review: c.review || '', vis: c.vis || 'private', at: new Date().toISOString(), confirmed: false, via: via };
+    if (c.hidden) rec.partnerHidden = true;
+    list.push(rec);   /* 1000건 자르기는 뺌 (11-13): 남의 기록이 빠지면 서버가 조작으로 보고 같이 쓴 탈퇴 요청까지 되돌림 */
     return list;
   }
-  /* 관리자: 두 사람이 각자 알려도 한 쌍 — 쌍 열쇠(상대를 못 찾으면 닉네임 그대로) */
-  function couplePairKey(state, r) {
-    if (!r || !r.partner) return '';
+  /* 관리자: 기록 하나에 나오는 두 사람의 id (상대를 못 찾으면 그 사람은 뺌).
+     탈퇴해 명단에서 빠진 사람도 자기가 남긴 커플 기록(byNick)에는 남아 있어서 거기서도 찾음 */
+  function couplePeople(state, r) {
+    if (!r) return [];
     var pid = r.partnerId || '';
-    if (!pid) { var e = (state.entries || []).find(function (x) { return x.nickname === r.partner; }); pid = e ? e.id : 'n:' + r.partner; }
-    return [r.byId || ('n:' + (r.byNick || '')), pid].sort().join('|');
+    if (!pid && r.partner) {
+      var e = (state.entries || []).find(function (x) { return x.nickname === r.partner; });
+      var c = e ? null : (state.coupleReports || []).find(function (x) { return x && x.byId && x.byNick === r.partner; });
+      pid = e ? e.id : (c ? c.byId : '');
+    }
+    return [r.byId || '', pid].filter(Boolean);
   }
+  /* 같은 커플이 이미 셌나 (2026-11-13 검토): 두 사람 중 한 명이라도 이미 확인된 기록에 있으면 같은 커플로 봄.
+     상대를 안 적은 옛 기록 · '.' 처럼 못 찾는 상대 · 지워진 상대를 직접 적은 경우까지 한 번만 세게.
+     한 사람이 앱에서 두 번 커플이 되는 일은 드물어서, 그때는 관리자가 옛 기록의 확인을 취소하면 됨 */
   function coupleDupConfirmed(state, r) {
-    var k = couplePairKey(state, r); if (!k) return false;
-    return (state.coupleReports || []).some(function (x) { return x.id !== r.id && x.confirmed && couplePairKey(state, x) === k; });
+    var mine = couplePeople(state, r); if (!mine.length) return false;
+    return (state.coupleReports || []).some(function (x) {
+      return x && x.id !== r.id && x.confirmed && couplePeople(state, x).some(function (q) { return mine.indexOf(q) >= 0; });
+    });
   }
   /* 관리자 🟡 할 일: 아직 확인 안 한 '여기서 만났어요' (앱 밖 · 이미 센 쌍은 뺌) */
   function coupleTodoList(state) {
-    return (state.coupleReports || []).filter(function (r) { return r && !r.confirmed && r.where !== 'out' && !coupleDupConfirmed(state, r); });
+    /* 11-12 이전 옛 기록 중 상대가 빈 것은 앱 밖 인연일 수도 있어 할 일로 올리지 않음 (💕 커플 성사 칸에는 그대로) */
+    return (state.coupleReports || []).filter(function (r) { return r && !r.confirmed && r.where !== 'out' && (r.where === 'in' || r.partner) && !coupleDupConfirmed(state, r); });
   }
   function ratingTag(r) { return r ? ' · 만족도 ⭐' + r : ''; }
   function openLeaveSheet(o) {
@@ -11534,7 +11561,7 @@
       var ov = openModal(
         '<h3>' + o.title + '</h3>' +
         '<p class="modal-msg">' + o.msg + '</p>' +
-        (o.askCouple ? '<label class="leave-lbl">베니브릿지에서 만난 분과 커플이 되셨나요?</label>' + coupleAskHtml(currentState, o.askCouple, true) : '') +
+        (o.askCouple ? '<label class="leave-lbl">' + (o.coupleWho ? escapeHtml(o.coupleWho) + '님이 ' : '') + '베니브릿지에서 만난 분과 커플이 되셨나요?</label>' + coupleAskHtml(currentState, o.askCouple, true) : '') +
         '<label class="leave-lbl">베니브릿지 어떠셨어요? <span>(별점, 선택)</span></label>' +
         '<div class="leave-stars" id="lv-stars">' + [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" data-star="' + n + '" aria-label="' + n + '점">☆</button>'; }).join('') + '</div>' +
         '<textarea class="modal-input" id="lv-reason" rows="3" maxlength="200" placeholder="' + escapeHtml(o.placeholder || '하고 싶은 말 (선택)') + '"></textarea>' +
@@ -11554,14 +11581,14 @@
       if (mmBtn) mmBtn.addEventListener('click', function () {
         var cp = cpGet ? cpGet() : null;
         if (cp && !cp.where) { warn.textContent = '커플이 되셨는지 위에서 골라 주세요.'; warn.hidden = false; return; }
-        if (cp && cp.where === 'in' && !cp.partner) { warn.textContent = '상대가 누구인지 알려 주세요.'; warn.hidden = false; return; }
+        if (coupleAskWarn(cp)) { warn.textContent = coupleAskWarn(cp); warn.hidden = false; return; }
         done({ mmOnly: true, rating: rating, reason: (ta.value || '').trim(), couple: cp });
       });
       ov.querySelector('#lv-ok').addEventListener('click', function () {
         var reason = (ta.value || '').trim();
         var cp = cpGet ? cpGet() : null;
         if (cp && !cp.where) { warn.textContent = '커플이 되셨는지 위에서 골라 주세요.'; warn.hidden = false; return; }
-        if (cp && cp.where === 'in' && !cp.partner) { warn.textContent = '상대가 누구인지 알려 주세요.'; warn.hidden = false; return; }
+        if (coupleAskWarn(cp)) { warn.textContent = coupleAskWarn(cp); warn.hidden = false; return; }
         var met = !!cp && (cp.where === 'in' || cp.where === 'out');   /* 인연을 만났다면 그게 이유 — 글은 안 적어도 됨 */
         if (o.requireReason && !reason && !met) { warn.textContent = '이유를 짧게 남겨 주세요.'; warn.hidden = false; return; }
         if (o.requireSomething && !reason && !rating) { warn.textContent = '별점이나 하고 싶은 말을 남겨 주세요.'; warn.hidden = false; return; }
@@ -11603,7 +11630,7 @@
           });
         });
       }).then(function () {
-        if (cpIn) appendLog('couple', nick, '커플 소식 (주선자로만 남으며 알림 · 상대: ' + res.couple.partner + ')');
+        if (cpIn) appendLog('couple', nick, '커플 소식 (주선자로만 남으며 알림 · 상대: ' + (res.couple.partner || '안 밝힘') + ')');
         appendLog('request', nick, '주선자로만 남기 (내 프로필 삭제 요청)' + ratingTag(res.rating));
         notifyAdmin('🤝 주선자로만 남기', nick + '님이 주선자 계정만 남기고 소개팅 프로필 삭제를 요청했어요.' + ratingTag(res.rating) + (res.reason ? ' (' + res.reason + ')' : ''));
         return refreshNow();
@@ -11643,7 +11670,7 @@
     }
     if (entry.deactivated) { modalNotice('안내', '이미 쉬는 중이에요.'); return; }
     openLeaveSheet({ title: '💤 잠시 쉬기', okLabel: '잠시 쉬기', requireReason: true, selfAccount: currentUser.id === id && !entry.managedBy,
-      askCouple: isMatchmakerEntry(entry) ? '' : id,
+      askCouple: isMatchmakerEntry(entry) ? '' : id, coupleWho: (currentUser && currentUser.id !== id) ? (entry.nickname || '친구') : '',   /* 주선자가 친구 프로필을 대신 처리할 때는 '친구님이 …' 로 */
       msg: '소개팅을 잠시 쉬는 동안 다른 회원에게 내 프로필이 보이지 않아요. 로그인은 그대로 돼서 메시지함·관리자 문의는 볼 수 있고, 언제든 ⚙️ 내 계정의 [다시 활동하기]로 돌아올 수 있어요. 이유를 짧게 남겨 주세요.',
       placeholder: '예: 잠시 쉬어갈게요 / 바빠서요' }).then(function (res) {
       if (!res) return;
@@ -11665,7 +11692,7 @@
           tx.update(stateRef, patch);
         });
       }).then(function () {
-        if (res.couple && res.couple.where === 'in') appendLog('couple', entry.nickname, '커플 소식 (쉬면서 알림 · 상대: ' + res.couple.partner + ')');
+        if (res.couple && res.couple.where === 'in') appendLog('couple', entry.nickname, '커플 소식 (쉬면서 알림 · 상대: ' + (res.couple.partner || '안 밝힘') + ')');
         appendLog('request', entry.nickname, '잠시 쉬기 · ' + reason);
         notifyAdmin('🗄 비활성화 요청', entry.nickname + '님이 프로필 비활성화(보관)를 요청했어요. (' + reason + ')');
         return refreshNow();
@@ -11762,19 +11789,19 @@
       var vis = visEl ? visEl.value : 'private';
       var cp = cpGet(), cpWarn = overlay.querySelector('#cp-warn');
       if (!cp.where) { cpWarn.textContent = '어디서 만나셨는지 골라 주세요.'; cpWarn.hidden = false; return; }
-      if (cp.where === 'in' && !cp.partner) { cpWarn.textContent = '상대가 누구인지 알려 주세요.'; cpWarn.hidden = false; return; }
+      if (coupleAskWarn(cp)) { cpWarn.textContent = coupleAskWarn(cp); cpWarn.hidden = false; return; }
       var partner = cp.partner, cpWhy = cp.where === 'in' ? '베니브릿지에서 좋은 인연을 만났어요 (커플 성사)' : '다른 곳에서 좋은 인연을 만났어요';
       var afterEl = overlay.querySelector('input[name="cpafter"]:checked');
       var after = afterEl ? afterEl.value : 'hide';
       var hide = after === 'hide';
       closeModal(overlay);
       var rec = { id: genId(), byId: me.id, byNick: me.nickname || '', partner: partner, partnerId: cp.partnerId || '', where: cp.where, review: review, vis: vis, at: new Date().toISOString(), confirmed: false, via: 'menu' };
+      if (cp.hidden) rec.partnerHidden = true;
       db.runTransaction(function (tx) {
         return tx.get(stateRef).then(function (doc) {
           var s = doc.data();
           var list = Array.isArray(s.coupleReports) ? s.coupleReports.slice() : [];
           list.push(rec);
-          if (list.length > 1000) list = list.slice(list.length - 1000);
           var patch = { coupleReports: list };
           if (after === 'delete' && !me.deleteRequested) {
             patch.entries = (s.entries || []).map(function (e) {
@@ -11803,7 +11830,7 @@
     if (!isAdminUnlocked) return;
     var r0 = (currentState.coupleReports || []).find(function (r) { return r.id === id; });
     if (r0 && !r0.confirmed && r0.where === 'out') { modalNotice('안내', '다른 곳에서 만난 인연이라 배너 숫자에는 세지 않아요.'); return; }
-    if (r0 && !r0.confirmed && coupleDupConfirmed(currentState, r0)) { modalNotice('안내', '같은 두 분이 이미 확인돼 있어요. 한 쌍은 한 번만 세요.'); return; }
+    if (r0 && !r0.confirmed && coupleDupConfirmed(currentState, r0)) { modalNotice('안내', '두 분 중 한 분의 커플 기록이 이미 확인돼 있어요. 같은 커플은 한 번만 세요. 다른 커플이 맞다면 옛 기록의 확인을 먼저 취소해 주세요.'); return; }
     db.runTransaction(function (tx) {
       return tx.get(stateRef).then(function (doc) {
         var s = doc.data();

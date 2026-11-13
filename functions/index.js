@@ -1178,11 +1178,13 @@ exports.onStateChange = functions
        급한 일은 아니라 소식(소리 없이) — 관리자 탭 🟡 '커플 소식 확인' 에서 맞는지 보고 확인해야 배너 숫자에 들어감 */
     const cpSeen = {};
     (before.coupleReports || []).forEach((r) => { if (r && r.id) cpSeen[r.id] = true; });
-    (after.coupleReports || []).forEach((r) => {
-      if (!r || !r.id || cpSeen[r.id] || r.confirmed) return;
-      const cpBody = r.where === 'out' ? '다른 곳에서 좋은 인연을 만났대요 (배너에는 안 세요)'
-        : '베니브릿지에서 만났대요' + (r.partner ? ' · 상대 ' + r.partner : '') + ' · 관리자 탭에서 확인';
-      jobs.push(sendToAdmin('💕 커플 소식 · ' + (r.byNick || '회원'), cpBody, { route: 'admin', quiet: true }));
+    const cpNew = (after.coupleReports || []).filter((r) => r && r.id && !cpSeen[r.id] && !r.confirmed);
+    /* 화면은 한 번에 한 건씩만 씀 → 한 번에 여러 건이면 알림 한 통으로 (직접 쓰기로 알림을 쏟아 내지 못하게, 11-13 검토) */
+    (cpNew.length > 3 ? [{ many: cpNew.length, byNick: cpNew[0].byNick }] : cpNew).forEach((r) => {
+      const cpBody = r.many ? '한 번에 ' + r.many + '건이 들어왔어요 · 관리자 탭에서 확인'
+        : r.where === 'out' ? '다른 곳에서 좋은 인연을 만났대요 (배너에는 안 세요)'
+        : '베니브릿지에서 만났대요' + (r.partner ? ' · 상대 ' + clip(r.partner, 30) : (r.partnerHidden ? ' · 상대는 안 밝힘' : '')) + ' · 관리자 탭에서 확인';
+      jobs.push(sendToAdmin('💕 커플 소식 · ' + clip(r.byNick || '회원', 30), cpBody, { route: 'admin', quiet: true }));
     });
     (after.entries || []).forEach((e) => {
       const prev = beforeEntryMap[e.id];
