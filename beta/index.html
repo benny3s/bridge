@@ -1170,7 +1170,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-13-541';
+  var APP_VERSION = '2026-11-13-542';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -11516,14 +11516,17 @@
   }
   function coupleAskBind(ov, state) {
     var where = '', box = ov.querySelector('#cp-where'), inBox = ov.querySelector('#cp-in'), sel = ov.querySelector('#cp-partner-sel'), txt = ov.querySelector('#cp-partner-txt'), skip = ov.querySelector('#cp-partner-skip');
-    if (skip) skip.addEventListener('change', function () { if (sel) sel.disabled = skip.checked; txt.disabled = skip.checked; });
+    function hideWarn() { var w = ov.querySelector('#lv-warn, #cp-warn'); if (w) w.hidden = true; }   /* 고쳐 고르면 지난 안내 글은 지움 */
+    if (skip) skip.addEventListener('change', function () { if (sel) sel.disabled = skip.checked; txt.disabled = skip.checked; hideWarn(); });
+    txt.addEventListener('input', hideWarn);
     box.addEventListener('click', function (e) {
       var b = e.target.closest('[data-cp]'); if (!b) return;
       where = b.getAttribute('data-cp');
       box.querySelectorAll('[data-cp]').forEach(function (x) { x.classList.toggle('on', x === b); });
       inBox.style.display = where === 'in' ? '' : 'none';
+      hideWarn();
     });
-    if (sel) sel.addEventListener('change', function () { txt.style.display = sel.value === '__other' ? '' : 'none'; if (sel.value === '__other') txt.focus(); });
+    if (sel) sel.addEventListener('change', function () { txt.style.display = sel.value === '__other' ? '' : 'none'; if (sel.value === '__other') txt.focus(); hideWarn(); });
     return function () {
       var v = { where: where, partner: '', partnerId: '' };
       if (where !== 'in') return v;
