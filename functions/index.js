@@ -1431,6 +1431,8 @@ exports.adminSendSms = functions
   .runWith({ maxInstances: 2, secrets: ['NUM_ENC_KEY', 'SOLAPI_KEY', 'SOLAPI_SECRET', 'SOLAPI_SENDER', 'SMS_ADMIN_TOKEN'], timeoutSeconds: 120, memory: '256MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', '로그인이 필요해요.');
+    /* 토큰만으로는 안 됨 — 관리자 로그인(admin claim)도 있어야 (토큰이 같은 출처 localStorage 에 있어 새면 익명 계정으로 쓰일 수 있었음, 11-13 보안) */
+    if (!adminOk(context)) throw new functions.https.HttpsError('permission-denied', '관리자만 보낼 수 있어요.');
     const token = String((data && data.token) || '');
     const adminTok = process.env.SMS_ADMIN_TOKEN || '';
     if (!adminTok || token !== adminTok) throw new functions.https.HttpsError('permission-denied', '관리자 토큰이 올바르지 않아요.');
@@ -1648,6 +1650,16 @@ exports.applicantAction = functions
       {
         const s0 = (await stateRef.get()).data() || {};
         if ((s0.entries || []).concat(s0.pendingEntries || []).some((e) => e.id === id)) throw new HttpsError('already-exists', '이미 접수된 신청이에요.');
+        /* 지워진 회원의 id 를 다시 내밀어 p:1 토큰을 받고 그 사람의 대화방·관리자 문답(90일 보관)을 읽는 것 막기 (11-13 보안).
+           화면은 신청마다 genId() 새 id 라 정상 신청은 걸리지 않음 */
+        const [sec0, ao0, mm0, ph0, ch0] = await Promise.all([
+          db.collection('secrets').doc(id).get(), db.collection('adminOnly').doc(id).get(),
+          db.collection('memberMsgs').doc(id).get(), db.collection('photos').doc(id).get(),
+          db.collection('chats').where('viewers', 'array-contains', id).limit(1).get()
+        ]);
+        if ((sec0.exists && sec0.get('deletedAt')) || (ao0.exists && ao0.get('deletedAt')) || mm0.exists || ph0.exists || !ch0.empty) {
+          throw new HttpsError('already-exists', '이 신청 번호는 쓸 수 없어요. 새로고침 후 다시 신청해 주세요.');
+        }
       }
       await stashSecrets(id, entry); /* PIN 해시·실명·번호는 금고로, state 에는 pinSet 표시만 */
       await db.runTransaction(async (tx) => {

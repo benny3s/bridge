@@ -1141,7 +1141,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-12-538';
+  var APP_VERSION = '2026-11-13-539';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -8696,7 +8696,7 @@
       }
       var photoStatus = !e.photoCount
         ? '<span style="color:var(--accent);">⚠️ 사진 없음</span>'
-        : '<span style="color:var(--muted);">📷 사진 ' + e.photoCount + '장</span>';
+        : '<span style="color:var(--muted);">📷 사진 ' + escapeHtml(String(e.photoCount)) + '장</span>';
       /* 일반 회원 / 주선자 본인 / 주선자가 추가한 친구 구분 */
       var mgrNick = e.managedBy ? managerNickOf(state, e) : '';
       var typeChip, typeNote;
@@ -8836,7 +8836,7 @@
               '<span class="req-sum-who">' + escapeHtml(e.nickname) + '</span> <span class="chip" style="background:var(--gold-soft);color:var(--gold);">🗄 보관</span>' + viaChip + sentChip,
               '<div class="p-meta">' + genderLabel(e.gender) + ' · ' + escapeHtml(e.region || '') + (e.deactivatedAt ? ' · 보관: ' + fmtDate(e.deactivatedAt) : '') + '</div>' +
               (e.deactivatedReason ? '<div class="p-meta" style="color:var(--ink);">사유: "' + escapeHtml(e.deactivatedReason) + '"</div>' : '') +
-              ((e.leaveRating || e.leaveNote) ? '<div class="p-meta" style="color:var(--gold);">' + (e.leaveRating ? '⭐ 만족도 ' + e.leaveRating + '/5' : '💬 의견') + (e.leaveNote ? ' — "' + escapeHtml(e.leaveNote) + '"' : '') + '</div>' : '') +
+              ((e.leaveRating || e.leaveNote) ? '<div class="p-meta" style="color:var(--gold);">' + (e.leaveRating ? '⭐ 만족도 ' + escapeHtml(String(e.leaveRating)) + '/5' : '💬 의견') + (e.leaveNote ? ' — "' + escapeHtml(e.leaveNote) + '"' : '') + '</div>' : '') +
               sentNote +
               '<div class="pending-actions">' +
                 '<button type="button" class="card-btn" data-action="card-detail" data-id="' + escapeHtml(e.id) + '">👤 프로필</button>' +
@@ -9141,7 +9141,7 @@
           (dater && _gotN[e.id] ? '<span' + (_waitN[e.id] >= 3 ? ' style="color:var(--accent);font-weight:700;"' : '') + '>📥 받은 ' + _gotN[e.id] + (_waitN[e.id] ? ' · 대기 ' + _waitN[e.id] : '') + '</span>' : '') +
           (dater && d.photoN ? '<button type="button" class="seen-mini" data-action="perm-photo" data-id="' + escapeHtml(e.id) + '" title="이 사람이 볼 수 있는 사진">📷 ' + d.photoN + '</button>' : '') +
           (dater && d.contactN ? '<button type="button" class="seen-mini" data-action="perm-contact" data-id="' + escapeHtml(e.id) + '" title="이 사람이 대화할 수 있는 사람">💬 ' + d.contactN + '</button>' : '') +
-          (e.acqFilterCount ? '<span title="지인 필터">🙈 ' + e.acqFilterCount + '</span>' : '') +
+          (e.acqFilterCount ? '<span title="지인 필터">🙈 ' + escapeHtml(String(e.acqFilterCount)) + '</span>' : '') +
           (dater && !e.deactivated && e.testAccount ? '<label class="seen-test" title="테스트 계정 (명단·통계에서 빠짐)"><input type="checkbox" data-testtoggle="' + escapeHtml(e.id) + '" checked>🧪</label>' : '') +
           '<span class="seen-uid" style="margin-left:auto;">' + escapeHtml(formatUid(e) || '—') + ' · 가입 ' + seenMD(e.submittedAt) + '</span>' +
         '</div></div>';
@@ -12970,7 +12970,7 @@
     rows += '<div class="detail-row"><div class="detail-label">연락처</div><div class="detail-value" id="detail-contact">' + (entry.contactEnc ? '복호화 중...' : '-') + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">알게 된 경로</div><div class="detail-value" id="detail-referrer">' + (entry.referrerEnc ? '복호화 중...' : '-') + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">성별</div><div class="detail-value">' + genderLabel(entry.gender) + '</div></div>';
-    rows += '<div class="detail-row"><div class="detail-label">생년</div><div class="detail-value">' + (entry.birthYear || '-') + '</div></div>';
+    rows += '<div class="detail-row"><div class="detail-label">생년</div><div class="detail-value">' + escapeHtml(String(entry.birthYear || '-')) + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">지역</div><div class="detail-value">' + escapeHtml(entry.region || '-') + '</div></div>';
     if (ZONES_ON && isAdminUnlocked) rows += '<div class="detail-row"><div class="detail-label">지역 채널</div><div class="detail-value">' + escapeHtml(zonesText(zonesOf(entry))) + '</div></div>';
     rows += '<div class="detail-row"><div class="detail-label">직장</div><div class="detail-value">' + escapeHtml(entry.workplace || '-') + '</div></div>';
@@ -13050,7 +13050,7 @@
     rows += '<div class="detail-row"><div class="detail-label">알게 된 경로</div><div class="detail-value" id="detail-referrer">' + (entry.referrerEnc ? '복호화 중...' : '-') + '</div></div>';
     if (!isMM) {
       rows += '<div class="detail-row"><div class="detail-label">성별</div><div class="detail-value">' + genderLabel(entry.gender) + '</div></div>';
-      rows += '<div class="detail-row"><div class="detail-label">생년</div><div class="detail-value">' + (entry.birthYear || '-') + '</div></div>';
+      rows += '<div class="detail-row"><div class="detail-label">생년</div><div class="detail-value">' + escapeHtml(String(entry.birthYear || '-')) + '</div></div>';
       rows += '<div class="detail-row"><div class="detail-label">지역</div><div class="detail-value">' + escapeHtml(entry.region || '-') + '</div></div>';
     if (ZONES_ON && isAdminUnlocked) rows += '<div class="detail-row"><div class="detail-label">지역 채널</div><div class="detail-value">' + escapeHtml(zonesText(zonesOf(entry))) + '</div></div>';
       rows += '<div class="detail-row"><div class="detail-label">직장</div><div class="detail-value">' + escapeHtml(entry.workplace || '-') + '</div></div>';
