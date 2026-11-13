@@ -1170,7 +1170,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-13-539';
+  var APP_VERSION = '2026-11-13-540';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -7947,7 +7947,7 @@
       var on = r.confirmed, out = r.where === 'out', dup = !on && coupleDupConfirmed(state, r);
       var chip = on ? '<span class="chip" style="background:#e9f6ee;color:#2e8b52;">✅ 확인됨</span>'
         : out ? '<span class="chip" style="background:#f1f3f4;color:#777;">앱 밖</span>'
-        : dup ? '<span class="chip" style="background:#f1f3f4;color:#777;">같은 쌍</span>'
+        : dup ? '<span class="chip" style="background:#f1f3f4;color:#777;">이미 셈</span>'
         : '<span class="chip" style="background:#fef7e0;color:#b06000;">미확인</span>';
       var linked = r.partnerId ? (state.connLog || []).some(function (c) { return c && ((c.a === r.byId && c.b === r.partnerId) || (c.b === r.byId && c.a === r.partnerId)); }) : null;
       var src = out ? '다른 곳에서 만났다고 알려 왔어요 · 배너에 세지 않아요'
@@ -7962,7 +7962,7 @@
           (r.review ? '<div class="note">"' + escapeHtml(r.review) + '"</div>' : '<p class="sub">후기 없음</p>') +
           '<div class="req-foot"><span class="when">' + (via ? via + ' · ' : '') + '공개범위: ' + (visLabel[r.vis || 'private']) + (r.confirmedAt ? ' · 확인 ' + new Date(r.confirmedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric' }) : '') + '</span>' +
             '<div class="req-foot-btns">' +
-              (out && !on ? '' : dup ? '<span class="when">같은 쌍이 이미 확인돼 한 번만 세요</span>'
+              (out && !on ? '' : dup ? '<span class="when">두 분 중 한 분의 커플이 이미 확인돼 있어 한 번만 세요</span>'
                 : '<button type="button" class="card-btn approve" data-action="couple-confirm" data-id="' + escapeHtml(r.id) + '" style="flex:none;">' + (on ? '확인 취소' : '✅ 확인(카운트)') + '</button>') +
               '<button type="button" class="card-btn" data-action="couple-vis" data-id="' + escapeHtml(r.id) + '" style="flex:none;">공개범위 변경</button>' +
               '<button type="button" class="card-btn danger" data-action="couple-del" data-id="' + escapeHtml(r.id) + '" style="flex:none;">🗑 삭제</button>' +
@@ -11540,16 +11540,26 @@
     if (list.length > 1000) list = list.slice(list.length - 1000);
     return list;
   }
-  /* 관리자: 두 사람이 각자 알려도 한 쌍 — 쌍 열쇠(상대를 못 찾으면 닉네임 그대로) */
-  function couplePairKey(state, r) {
-    if (!r || !r.partner) return '';
+  /* 관리자: 기록 하나에 나오는 두 사람의 id (상대를 못 찾으면 그 사람은 뺌).
+     탈퇴해 명단에서 빠진 사람도 자기가 남긴 커플 기록(byNick)에는 남아 있어서 거기서도 찾음 */
+  function couplePeople(state, r) {
+    if (!r) return [];
     var pid = r.partnerId || '';
-    if (!pid) { var e = (state.entries || []).find(function (x) { return x.nickname === r.partner; }); pid = e ? e.id : 'n:' + r.partner; }
-    return [r.byId || ('n:' + (r.byNick || '')), pid].sort().join('|');
+    if (!pid && r.partner) {
+      var e = (state.entries || []).find(function (x) { return x.nickname === r.partner; });
+      var c = e ? null : (state.coupleReports || []).find(function (x) { return x && x.byId && x.byNick === r.partner; });
+      pid = e ? e.id : (c ? c.byId : '');
+    }
+    return [r.byId || '', pid].filter(Boolean);
   }
+  /* 같은 커플이 이미 셌나 (2026-11-13 검토): 두 사람 중 한 명이라도 이미 확인된 기록에 있으면 같은 커플로 봄.
+     상대를 안 적은 옛 기록 · '.' 처럼 못 찾는 상대 · 지워진 상대를 직접 적은 경우까지 한 번만 세게.
+     한 사람이 앱에서 두 번 커플이 되는 일은 드물어서, 그때는 관리자가 옛 기록의 확인을 취소하면 됨 */
   function coupleDupConfirmed(state, r) {
-    var k = couplePairKey(state, r); if (!k) return false;
-    return (state.coupleReports || []).some(function (x) { return x.id !== r.id && x.confirmed && couplePairKey(state, x) === k; });
+    var mine = couplePeople(state, r); if (!mine.length) return false;
+    return (state.coupleReports || []).some(function (x) {
+      return x && x.id !== r.id && x.confirmed && couplePeople(state, x).some(function (q) { return mine.indexOf(q) >= 0; });
+    });
   }
   /* 관리자 🟡 할 일: 아직 확인 안 한 '여기서 만났어요' (앱 밖 · 이미 센 쌍은 뺌) */
   function coupleTodoList(state) {
@@ -11832,7 +11842,7 @@
     if (!isAdminUnlocked) return;
     var r0 = (currentState.coupleReports || []).find(function (r) { return r.id === id; });
     if (r0 && !r0.confirmed && r0.where === 'out') { modalNotice('안내', '다른 곳에서 만난 인연이라 배너 숫자에는 세지 않아요.'); return; }
-    if (r0 && !r0.confirmed && coupleDupConfirmed(currentState, r0)) { modalNotice('안내', '같은 두 분이 이미 확인돼 있어요. 한 쌍은 한 번만 세요.'); return; }
+    if (r0 && !r0.confirmed && coupleDupConfirmed(currentState, r0)) { modalNotice('안내', '두 분 중 한 분의 커플 기록이 이미 확인돼 있어요. 같은 커플은 한 번만 세요. 다른 커플이 맞다면 옛 기록의 확인을 먼저 취소해 주세요.'); return; }
     db.runTransaction(function (tx) {
       return tx.get(stateRef).then(function (doc) {
         var s = doc.data();
