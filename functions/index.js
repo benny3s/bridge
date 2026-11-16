@@ -3363,6 +3363,94 @@ const TRIAGE_SCHEMA = {
   properties: { verdict: { type: 'string', enum: ['benign', 'suspicious', 'unsure'] }, reason: { type: 'string' } },
   required: ['verdict', 'reason'], additionalProperties: false
 };
+function parseTriageVerdictJson(rawText) {
+  let s = String(rawText || '').replace(/^\uFEFF/, '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  let out = null;
+  try {
+    out = JSON.parse(s);
+  } catch (_) {
+    const start = s.indexOf('{');
+    if (start >= 0) {
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < s.length; i++) {
+        const ch = s[i];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (ch === '\\') esc = true;
+          else if (ch === '"') inStr = false;
+        } else {
+          if (ch === '"') inStr = true;
+          else if (ch === '{') depth++;
+          else if (ch === '}' && --depth === 0) {
+            out = JSON.parse(s.slice(start, i + 1));
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (!out || !['benign', 'suspicious', 'unsure'].includes(out.verdict)) {
+    throw new Error('invalid triage verdict');
+  }
+  return { verdict: out.verdict, reason: String(out.reason || '').slice(0, 200) };
+}
+function callGeminiJson(apiKey, model, sysPrompt, userPrompt, opts) {
+  opts = opts || {};
+  return new Promise((resolve, reject) => {
+    const payload = {
+      systemInstruction: { parts: [{ text: sysPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: opts.maxTokens || 1024,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: 'OBJECT',
+          properties: {
+            verdict: { type: 'STRING', enum: ['benign', 'suspicious', 'unsure'] },
+            reason: { type: 'STRING' }
+          },
+          required: ['verdict', 'reason']
+        }
+      }
+    };
+    const body = JSON.stringify(payload);
+    const req = https.request({
+      hostname: 'generativelanguage.googleapis.com',
+      path: '/v1beta/models/' + encodeURIComponent(model) + ':generateContent',
+      method: 'POST',
+      headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: opts.timeout || 25000
+    }, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(raw);
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            return reject(new Error((j && j.error && j.error.message) || ('HTTP ' + res.statusCode)));
+          }
+          const cand = j && Array.isArray(j.candidates) && j.candidates[0];
+          const part = cand && cand.content && Array.isArray(cand.content.parts) && cand.content.parts.find((p) => p && p.text);
+          if (!part) return reject(new Error('no gemini text'));
+          resolve({ out: parseTriageVerdictJson(part.text), model: j.modelVersion || model });
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+async function callOllamaTriageJson(apiKey, model, sysPrompt, userPrompt) {
+  const sysJson = sysPrompt + '\n\n반드시 JSON 객체 한 줄로만 답해: {"verdict":"benign|suspicious|unsure","reason":"한국어 한 문장"}';
+  const r = await callOllamaCloudChat(apiKey, model || 'deepseek-v4.1-flash', sysJson, userPrompt, 450, 0.1);
+  return { out: parseTriageVerdictJson(r.text), model: r.model || model || 'deepseek-v4.1-flash' };
+}
 function callClaudeJson(apiKey, model, sysPrompt, userPrompt, schema, opts) {
   opts = opts || {};
   return new Promise((resolve, reject) => {
@@ -3479,12 +3567,46 @@ async function runTriage(ref, d) {
     await ref.set(benignClose(d, v), { merge: true });
     return v;
   }
-  const key = (process.env.ANTHROPIC_API_KEY || '').trim();
-  if (!key) throw new Error('no ANTHROPIC_API_KEY');
+  const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim();
+  const geminiKey = (process.env.GEMINI_API_KEY || '').trim();
+  const ollamaKey = (process.env.OLLAMA_API_KEY || '').trim();
+  if (!anthropicKey && !geminiKey && !ollamaKey) throw new Error('no AI key configured');
   const prompt = '다음 경고를 판단해 줘.\n' + JSON.stringify(r.facts, null, 1);
-  /* 2026-10-28 Benny: Haiku 먼저 → 애매할 때만 Opus 였는데, AI 까지 오는 경고는 주 몇 건이라 처음부터 Opus (건당 수십 원) */
-  const o = await callClaudeJson(key, 'claude-opus-5-5', TRIAGE_SYS, prompt, TRIAGE_SCHEMA, { effort: 'medium', timeout: 70000, maxTokens: 6000, fallbacks: true });
-  const v = (o.refused || !o.out) ? { state: 'unsure', by: o.model, reason: 'AI 가 판단을 거절함' }
+  /* 2026-10-28 Benny: 처음부터 Opus, 2026-11-16: Claude 실패·미설정 시 Gemini / Ollama Cloud 폴백 */
+  const deadline = Date.now() + 95000;   /* 함수 timeoutSeconds 120s 중 앞·뒤 Firestore 여유 확보 */
+  let o = null;
+  let lastErr = null;
+  let refusedModel = '';
+  if (anthropicKey && deadline - Date.now() >= 5000) {
+    try {
+      const tmo = Math.min(60000, Math.max(5000, deadline - Date.now()));
+      const res = await callClaudeJson(anthropicKey, 'claude-opus-5-5', TRIAGE_SYS, prompt, TRIAGE_SCHEMA, { effort: 'medium', timeout: tmo, maxTokens: 6000, fallbacks: true });
+      if (res && res.out) o = res;
+      else if (res && res.refused) refusedModel = res.model || 'claude-opus-5-5';
+    } catch (e) {
+      lastErr = e;
+      console.warn('runTriage claude fallback:', e.message);
+    }
+  }
+  if (!o && geminiKey && deadline - Date.now() >= 5000) {
+    try {
+      const tmo = Math.min(25000, Math.max(5000, deadline - Date.now()));
+      o = await callGeminiJson(geminiKey, 'gemini-3.8-flash', TRIAGE_SYS, prompt, { timeout: tmo });
+    } catch (e) {
+      lastErr = e;
+      console.warn('runTriage gemini fallback:', e.message);
+    }
+  }
+  if (!o && ollamaKey && deadline - Date.now() >= 5000) {
+    try {
+      o = await callOllamaTriageJson(ollamaKey, 'deepseek-v4.1-flash', TRIAGE_SYS, prompt);
+    } catch (e) {
+      lastErr = e;
+      console.warn('runTriage ollama fallback:', e.message);
+    }
+  }
+  if (!o && !refusedModel) throw (lastErr || new Error('no triage result'));
+  const v = (!o || o.refused || !o.out) ? { state: 'unsure', by: refusedModel || (o && o.model) || 'none', reason: 'AI 가 판단을 거절함' }
     : { state: o.out.verdict, by: o.model, reason: String(o.out.reason || '').slice(0, 200) };
   if (urgent) {
     await ref.set({ triage: Object.assign({}, d.triage, { state: 'noted', ai: v.state, by: v.by, reason: v.reason, at: new Date().toISOString() }) }, { merge: true });
