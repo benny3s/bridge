@@ -149,6 +149,46 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // 포털 관리자 버튼 → 베니 PC 스크립트 (2026-11-16). 관리자만 정해 둔 cmd 로 만들고 읽음.
+    // 실행 결과(status·out)는 PC(소유자 토큰)만 씀 — 앱에서 고치거나 지울 수 없음
+    match /pcJobs/{jobId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && (
+        (request.resource.data.keys().hasOnly(['cmd'])
+          && request.resource.data.cmd in ['ticket_status', 'keyescape_slots', 'keyescape_open', 'baseball_probe', 'baseball_clock'])
+        // 범용 정각 클릭: 주소·시각·키만 (PC 쪽 portal_jobs._clicker_args 가 한 번 더 검사)
+        || (request.resource.data.cmd == 'clicker'
+          && request.resource.data.keys().hasOnly(['cmd', 'url', 'at', 'key', 'dry'])
+          && request.resource.data.keys().hasAll(['cmd', 'url', 'at', 'key'])
+          && request.resource.data.url is string && request.resource.data.url.matches('https?://[^\\s"\'<>`]{1,300}')
+          && request.resource.data.at is string && request.resource.data.at.matches('([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]')
+          && request.resource.data.key in ['click', 'f5', 'enter', 'space']
+          && (!('dry' in request.resource.data) || request.resource.data.dry is bool))
+        // 폼키트: 0) 주소 등록(AI 초안) · 목록 · 저장된 사이트 정각 누름 (사이트 이름만, PC 가 ready 인지 확인)
+        || (request.resource.data.keys().hasOnly(['cmd']) && request.resource.data.cmd == 'formkit_list')
+        || (request.resource.data.cmd == 'formkit_new'
+          && request.resource.data.keys().hasOnly(['cmd', 'url'])
+          && request.resource.data.url is string && request.resource.data.url.matches('https?://[^\\s"\'<>`]{1,300}'))
+        || (request.resource.data.cmd == 'formkit_fire'
+          && request.resource.data.keys().hasOnly(['cmd', 'site', 'at', 'dry'])
+          && request.resource.data.keys().hasAll(['cmd', 'site'])
+          && request.resource.data.site is string && request.resource.data.site.matches('[a-z0-9-]{1,30}')
+          && (!('at' in request.resource.data) || (request.resource.data.at is string
+               && request.resource.data.at.matches('([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]')))
+          && (!('dry' in request.resource.data) || request.resource.data.dry is bool))
+        // AI 사진/영상 (11-16): 상태·목록은 cmd 만, 생성은 고정 선택지 + 프롬프트 (PC 가 env 로만 넘김)
+        || (request.resource.data.keys().hasOnly(['cmd']) && request.resource.data.cmd in ['media_status', 'media_list'])
+        || (request.resource.data.cmd == 'media_gen'
+          && request.resource.data.keys().hasOnly(['cmd', 'kind', 'model', 'len', 'prompt'])
+          && request.resource.data.keys().hasAll(['cmd', 'kind', 'model', 'prompt'])
+          && request.resource.data.kind in ['video', 'image']
+          && request.resource.data.model in ['5b', 'a14b']
+          && (!('len' in request.resource.data) || request.resource.data.len in ['2', '4'])
+          && request.resource.data.prompt is string
+          && request.resource.data.prompt.size() >= 3 && request.resource.data.prompt.size() <= 600));
+      allow update, delete: if false;
+    }
+
     // 그 외 전부 차단 (secrets(PIN 해시)·loginGuard·rateLimit·sendContacts 등은 서버 전용)
     match /{document=**} {
       allow read, write: if false;
