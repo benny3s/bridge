@@ -1170,7 +1170,7 @@
   'use strict';
 
   /* 배포할 때마다 올려주세요 (정렬 가능한 형식). 새 버전이 뜨면 다른 탭에 새로고침 안내가 떠요. */
-  var APP_VERSION = '2026-11-13-542';
+  var APP_VERSION = '2026-11-19-543';
   var DAILY_PHOTO_LIMIT = 3; /* 프로필별 하루(KST) 사진 요청 한도 */
   var DAILY_TALK_LIMIT = 3;  /* 프로필별 하루(KST) 대화 신청 한도 */
   var NOTIF_ENABLED = true; /* 발송 함수 배포 완료 → 알림 버튼 노출 */
@@ -8157,11 +8157,12 @@
     /* 2) 최근 7일(오늘 포함 7일) vs 직전 7일(8~14일 전) 동향 비교 */
     var cand = entries.filter(function (e) { return !e.isMatchmaker; });
     var candActive = cand.filter(function (e) { return !e.deactivated && !e.managedBy; });
+    var candAllActive = cand.filter(function (e) { return !e.deactivated; });
     var candDeac = cand.filter(function (e) { return !!e.deactivated; }).length;
     var mmCount = entries.filter(function (e) { return !!e.isMatchmaker && !e.deactivated; }).length;
 
     var join7 = 0, join7M = 0, join7F = 0, joinPrev7 = 0;
-    var wau7 = 0, inactive14 = 0, shortIntroCount = 0;
+    var dau24 = 0, wau7 = 0, inactive14 = 0, shortIntroCount = 0;
     var maleActive = 0, femaleActive = 0;
     var age20s = 0, ageEarly30s = 0, ageLate30s = 0, capRegionCount = 0;
 
@@ -8175,10 +8176,11 @@
       }
     });
 
-    candActive.forEach(function (e) {
+    candAllActive.forEach(function (e) {
       if (e.gender === 'male') maleActive++;
       else if (e.gender === 'female') femaleActive++;
       var seenMs = e.lastSeenAt ? new Date(e.lastSeenAt).getTime() : 0;
+      if (seenMs && (nowMs - seenMs <= DAY_MS)) dau24++;
       if (seenMs && (nowMs - seenMs <= 7 * DAY_MS)) wau7++;
       if (!seenMs || (nowMs - seenMs > 14 * DAY_MS)) inactive14++;
       if (((e.intro || '').trim()).length < 20) shortIntroCount++;
@@ -8195,10 +8197,21 @@
     var stale48 = 0, waitReqTotal = 0;
     var popCountByTo = {};
     var dailyMap = {};
+    var visitSets = {};
     for (var di = 0; di < 7; di++) {
       var dKey = addDayStr(refD, -di);
-      dailyMap[dKey] = { join: 0, photo: 0, talk: 0, match: 0 };
+      dailyMap[dKey] = { visit: 0, join: 0, photo: 0, talk: 0, match: 0 };
+      visitSets[dKey] = {};
     }
+    logs.forEach(function (l) {
+      if (!l || !l.at || !l.actor) return;
+      if (l.actor === '관리자' || l.actor === 'AI 부관리자' || l.actor === '자동 정리' || l.actor === '회원') return;
+      var ld = kstDay(l.at);
+      if (visitSets[ld] && !visitSets[ld][l.actor]) {
+        visitSets[ld][l.actor] = 1;
+        dailyMap[ld].visit++;
+      }
+    });
     cand.forEach(function (e) {
       var sd = e.submittedAt ? kstDay(e.submittedAt) : '';
       if (dailyMap[sd]) dailyMap[sd].join++;
@@ -8285,9 +8298,10 @@
       talk7: talk7,
       talk7Ap: talk7Ap,
       talkPrev7: talkPrev7,
+      dau24: dau24,
       wau7: wau7,
       candTotal: cand.length,
-      candActiveCount: candActive.length,
+      candActiveCount: candAllActive.length,
       candDeac: candDeac,
       mmCount: mmCount,
       maleActive: maleActive,
@@ -8402,9 +8416,11 @@
       '</tr>';
     }).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:12px;">최근 24시간 동안 기록된 심사·변경 내역이 없어요 ✨</td></tr>';
 
+    var autoTodaySummary = '활동 후보 ' + m.candActiveCount + '명 중 최근 24시간 <b>' + m.dau24 + '명(' + pct(m.dau24, m.candActiveCount) + '%)</b>·최근 7일 <b>' + m.wau7 + '명(' + pct(m.wau7, m.candActiveCount) + '%)</b>이 들어왔어요.' +
+      (m.join7 <= 2 ? ' 접속은 꾸준한 편이지만 최근 신규 유입이 적어 요청이 줄어드는 구간이에요 — 지인 초대 공지로 새 인연을 불어넣어 보세요!' : ' 신규 유입과 교류가 고르게 이어지고 있어요.');
     var todayCommentHtml = (_aiStrategyBrief && _aiStrategyBrief.today_comment)
       ? '<div style="margin-bottom:8px;padding:7px 10px;background:var(--gold-soft,#f6ecd9);border-left:3px solid var(--gold,#C08A34);border-radius:6px;font-size:0.79rem;color:var(--ink);">💡 <b>AI 일일 브리핑</b>: ' + escapeHtml(_aiStrategyBrief.today_comment) + '</div>'
-      : '';
+      : '<div style="margin-bottom:8px;padding:7px 10px;background:var(--gold-soft,#f6ecd9);border-left:3px solid var(--gold,#C08A34);border-radius:6px;font-size:0.79rem;color:var(--ink);">💡 <b>오늘 한눈 요약</b>: ' + autoTodaySummary + '</div>';
 
     var paneTodayHtml =
       '<div style="margin-top:10px;">' +
@@ -8424,8 +8440,8 @@
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">현재 변경 미검토 대기 ' + m.editWait + '건</div>' +
           '</div>' +
           '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
-            '<div style="font-size:0.73rem;color:var(--muted);">🌱 24시간 유입 · 매칭 활동</div>' +
-            '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">가입 ' + m.signupToday + '명 <span style="font-size:0.75rem;font-weight:400;color:var(--muted);">(재신청 ' + m.resubmitToday + ')</span></div>' +
+            '<div style="font-size:0.73rem;color:var(--muted);">🌱 24시간 접속 · 유입 · 매칭</div>' +
+            '<div style="font-size:0.95rem;font-weight:700;margin-top:2px;color:var(--ink);">접속 <span style="color:#1967d2;">' + m.dau24 + '명</span> · 가입 ' + m.signupToday + '명</div>' +
             '<div style="font-size:0.72rem;color:var(--muted);margin-top:2px;">📷 사진 ' + m.todayPhotoReq + '건 · 💌 대화 ' + m.todayTalkReq + '건 (성사 ' + m.todayMatch + ')</div>' +
           '</div>' +
           '<div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 11px;">' +
@@ -8457,11 +8473,12 @@
       var dtObj = new Date(dk + 'T00:00:00Z');
       var dow = dayNames[dtObj.getUTCDay()];
       var md = dk.slice(5).replace('-', '/') + '(' + dow + ')' + (idx === 0 ? ' <span style="color:var(--accent);font-weight:700;">오늘</span>' : '');
-      var totAct = row.join + row.photo + row.talk;
-      var barCnt = Math.min(10, Math.max(totAct > 0 ? 1 : 0, Math.round(totAct / 2)));
+      var totAct = row.visit + row.join * 2 + row.photo + row.talk;
+      var barCnt = Math.min(10, Math.max(totAct > 0 ? 1 : 0, Math.round(totAct / 5)));
       var barStr = barCnt ? '<span style="color:var(--accent);letter-spacing:1px;">' + new Array(barCnt + 1).join('■') + '</span>' : '<span style="color:var(--muted);">-</span>';
       return '<tr>' +
         '<td style="padding:5px 8px;font-size:0.76rem;">' + md + '</td>' +
+        '<td style="padding:5px 8px;font-size:0.77rem;text-align:center;color:#1967d2;"><b>' + row.visit + '</b>명</td>' +
         '<td style="padding:5px 8px;font-size:0.77rem;text-align:center;"><b>' + row.join + '</b>명</td>' +
         '<td style="padding:5px 8px;font-size:0.77rem;text-align:center;">' + row.photo + '건</td>' +
         '<td style="padding:5px 8px;font-size:0.77rem;text-align:center;">' + row.talk + '건</td>' +
@@ -8528,6 +8545,7 @@
           '<table class="stats-table" style="margin:0;width:100%;border-collapse:collapse;">' +
             '<thead><tr style="background:var(--card);border-bottom:1px solid var(--line);font-size:0.73rem;">' +
               '<th style="text-align:left;padding:5px 8px;">날짜</th>' +
+              '<th style="text-align:center;padding:5px 8px;">👀 접속</th>' +
               '<th style="text-align:center;padding:5px 8px;">신규합류</th>' +
               '<th style="text-align:center;padding:5px 8px;">📷 사진요청</th>' +
               '<th style="text-align:center;padding:5px 8px;">💌 대화신청</th>' +
@@ -8654,7 +8672,7 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
           '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
             '<span style="font-size:0.96rem;font-weight:800;color:var(--ink);">👑 AI 부관리자 브리핑 & 전략 요약</span>' +
-            '<span class="chip" style="background:var(--gold-soft,#f6ecd9);color:#8a5a10;font-size:0.72rem;font-weight:700;">오늘 AI 처리 ' + todayAiTotal + '건 · 7일 가입 +' + m.join7 + '명 · 누적 연결 ' + m.connEver + '쌍</span>' +
+            '<span class="chip" style="background:var(--gold-soft,#f6ecd9);color:#8a5a10;font-size:0.72rem;font-weight:700;">24h 접속 ' + m.dau24 + '명 · 7일 접속 ' + m.wau7 + '명 · 7일 가입 +' + m.join7 + '명</span>' +
           '</div>' +
           '<div style="display:flex;gap:5px;align-items:center;">' +
             '<button type="button" class="card-btn" data-action="ai-intel-tab" data-itab="' + (tab === 'all' ? 'today' : 'all') + '" style="flex:none;padding:4px 9px;font-size:0.73rem;">' + (tab === 'all' ? '🗂️ 탭별로 보기' : '📑 3개 전체 펼치기') + '</button>' +
@@ -9705,9 +9723,10 @@
     return '<h3 class="adm-group">🔴 꼭 할 일 <small>' + (t[1].length ? t[1].length + '가지 · 누가 기다려요' : '') + '</small></h3>' +
       (t[1].length ? '<div class="adm-tier adm-t1">' + t[1].join('') + '</div>' : '<p class="adm-calm">✅ 꼭 할 일은 없어요.</p>') +
       (t[2].length ? '<h3 class="adm-group">🟡 하면 좋은 일 <small>' + t[2].length + '가지 · 안 해도 큰일은 없어요</small></h3><div class="adm-tier adm-t2">' + t[2].join('') + '</div>' : '') +
+      (aiBoard || '') +
       (t[3].length ? '<details class="adm-auto" data-fk="adm-auto"><summary class="adm-group">⚪ 안 해도 돼요 <small>' + t[3].length + '가지 · 저절로 정리되거나 상대 차례</small></summary><div class="adm-tier adm-t3">' + t[3].join('') + '</div></details>' : '') +
       '<h3 class="adm-group">🧰 보내기 · 설정</h3>' + extra.tools +
-      '<h3 class="adm-group">📊 요청 · 기록</h3>' + g.rec.join('') + (aiBoard || '');
+      '<h3 class="adm-group">📊 요청 · 기록</h3>' + g.rec.join('');
   }
 
   /* ---- 서버 용량 ---- */
@@ -11092,9 +11111,9 @@
       return tx.get(stateRef).then(function (doc) { var s = doc.data(); var c = s.checkin || {}; Object.keys(patch).forEach(function (k) { c[k] = patch[k]; }); tx.update(stateRef, { checkin: c }); });
     }).then(function () { return refreshNow(); });
   }
-  function setOneOffPopup(title, text) {
+  function setOneOffPopup(title, text, shareOn) {
     return db.runTransaction(function (tx) {
-      return tx.get(stateRef).then(function (doc) { tx.update(stateRef, { popup: { title: title || '', text: text, ver: String(Date.now()) } }); });
+      return tx.get(stateRef).then(function (doc) { tx.update(stateRef, { popup: { title: title || '', text: text, share: !!shareOn, ver: String(Date.now()) } }); });
     }).then(function () { return refreshNow(); });
   }
   /* 📢 공지/예약 허브 */
@@ -11126,7 +11145,11 @@
         '<div style="font-weight:700;margin-bottom:4px;">📢 즉시 공지 (1회성)</div>' +
         '<p class="modal-msg" style="text-align:left;font-size:0.8rem;color:var(--muted);margin:0 0 6px;">지금 전체에게 한 번. <b>팝업</b>=다음 접속 때 화면에 뜸(확인 버튼만) · <b>메시지함</b>=관리자 메시지에 쌓임.</p>' +
         '<input type="text" id="bh-once-title" maxlength="60" value="📢 공지" placeholder="팝업 제목" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-weight:700;margin-bottom:6px;">' +
-        '<textarea class="modal-input" id="bh-once-text" rows="3" maxlength="1000" placeholder="예: 이번 주 새 멤버가 많아요! 명단을 둘러보세요 :)" style="width:100%;box-sizing:border-box;"></textarea>' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
+          '<button type="button" class="card-btn" id="bh-once-preset-invite" style="flex:none;padding:4px 10px;font-size:0.78rem;background:#e8f0fe;border-color:#c3d7fb;color:#1a73e8;font-weight:700;">💌 지인 초대 부탁 문구 채우기</button>' +
+          '<label style="font-size:0.8rem;display:flex;align-items:center;gap:4px;color:var(--ink);"><input type="checkbox" id="bh-once-share" checked> 팝업에 🔗 초대·공유 버튼 달기</label>' +
+        '</div>' +
+        '<textarea class="modal-input" id="bh-once-text" rows="4" maxlength="1000" placeholder="예: 이번 주 새 멤버가 많아요! 명단을 둘러보세요 :)" style="width:100%;box-sizing:border-box;"></textarea>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">' +
           '<button type="button" class="card-btn primary" id="bh-once-popup" style="flex:none;">📢 팝업으로 보내기</button>' +
           '<button type="button" class="card-btn" id="bh-once-preview" style="flex:none;">미리보기(나에게)</button>' +
@@ -11160,13 +11183,19 @@
         saveCheckinCfg({ title: v.title, text: v.text, weekday: v.weekday, hour: v.hour, enabled: v.enabled, since: Date.now(), forceVer: String(Date.now()) }).then(function () { closeModal(overlay); modalNotice('발송 예약됨', '회원들이 다음 접속 때 이 팝업을 한 번 보게 돼요.'); });
       });
     });
-    overlay.querySelector('#bh-once-preview').addEventListener('click', function () { showOneOffPopup(overlay.querySelector('#bh-once-title').value || '', overlay.querySelector('#bh-once-text').value || ''); });
+    overlay.querySelector('#bh-once-preset-invite').addEventListener('click', function () {
+      overlay.querySelector('#bh-once-title').value = '💌 주변에 좋은 인연을 자유롭게 초대해 주세요!';
+      overlay.querySelector('#bh-once-text').value = '베니브릿지를 꾸준히 찾아주셔서 감사합니다 😊\n요즘 기존 회원분들은 많이 계시는데 새로운 분들이 잠시 뜸해졌어요.\n\n지인의 소개로만 모이는 만큼, 주변 친구·직장 동료·모임 단톡방에 부담 없이 링크를 자유롭게 전달해 초대해 주세요!\n(본인 가입 없이 친구만 대신 추천·등록해 주시는 주선자 참여도 대환영이에요)';
+      overlay.querySelector('#bh-once-share').checked = true;
+    });
+    overlay.querySelector('#bh-once-preview').addEventListener('click', function () { showOneOffPopup(overlay.querySelector('#bh-once-title').value || '', overlay.querySelector('#bh-once-text').value || '', overlay.querySelector('#bh-once-share').checked); });
     overlay.querySelector('#bh-once-popup').addEventListener('click', function () {
       var t = (overlay.querySelector('#bh-once-text').value || '').trim(); if (!t) return modalNotice('안내', '공지 내용을 입력해주세요.');
       var tt = (overlay.querySelector('#bh-once-title').value || '').trim();
-      modalConfirm('팝업으로 보내기', '이 내용을 전체 로그인 회원에게 다음 접속 때 팝업으로 1회 띄울까요?', '보내기', 'primary').then(function (ok) {
+      var sh = overlay.querySelector('#bh-once-share').checked;
+      modalConfirm('팝업으로 보내기', '이 내용을 전체 로그인 회원에게 다음 접속 때 팝업으로 1회 띄울까요?' + (sh ? ' (🔗 지인 초대·공유 버튼 포함)' : ''), '보내기', 'primary').then(function (ok) {
         if (!ok) return;
-        setOneOffPopup(tt, t).then(function () { closeModal(overlay); modalNotice('발송 예약됨', '회원들이 다음 접속 때 팝업으로 보게 돼요.'); });
+        setOneOffPopup(tt, t, sh).then(function () { closeModal(overlay); modalNotice('발송 예약됨', '회원들이 다음 접속 때 팝업으로 보게 돼요.'); });
       });
     });
     overlay.querySelector('#bh-once-msg').addEventListener('click', function () {
@@ -14346,7 +14375,7 @@
 
   /* 주간 예약 팝업(만족도·공유) 설정 — 관리자가 전체공지 허브에서 문구·요일·시각 수정. 기본값 fallback */
   var CHECKIN_DEFAULT_TITLE = '베니브릿지, 요즘 어떠세요? 😊';
-  var CHECKIN_DEFAULT_TEXT = '사용하시면서 좋았던 점·불편한 점이 있으면 편하게 알려주세요. 여러분 의견으로 더 나아져요.\n주변에 진지하게 좋은 인연을 찾는 지인이 있다면 링크도 전해주시면 큰 힘이 돼요 🙏';
+  var CHECKIN_DEFAULT_TEXT = '사용하시면서 좋았던 점·불편한 점이 있으면 편하게 알려주세요. 여러분 의견으로 더 나아져요.\n주변 친구·동료·모임 등 좋은 인연을 찾는 분이 있다면 부담 없이 자유롭게 링크를 전달해 초대해 주세요! 🙏';
   function checkinCfg() {
     var c = (currentState && currentState.checkin) || {};
     return {
@@ -14417,12 +14446,20 @@
     showCheckinModal();
   }
   /* 1회성 공지 팝업 (state.popup = {title, text, ver}) — 전체공지 허브에서 "팝업으로 보내기" */
-  function showOneOffPopup(title, text) {
+  function showOneOffPopup(title, text, shareOn) {
+    var shareBtn = shareOn
+      ? '<button type="button" class="card-btn" id="popup-share" style="width:100%;background:#1a73e8;border-color:#1a73e8;color:#fff;font-weight:700;">&#128279; 지인에게 자유롭게 공유·초대하기</button>'
+      : '';
     var overlay = openModal(
       '<h3>' + escapeHtml(title || '📢 공지') + '</h3>' +
       '<p class="modal-msg" style="text-align:left;line-height:1.7;white-space:pre-wrap;">' + escapeHtml(text) + '</p>' +
-      '<div class="modal-actions"><button type="button" class="card-btn primary" id="modal-ok" style="width:100%;">확인</button></div>'
+      '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
+        shareBtn +
+        '<button type="button" class="card-btn primary" id="modal-ok" style="width:100%;">확인</button>' +
+      '</div>'
     );
+    var shEl = overlay.querySelector('#popup-share');
+    if (shEl) shEl.addEventListener('click', function () { try { handleShare(); } catch (e) {} });
     overlay.querySelector('#modal-ok').addEventListener('click', function () { closeModal(overlay); });
     overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(overlay); });
   }
@@ -14436,14 +14473,14 @@
     if (!autoPopupOk('popup')) return;
     try { localStorage.setItem('popup-seen', pop.ver); } catch (e) {}
     noteAutoPopup('popup');
-    showOneOffPopup(pop.title, pop.text);
+    showOneOffPopup(pop.title, pop.text, !!pop.share);
   }
   /* 앱 열 때 자동 팝업 몰림 방지 — 한 번 열 때 최대 2개. 우선순위: 공지(버전) > 1회성 공지 > 새 소식 > 응답 재촉 > 주간 인사.
-     재촉은 새 소식이 이미 떴으면 생략(같은 메시지함 안내), 주간 인사는 다른 팝업이 하나도 없을 때만. 생략된 팝업은 '본 것'으로 기록 안 해 다음에 뜸. */
+     재촉은 새 소식이 이미 떴으면 생략, 주간 인사는 1회성 공지·응답 재촉이 없을 때(새 버전 공지가 있어도) 노출 가능하게 완화. */
   var autoPopups = {}, autoPopupCount = 0, AUTO_POPUP_MAX = 2;
   function noteAutoPopup(kind) { if (!autoPopups[kind]) { autoPopups[kind] = 1; autoPopupCount++; } }
   function autoPopupOk(kind) {
-    if (kind === 'checkin') return autoPopupCount === 0;
+    if (kind === 'checkin') return !autoPopups.popup && !autoPopups.nudge && autoPopupCount < AUTO_POPUP_MAX;
     if (kind === 'notif') return autoPopupCount === 0;   /* 알림 켜기 권유는 다른 자동 팝업이 없을 때만 */
     if (kind === 'nudge' && autoPopups.news) return false;
     return autoPopupCount < AUTO_POPUP_MAX;
@@ -15094,48 +15131,55 @@
   }
   function handleShare() {
     var url = location.origin + location.pathname.replace(/index\.html$/, '');
-    var shareText = '아는 사람이 건넨 🔗링크로 연결되는 신뢰 기반 소개 커뮤니티, 베니브릿지예요 😊 진지하게 좋은 인연 찾고 계신 분께 전해주세요.';
+    var shareText = '지인의 소개 링크로만 모이는 따뜻한 소개팅 커뮤니티, 베니브릿지예요 😊\n직접 가입하거나 주선자로 친구를 소개해 줄 수도 있어요. 좋은 인연 찾는 분들께 편하게 링크 전해 주세요!';
+    var fullInviteText = shareText + '\n👉 ' + url;
     var overlay = openModal(
-      '<h3>🔗 친구에게 공유</h3>' +
+      '<h3>🔗 지인 · 친구 초대하기</h3>' +
       '<p class="modal-msg" style="text-align:left;line-height:1.7;">' +
-        '베니브릿지는 <b>아는 사람이 건넨 🔗링크</b>로 연결되는 신뢰 기반 커뮤니티예요.<br>' +
-        '진지하게 좋은 인연을 찾는 <b>믿을 만한 지인</b>에게 아래 링크를 전해주세요.<br>' +
-        '<span style="color:var(--muted);font-size:0.9em;">온라인에 익명으로 널리 뿌리는 건 지양해 주세요 🙏</span>' +
+        '베니브릿지는 <b>지인이 건넨 링크로 연결되는 소개팅 커뮤니티</b>예요.<br>' +
+        '가까운 친구·직장 동료·모임 단톡방 등 좋은 인연을 찾는 분들께 <b>부담 없이 자유롭게 링크를 전달해 초대</b>해 주세요 😊<br>' +
+        '<span style="color:var(--muted);font-size:0.86em;">※ 본인이 직접 가입하지 않고 <b>주선자</b>로 친구를 추천·등록해 주셔도 좋아요. (불특정 익명 게시판 도배는 피해 주세요 🙏)</span>' +
       '</p>' +
       '<input type="text" class="modal-input" id="share-url-field" readonly value="' + escapeHtml(url) + '" style="margin-bottom:10px;">' +
       '<div class="modal-actions" style="flex-direction:column;gap:8px;align-items:stretch;">' +
-        '<button type="button" class="card-btn primary" id="share-native" style="width:100%;background:#1a73e8;border-color:#1a73e8;color:#fff;font-weight:700;">📤 공유하기</button>' +
-        '<button type="button" class="card-btn" id="share-copy" style="width:100%;">🔗 URL 복사</button>' +
+        '<button type="button" class="card-btn primary" id="share-native" style="width:100%;background:#1a73e8;border-color:#1a73e8;color:#fff;font-weight:700;">📤 카톡 · 문자로 바로 공유하기</button>' +
+        '<button type="button" class="card-btn approve" id="share-copy-msg" style="width:100%;font-weight:700;">💬 초대 멘트 + 링크 한 번에 복사</button>' +
+        '<button type="button" class="card-btn" id="share-copy" style="width:100%;">🔗 주소(URL)만 복사</button>' +
         '<button type="button" class="card-btn" id="modal-cancel" style="width:100%;">닫기</button>' +
       '</div>'
     );
-    function copyOk() { modalNotice('복사 완료', '사이트 주소가 복사됐어요! 친구에게 붙여넣기 하면 돼요.'); }
-    function execCopy() {
-      try {
-        var ta = document.createElement('textarea');
-        ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
-        document.body.appendChild(ta); ta.select();
-        var done = document.execCommand('copy');
-        document.body.removeChild(ta);
-        if (done) { copyOk(); return; }
-      } catch (e) {}
-      var fld = overlay.querySelector('#share-url-field');
-      if (fld) { try { fld.focus(); fld.select(); } catch (e2) {} }
-      modalNotice('안내', '주소를 길게 눌러(또는 Ctrl+C) 복사해주세요.');
-    }
-    function doCopy() {
+    function copyStr(str, msg) {
+      function ok() { modalNotice('복사 완료', msg); }
+      function fallback() {
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = str; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select();
+          var done = document.execCommand('copy');
+          document.body.removeChild(ta);
+          if (done) { ok(); return; }
+        } catch (e) {}
+        var fld = overlay.querySelector('#share-url-field');
+        if (fld) { try { fld.focus(); fld.select(); } catch (e2) {} }
+        modalNotice('안내', '주소를 길게 눌러(또는 Ctrl+C) 복사해주세요.');
+      }
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(url).then(copyOk).catch(execCopy);
-      } else { execCopy(); }
+        navigator.clipboard.writeText(str).then(ok).catch(fallback);
+      } else { fallback(); }
     }
     overlay.querySelector('#share-native').addEventListener('click', function () {
       if (navigator.share) {
-        navigator.share({ title: '베니브릿지', text: shareText, url: url }).catch(function () {});
+        navigator.share({ title: '베니브릿지 - 지인 소개 커뮤니티', text: shareText, url: url }).catch(function () {});
       } else {
-        doCopy(); /* 공유 미지원(주로 PC) → 링크 복사로 대체 */
+        copyStr(fullInviteText, '초대 멘트와 링크가 함께 복사됐어요! 카톡이나 단톡방에 바로 붙여넣기 하세요 😊');
       }
     });
-    overlay.querySelector('#share-copy').addEventListener('click', doCopy);
+    overlay.querySelector('#share-copy-msg').addEventListener('click', function () {
+      copyStr(fullInviteText, '초대 멘트와 링크가 함께 복사됐어요! 카톡이나 단톡방에 바로 붙여넣기 하세요 😊');
+    });
+    overlay.querySelector('#share-copy').addEventListener('click', function () {
+      copyStr(url, '사이트 주소가 복사됐어요! 친구에게 붙여넣기 하면 돼요.');
+    });
     overlay.querySelector('#modal-cancel').addEventListener('click', function () { closeModal(overlay); });
     overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(overlay); });
   }
